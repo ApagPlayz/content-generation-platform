@@ -1,0 +1,211 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Factory {
+  id                String    @id @default(cuid())
+  name              String
+  type              String
+  version           Int       @default(1)
+  config            String
+  promptPresets     String?
+  styleConfig       String?
+  voiceConfig       String?
+  captionConfig     String?
+  postingDefaults   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  archived          Boolean   @default(false)
+
+  videos  Video[]
+  agents  Agent[]
+
+  @@index([type])
+  @@index([archived])
+}
+
+model Agent {
+  id              String    @id @default(cuid())
+  factoryId       String
+  factory         Factory   @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  name            String
+  autonomy        String    @default("review")
+  playbook        String
+  budget          Float?
+  memory          String?
+  enabled         Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  runs   AgentRun[]
+
+  @@unique([factoryId, name])
+  @@index([factoryId])
+}
+
+model AgentRun {
+  id              String    @id @default(cuid())
+  agentId         String
+  agent           Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  status          String    @default("pending")
+  videoIds        String?
+  tokensUsed      Int?
+  costEstimate    Float?
+  costActual      Float?
+  error           String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([agentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Video {
+  id              String    @id @default(cuid())
+  factoryId       String
+  factory         Factory   @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  status          String    @default("draft")
+  title           String?
+  description     String?
+  hashtags        String?
+  scriptText      String?
+  sourceRef       String?
+  localPath       String?
+  thumbnailPath   String?
+  durationSec     Int?
+  costEstimate    Float?
+  costActual      Float?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  assets    Asset[]
+  jobs      Job[]
+  posts     Post[]
+  metrics   Metric[]
+
+  @@index([factoryId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Asset {
+  id              String    @id @default(cuid())
+  videoId         String
+  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  kind            String
+  provider        String?
+  providerJobId   String?
+  localPath       String?
+  costActual      Float?
+  meta            String?
+  createdAt       DateTime  @default(now())
+
+  @@index([videoId])
+  @@index([kind])
+}
+
+model Job {
+  id              String    @id @default(cuid())
+  videoId         String
+  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stage           String
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  error           String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([videoId])
+  @@index([stage])
+  @@index([status])
+}
+
+model Post {
+  id              String    @id @default(cuid())
+  videoId         String
+  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  platform        String
+  platformPostId  String?
+  scheduledFor    DateTime?
+  publishedAt     DateTime?
+  status          String    @default("draft")
+  permalink       String?
+  error           String?
+  createdAt       DateTime  @default(now())
+
+  metrics   Metric[]
+
+  @@unique([videoId, platform])
+  @@index([videoId])
+  @@index([platform])
+  @@index([status])
+}
+
+model Metric {
+  id              String    @id @default(cuid())
+  postId          String
+  post            Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  videoId         String
+  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  capturedAt      DateTime  @default(now())
+  views           Int?
+  likes           Int?
+  comments        Int?
+  shares          Int?
+  saves           Int?
+  watchTimeSec    Int?
+  avgWatchPct     Float?
+  followsGained   Int?
+  revenue         String?
+  raw             String?
+  createdAt       DateTime  @default(now())
+
+  @@index([postId])
+  @@index([videoId])
+  @@index([capturedAt])
+}
+
+model PlatformAuth {
+  id              String    @id @default(cuid())
+  platform        String
+  accountHandle   String
+  tokens          String
+  scopes          String?
+  expiresAt       DateTime?
+  status          String    @default("active")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([platform, accountHandle])
+  @@index([platform])
+}
+
+model CostLedger {
+  id              String    @id @default(cuid())
+  videoId         String?
+  service         String
+  units           Float
+  unitCost        Float
+  total           Float
+  currency        String    @default("USD")
+  createdAt       DateTime  @default(now())
+
+  @@index([videoId])
+  @@index([service])
+  @@index([createdAt])
+}
+
+model Setting {
+  key             String    @id
+  value           String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
