@@ -1,0 +1,70 @@
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+import { mkdir } from 'fs/promises'
+import { existsSync } from 'fs'
+import path from 'path'
+import type { IngestResult } from './types'
+
+const exec = promisify(execFile)
+
+export const MEDIA_DIR = path.join(process.cwd(), 'media')
+
+async function commandExists(cmd: string): Promise<boolean> {
+  try {
+    await exec('which', [cmd])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Find and download the source highlight reel via yt-dlp (capped at 720p —
+ * we only need a vertical crop of it). Returns the local path + metadata.
+ */
+export async function runClipIngest(videoId: string, youtubeQuery: string): Promise<IngestResult> {
+  if (!(await commandExists('yt-dlp'))) {
+    throw new Error('yt-dlp not installed. Install with: brew install yt-dlp')
+  }
+
+  const dir = path.join(MEDIA_DIR, videoId)
+  await mkdir(dir, { recursive: true })
+  const outTemplate = path.join(dir, 'source.%(ext)s')
+
+  // Resolve the search to a concrete video first so we can store its URL.
+  const { stdout: meta } = await exec(
+    'yt-dlp',
+    [
+      `ytsearch1:${youtubeQuery}`,
+      '--print', '%(webpage_url)s\t%(duration)s',
+      '--no-download',
+      '--match-filter', 'duration < 1800',
+    ],
+    { timeout: 60_000 }
+  )
+  const [url, durationStr] = meta.trim().split('\t')
+  if (!url) throw new Error(`No YouTube result for query: ${youtubeQuery}`)
+
+  await exec(
+    'yt-dlp',
+    [
+      url,
+      '-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+      '--merge-output-format', 'mp4',
+      '-o', outTemplate,
+      '--no-playlist',
+    ],
+    { timeout: 600_000 }
+  )
+
+  const sourcePath = path.join(dir, 'source.mp4')
+  if (!existsSync(sourcePath)) {
+    throw new Error(`yt-dlp finished but ${sourcePath} not found`)
+  }
+
+  return {
+    sourcePath,
+    youtubeUrl: url,
+    durationSec: Math.round(Number(durationStr) || 0),
+  }
+}

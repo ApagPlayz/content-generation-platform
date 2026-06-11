@@ -89,6 +89,8 @@ model Video {
   jobs      Job[]
   posts     Post[]
   metrics   Metric[]
+  highlightSources HighlightSource[]
+  complianceReports ComplianceReport[]
 
   @@index([factoryId])
   @@index([status])
@@ -203,9 +205,48 @@ model CostLedger {
   @@index([createdAt])
 }
 
+model HighlightSource {
+  id          String    @id @default(cuid())
+  videoId     String
+  video       Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  strategy    String    // trending_game | player_career | trending_audio
+  sourceData  String    // JSON: trigger details (game id, player id, audio ref, reason)
+  youtubeUrl  String?
+  momentStart Float?
+  momentEnd   Float?
+  createdAt   DateTime  @default(now())
+
+  @@index([videoId])
+  @@index([strategy])
+}
+
 model Setting {
   key             String    @id
   value           String
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+}
+
+// F10 True Crime compliance gate. One report per script-gate run; persisted for
+// legal auditability (what we checked, what passed, why we blocked/escalated).
+// decision: pass | route_to_review | block
+model ComplianceReport {
+  id              String    @id @default(cuid())
+  videoId         String?
+  video           Video?    @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  caseName        String
+  decision        String
+  // Per-check rollups so the inbox can render badges without re-parsing `report`.
+  caseSelectionOk Boolean   @default(false)
+  corroboratedPct Float     @default(0)
+  defamationFlags Int       @default(0)
+  variationOk     Boolean   @default(true)
+  summary         String
+  // Full structured ComplianceReportJSON (see src/lib/compliance/types.ts).
+  report          String
+  createdAt       DateTime  @default(now())
+
+  @@index([videoId])
+  @@index([decision])
+  @@index([createdAt])
 }

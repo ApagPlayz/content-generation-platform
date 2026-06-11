@@ -56,3 +56,9 @@ Thumbs.db
 
 # Claude local config
 .claude
+
+# downloaded source reels + rendered videos
+/media
+
+# Build info
+tsconfig.tsbuildinfo
