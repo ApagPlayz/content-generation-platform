@@ -10,11 +10,21 @@ interface SettingsMap {
   default_tts_provider?: string
   default_image_provider?: string
   default_model_tier?: string
+  youtube_client_id?: string
+  youtube_client_secret?: string
+  youtube_privacy?: string
+  youtube_daily_quota_cap?: string
 }
 
 const PROVIDERS_TTS = ['elevenlabs', 'openai-tts', 'coqui-local', 'edge-tts']
 const PROVIDERS_IMAGE = ['dall-e-3', 'flux', 'stable-diffusion-local']
 const MODEL_TIERS = ['haiku', 'sonnet', 'opus']
+const YOUTUBE_PRIVACY = ['private', 'unlisted', 'public']
+
+interface YouTubeStatus {
+  connected: boolean
+  handle?: string
+}
 
 export default function Settings() {
   const [settings, setSettings] = useState<SettingsMap>({})
@@ -22,13 +32,38 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
+  const [yt, setYt] = useState<YouTubeStatus>({ connected: false })
+  const [quota, setQuota] = useState<{ used: number; cap: number; remaining: number } | null>(null)
+  const [ytNotice, setYtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+
+  function refreshYouTube() {
+    fetch('/api/auth/youtube').then((r) => r.json()).then(setYt)
+    fetch('/api/youtube/quota').then((r) => r.json()).then(setQuota).catch(() => {})
+  }
 
   useEffect(() => {
     fetch('/api/settings')
       .then((r) => r.json())
       .then((data: SettingsMap) => setSettings(data))
       .finally(() => setLoading(false))
+    refreshYouTube()
+
+    // Surface the OAuth redirect result, then clean the URL.
+    const params = new URLSearchParams(window.location.search)
+    const connected = params.get('youtube_connected')
+    const error = params.get('youtube_error')
+    if (connected) setYtNotice({ kind: 'ok', text: `Connected as ${connected}` })
+    if (error) setYtNotice({ kind: 'err', text: error })
+    if (connected || error) {
+      window.history.replaceState({}, '', '/settings')
+    }
   }, [])
+
+  async function disconnectYouTube() {
+    await fetch('/api/auth/youtube', { method: 'DELETE' })
+    setYtNotice(null)
+    refreshYouTube()
+  }
 
   function set(key: keyof SettingsMap, value: string) {
     setSettings((prev) => ({ ...prev, [key]: value }))
@@ -233,40 +268,157 @@ export default function Settings() {
         </section>
 
         {/* Platform Auth */}
-        <section className="bg-white rounded-lg border border-gray-200 p-6">
-          <div className="mb-4">
+        <section className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
+          <div>
             <h2 className="font-semibold text-gray-900">Platform Authentication</h2>
             <p className="text-xs text-gray-400 mt-0.5">
               OAuth connections for auto-publishing. YouTube is easiest to set up first.
             </p>
           </div>
-          <div className="space-y-3">
-            {[
-              { label: 'YouTube Shorts', note: 'Data API v3 · ~6 uploads/day default quota', ready: true },
-              { label: 'Instagram Reels', note: 'Requires Business account + Meta App Review', ready: false },
-              { label: 'TikTok', note: 'Requires posting-scope approval + audit for public posts', ready: false },
-            ].map((platform) => (
-              <div
-                key={platform.label}
-                className="flex items-center justify-between p-4 rounded-lg border border-gray-200 bg-gray-50"
+
+          {/* YouTube */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-900">YouTube Shorts</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Data API v3 · ~6 uploads/day default quota
+                </p>
+              </div>
+              {yt.connected ? (
+                <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">
+                  <Check className="w-3.5 h-3.5" /> {yt.handle}
+                </span>
+              ) : (
+                <span className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">
+                  Not connected
+                </span>
+              )}
+            </div>
+
+            {ytNotice && (
+              <p
+                className={`text-xs px-3 py-2 rounded-lg ${
+                  ytNotice.kind === 'ok'
+                    ? 'bg-green-50 text-green-700'
+                    : 'bg-red-50 text-red-700'
+                }`}
               >
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{platform.label}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{platform.note}</p>
-                </div>
-                <button
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    platform.ready
-                      ? 'border border-gray-300 text-gray-700 hover:bg-white'
-                      : 'border border-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                  disabled={!platform.ready}
+                {ytNotice.text}
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  OAuth Client ID
+                </label>
+                <input
+                  value={settings.youtube_client_id ?? ''}
+                  onChange={(e) => set('youtube_client_id', e.target.value)}
+                  placeholder="…apps.googleusercontent.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  OAuth Client Secret
+                </label>
+                <input
+                  type="password"
+                  value={settings.youtube_client_secret ?? ''}
+                  onChange={(e) => set('youtube_client_secret', e.target.value)}
+                  placeholder="GOCSPX-…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              Create an OAuth client in Google Cloud Console (YouTube Data API v3 enabled), with
+              redirect URI{' '}
+              <code className="text-gray-500">http://localhost:3000/api/auth/youtube/callback</code>.
+              Save before connecting.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Upload privacy
+                </label>
+                <select
+                  value={settings.youtube_privacy ?? 'unlisted'}
+                  onChange={(e) => set('youtube_privacy', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm capitalize focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                 >
-                  {platform.ready ? 'Connect' : 'Coming soon'}
+                  {YOUTUBE_PRIVACY.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Daily upload cap
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.youtube_daily_quota_cap ?? '6'}
+                  onChange={(e) => set('youtube_daily_quota_cap', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              {quota && (
+                <p className="text-xs text-gray-400">
+                  {quota.remaining}/{quota.cap} uploads left today
+                </p>
+              )}
+              <div className="flex items-center gap-2 ml-auto">
+                {yt.connected && (
+                  <button
+                    onClick={disconnectYouTube}
+                    className="px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                )}
+                <button
+                  onClick={async () => {
+                    await save()
+                    window.location.href = '/api/auth/youtube/start'
+                  }}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50"
+                >
+                  {yt.connected ? 'Reconnect' : 'Save & Connect'}
                 </button>
               </div>
-            ))}
+            </div>
           </div>
+
+          {/* IG / TikTok — later phases */}
+          {[
+            { label: 'Instagram Reels', note: 'Requires Business account + Meta App Review' },
+            { label: 'TikTok', note: 'Requires posting-scope approval + audit for public posts' },
+          ].map((platform) => (
+            <div
+              key={platform.label}
+              className="flex items-center justify-between p-4 rounded-lg border border-gray-200 bg-gray-50"
+            >
+              <div>
+                <p className="text-sm font-medium text-gray-900">{platform.label}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{platform.note}</p>
+              </div>
+              <button
+                className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-400 cursor-not-allowed"
+                disabled
+              >
+                Coming soon
+              </button>
+            </div>
+          ))}
         </section>
 
       </div>

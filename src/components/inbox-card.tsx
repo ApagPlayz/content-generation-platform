@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, X } from 'lucide-react'
+import { Check, X, Youtube, Loader2, ExternalLink } from 'lucide-react'
 
 const TYPE_META: Record<string, { color: string }> = {
   F1: { color: 'bg-orange-100 text-orange-700' },
@@ -47,6 +47,9 @@ export function InboxCard({
 }: InboxCardProps) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [publishErr, setPublishErr] = useState<string | null>(null)
+  const [permalink, setPermalink] = useState<string | null>(null)
   const tm = TYPE_META[factoryType] ?? { color: 'bg-gray-100 text-gray-600' }
 
   async function setStatus(status: string) {
@@ -57,6 +60,22 @@ export function InboxCard({
       body: JSON.stringify({ status }),
     })
     router.refresh()
+  }
+
+  async function publish() {
+    setPublishing(true)
+    setPublishErr(null)
+    try {
+      const res = await fetch(`/api/videos/${id}/publish`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Publish failed')
+      setPermalink(data.permalink)
+      router.refresh()
+    } catch (e) {
+      setPublishErr(e instanceof Error ? e.message : 'Publish failed')
+    } finally {
+      setPublishing(false)
+    }
   }
 
   const timeAgo = (() => {
@@ -126,6 +145,32 @@ export function InboxCard({
           <Check className="w-4 h-4" />
           Approve
         </button>
+        {hasMedia && (
+          permalink ? (
+            <a
+              href={permalink}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-green-300 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100 transition-colors"
+            >
+              <ExternalLink className="w-4 h-4" />
+              View on YouTube
+            </a>
+          ) : (
+            <button
+              onClick={publish}
+              disabled={publishing || busy}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {publishing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Youtube className="w-4 h-4" />
+              )}
+              {publishing ? 'Publishing…' : 'Publish to YouTube'}
+            </button>
+          )
+        )}
         <button
           onClick={() => setStatus('draft')}
           disabled={busy}
@@ -134,6 +179,7 @@ export function InboxCard({
           <X className="w-4 h-4" />
           Reject
         </button>
+        {publishErr && <span className="text-xs text-red-600 ml-1">{publishErr}</span>}
       </div>
       </div>
     </div>

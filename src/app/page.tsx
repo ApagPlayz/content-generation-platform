@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
+import { quotaStatus } from '@/lib/tools/publish'
 import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
@@ -79,16 +80,18 @@ async function OverviewTab() {
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
 
-  const [totalVideos, thisMonthVideos, activeFactories, recentVideos] =
+  const [totalVideos, thisMonthVideos, activeFactories, publishedCount, recentVideos, quota] =
     await Promise.all([
       prisma.video.count(),
       prisma.video.count({ where: { createdAt: { gte: startOfMonth } } }),
       prisma.factory.count({ where: { archived: false } }),
+      prisma.post.count({ where: { platform: 'youtube', status: 'published' } }),
       prisma.video.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
         include: { factory: { select: { name: true, type: true } } },
       }),
+      quotaStatus(),
     ])
 
   const stats = [
@@ -102,7 +105,11 @@ async function OverviewTab() {
       value: thisMonthVideos.toString(),
       sub: `${thisMonthVideos === 0 ? '0 views' : `${thisMonthVideos} created`}`,
     },
-    { label: 'Revenue YTD', value: '$0', sub: '+$0' },
+    {
+      label: 'Published',
+      value: publishedCount.toString(),
+      sub: `${quota.remaining}/${quota.cap} uploads left today`,
+    },
     {
       label: 'Active Factories',
       value: activeFactories.toString(),
