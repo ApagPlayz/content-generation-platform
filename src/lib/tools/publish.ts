@@ -16,6 +16,16 @@ const UPLOAD_QUOTA_UNITS = 1600
 const DEFAULT_DAILY_CAP = 6
 const DEFAULT_PRIVACY = 'unlisted'
 
+// YouTube category id per factory type (videoCategories.list, region US). True
+// crime / reddit narration sit best under People & Blogs; sports under Sports.
+// Falls back to People & Blogs (22) — the safe neutral default — for unknown types.
+const CATEGORY_BY_FACTORY: Record<string, string> = {
+  F9: '17', // Sports highlights
+  F10: '22', // True Crime → People & Blogs
+  F1: '22', // Reddit stories → People & Blogs
+}
+const DEFAULT_CATEGORY = '22' // People & Blogs
+
 async function setting(key: string, fallback: string): Promise<string> {
   const row = await prisma.setting.findUnique({ where: { key } })
   return row?.value || fallback
@@ -51,7 +61,10 @@ export interface PublishResult {
 }
 
 export async function publishToYouTube(videoId: string): Promise<PublishResult> {
-  const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } })
+  const video = await prisma.video.findUniqueOrThrow({
+    where: { id: videoId },
+    include: { factory: { select: { type: true } } },
+  })
 
   // Idempotency: don't re-upload a video that already has a live YouTube post.
   const existing = await prisma.post.findUnique({
@@ -105,7 +118,7 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
           title,
           description,
           tags: hashtags.slice(0, 15),
-          categoryId: '17', // Sports — closest default; per-factory mapping is a later refinement.
+          categoryId: CATEGORY_BY_FACTORY[video.factory.type] ?? DEFAULT_CATEGORY,
         },
         status: {
           privacyStatus: privacy,
