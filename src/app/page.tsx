@@ -5,6 +5,8 @@ import { quotaStatus } from '@/lib/tools/publish'
 import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
+import { ScheduleCalendar } from '@/components/schedule-calendar'
+import { WinnersView } from '@/components/winners-view'
 
 const TYPE_META: Record<string, { color: string }> = {
   F1: { color: 'bg-orange-100 text-orange-700' },
@@ -71,6 +73,8 @@ export default async function Hub({
         {activeTab === 'agents' && <AgentsTab />}
         {activeTab === 'inbox' && <InboxTab />}
         {activeTab === 'queue' && <QueueTab />}
+        {activeTab === 'schedule' && <ScheduleCalendar />}
+        {activeTab === 'winners' && <WinnersView />}
       </main>
     </div>
   )

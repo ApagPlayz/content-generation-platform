@@ -8,6 +8,8 @@ const TABS = [
   { id: 'agents',     label: 'Agents' },
   { id: 'inbox',      label: 'Inbox' },
   { id: 'queue',      label: 'Queue' },
+  { id: 'schedule',   label: 'Schedule' },
+  { id: 'winners',    label: 'Winners' },
 ]
 
 export function HubNav({ activeTab }: { activeTab: string }) {

@@ -8,59 +8,83 @@ datasource db {
 }
 
 model Factory {
-  id                String    @id @default(cuid())
-  name              String
-  type              String
-  version           Int       @default(1)
-  config            String
-  promptPresets     String?
-  styleConfig       String?
-  voiceConfig       String?
-  captionConfig     String?
-  postingDefaults   String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  archived          Boolean   @default(false)
+  id              String   @id @default(cuid())
+  name            String
+  type            String
+  version         Int      @default(1)
+  config          String
+  promptPresets   String?
+  styleConfig     String?
+  voiceConfig     String?
+  captionConfig   String?
+  postingDefaults String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  archived        Boolean  @default(false)
 
-  videos  Video[]
-  agents  Agent[]
+  videos Video[]
+  agents Agent[]
 
   @@index([type])
   @@index([archived])
 }
 
 model Agent {
-  id              String    @id @default(cuid())
-  factoryId       String
-  factory         Factory   @relation(fields: [factoryId], references: [id], onDelete: Cascade)
-  name            String
-  autonomy        String    @default("review")
-  playbook        String
-  budget          Float?
-  memory          String?
-  enabled         Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  factoryId String
+  factory   Factory  @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  name      String
+  autonomy  String   @default("review")
+  playbook  String
+  budget    Float?
+  memory    String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  runs   AgentRun[]
+  runs      AgentRun[]
+  schedules Schedule[]
 
   @@unique([factoryId, name])
   @@index([factoryId])
 }
 
+// Recurring cadence for an agent. The app is in-process (no daemon), so a tick
+// endpoint (/api/scheduler/tick, hit by an external cron or the dashboard)
+// runs every schedule whose nextRunAt is due, then advances nextRunAt.
+// cadence: hourly | daily | weekly
+model Schedule {
+  id        String    @id @default(cuid())
+  agentId   String
+  agent     Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  cadence   String    @default("daily")
+  hourUTC   Int? // daily/weekly: hour-of-day (0-23) to fire
+  minuteUTC Int       @default(0)
+  dayOfWeek Int? // weekly: 0=Sun .. 6=Sat
+  enabled   Boolean   @default(true)
+  lastRunAt DateTime?
+  nextRunAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([agentId])
+  @@index([enabled])
+  @@index([nextRunAt])
+}
+
 model AgentRun {
-  id              String    @id @default(cuid())
-  agentId         String
-  agent           Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  status          String    @default("pending")
-  videoIds        String?
-  tokensUsed      Int?
-  costEstimate    Float?
-  costActual      Float?
-  error           String?
-  startedAt       DateTime?
-  finishedAt      DateTime?
-  createdAt       DateTime  @default(now())
+  id           String    @id @default(cuid())
+  agentId      String
+  agent        Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  status       String    @default("pending")
+  videoIds     String?
+  tokensUsed   Int?
+  costEstimate Float?
+  costActual   Float?
+  error        String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
 
   @@index([agentId])
   @@index([status])
@@ -68,28 +92,28 @@ model AgentRun {
 }
 
 model Video {
-  id              String    @id @default(cuid())
-  factoryId       String
-  factory         Factory   @relation(fields: [factoryId], references: [id], onDelete: Cascade)
-  status          String    @default("draft")
-  title           String?
-  description     String?
-  hashtags        String?
-  scriptText      String?
-  sourceRef       String?
-  localPath       String?
-  thumbnailPath   String?
-  durationSec     Int?
-  costEstimate    Float?
-  costActual      Float?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id            String   @id @default(cuid())
+  factoryId     String
+  factory       Factory  @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  status        String   @default("draft")
+  title         String?
+  description   String?
+  hashtags      String?
+  scriptText    String?
+  sourceRef     String?
+  localPath     String?
+  thumbnailPath String?
+  durationSec   Int?
+  costEstimate  Float?
+  costActual    Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  assets    Asset[]
-  jobs      Job[]
-  posts     Post[]
-  metrics   Metric[]
-  highlightSources HighlightSource[]
+  assets            Asset[]
+  jobs              Job[]
+  posts             Post[]
+  metrics           Metric[]
+  highlightSources  HighlightSource[]
   complianceReports ComplianceReport[]
 
   @@index([factoryId])
@@ -98,32 +122,32 @@ model Video {
 }
 
 model Asset {
-  id              String    @id @default(cuid())
-  videoId         String
-  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  kind            String
-  provider        String?
-  providerJobId   String?
-  localPath       String?
-  costActual      Float?
-  meta            String?
-  createdAt       DateTime  @default(now())
+  id            String   @id @default(cuid())
+  videoId       String
+  video         Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  kind          String
+  provider      String?
+  providerJobId String?
+  localPath     String?
+  costActual    Float?
+  meta          String?
+  createdAt     DateTime @default(now())
 
   @@index([videoId])
   @@index([kind])
 }
 
 model Job {
-  id              String    @id @default(cuid())
-  videoId         String
-  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  stage           String
-  status          String    @default("pending")
-  attempts        Int       @default(0)
-  error           String?
-  startedAt       DateTime?
-  finishedAt      DateTime?
-  createdAt       DateTime  @default(now())
+  id         String    @id @default(cuid())
+  videoId    String
+  video      Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stage      String
+  status     String    @default("pending")
+  attempts   Int       @default(0)
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([videoId])
   @@index([stage])
@@ -131,19 +155,19 @@ model Job {
 }
 
 model Post {
-  id              String    @id @default(cuid())
-  videoId         String
-  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  platform        String
-  platformPostId  String?
-  scheduledFor    DateTime?
-  publishedAt     DateTime?
-  status          String    @default("draft")
-  permalink       String?
-  error           String?
-  createdAt       DateTime  @default(now())
+  id             String    @id @default(cuid())
+  videoId        String
+  video          Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  platform       String
+  platformPostId String?
+  scheduledFor   DateTime?
+  publishedAt    DateTime?
+  status         String    @default("draft")
+  permalink      String?
+  error          String?
+  createdAt      DateTime  @default(now())
 
-  metrics   Metric[]
+  metrics Metric[]
 
   @@unique([videoId, platform])
   @@index([videoId])
@@ -152,23 +176,23 @@ model Post {
 }
 
 model Metric {
-  id              String    @id @default(cuid())
-  postId          String
-  post            Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
-  videoId         String
-  video           Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  capturedAt      DateTime  @default(now())
-  views           Int?
-  likes           Int?
-  comments        Int?
-  shares          Int?
-  saves           Int?
-  watchTimeSec    Int?
-  avgWatchPct     Float?
-  followsGained   Int?
-  revenue         String?
-  raw             String?
-  createdAt       DateTime  @default(now())
+  id            String   @id @default(cuid())
+  postId        String
+  post          Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  videoId       String
+  video         Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  capturedAt    DateTime @default(now())
+  views         Int?
+  likes         Int?
+  comments      Int?
+  shares        Int?
+  saves         Int?
+  watchTimeSec  Int?
+  avgWatchPct   Float?
+  followsGained Int?
+  revenue       String?
+  raw           String?
+  createdAt     DateTime @default(now())
 
   @@index([postId])
   @@index([videoId])
@@ -176,29 +200,29 @@ model Metric {
 }
 
 model PlatformAuth {
-  id              String    @id @default(cuid())
-  platform        String
-  accountHandle   String
-  tokens          String
-  scopes          String?
-  expiresAt       DateTime?
-  status          String    @default("active")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  platform      String
+  accountHandle String
+  tokens        String
+  scopes        String?
+  expiresAt     DateTime?
+  status        String    @default("active")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@unique([platform, accountHandle])
   @@index([platform])
 }
 
 model CostLedger {
-  id              String    @id @default(cuid())
-  videoId         String?
-  service         String
-  units           Float
-  unitCost        Float
-  total           Float
-  currency        String    @default("USD")
-  createdAt       DateTime  @default(now())
+  id        String   @id @default(cuid())
+  videoId   String?
+  service   String
+  units     Float
+  unitCost  Float
+  total     Float
+  currency  String   @default("USD")
+  createdAt DateTime @default(now())
 
   @@index([videoId])
   @@index([service])
@@ -206,45 +230,45 @@ model CostLedger {
 }
 
 model HighlightSource {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   videoId     String
-  video       Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  strategy    String    // trending_game | player_career | trending_audio
-  sourceData  String    // JSON: trigger details (game id, player id, audio ref, reason)
+  video       Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  strategy    String // trending_game | player_career | trending_audio
+  sourceData  String // JSON: trigger details (game id, player id, audio ref, reason)
   youtubeUrl  String?
   momentStart Float?
   momentEnd   Float?
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime @default(now())
 
   @@index([videoId])
   @@index([strategy])
 }
 
 model Setting {
-  key             String    @id
-  value           String
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // F10 True Crime compliance gate. One report per script-gate run; persisted for
 // legal auditability (what we checked, what passed, why we blocked/escalated).
 // decision: pass | route_to_review | block
 model ComplianceReport {
-  id              String    @id @default(cuid())
+  id              String   @id @default(cuid())
   videoId         String?
-  video           Video?    @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  video           Video?   @relation(fields: [videoId], references: [id], onDelete: SetNull)
   caseName        String
   decision        String
   // Per-check rollups so the inbox can render badges without re-parsing `report`.
-  caseSelectionOk Boolean   @default(false)
-  corroboratedPct Float     @default(0)
-  defamationFlags Int       @default(0)
-  variationOk     Boolean   @default(true)
+  caseSelectionOk Boolean  @default(false)
+  corroboratedPct Float    @default(0)
+  defamationFlags Int      @default(0)
+  variationOk     Boolean  @default(true)
   summary         String
   // Full structured ComplianceReportJSON (see src/lib/compliance/types.ts).
   report          String
-  createdAt       DateTime  @default(now())
+  createdAt       DateTime @default(now())
 
   @@index([videoId])
   @@index([decision])
