@@ -11,11 +11,15 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push --skip-generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "remotion:studio": "remotion studio video/index.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",
     "@prisma/client": "^5.7.0",
+    "@remotion/bundler": "^4.0.479",
+    "@remotion/cli": "^4.0.479",
+    "@remotion/renderer": "^4.0.479",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
     "date-fns": "^2.30.0",
@@ -25,6 +29,7 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-hook-form": "^7.48.0",
+    "remotion": "^4.0.479",
     "tailwind-merge": "^2.2.0",
     "zod": "^3.22.4"
   },

@@ -14,9 +14,10 @@ interface SettingsMap {
   youtube_client_secret?: string
   youtube_privacy?: string
   youtube_daily_quota_cap?: string
+  auto_publish_enabled?: string
 }
 
-const PROVIDERS_TTS = ['elevenlabs', 'openai-tts', 'coqui-local', 'edge-tts']
+const PROVIDERS_TTS = ['kokoro', 'elevenlabs', 'openai-tts', 'coqui-local', 'edge-tts']
 const PROVIDERS_IMAGE = ['dall-e-3', 'flux', 'stable-diffusion-local']
 const MODEL_TIERS = ['haiku', 'sonnet', 'opus']
 const YOUTUBE_PRIVACY = ['private', 'unlisted', 'public']
@@ -242,10 +243,15 @@ export default function Settings() {
               <option value="">Not set</option>
               {PROVIDERS_TTS.map((p) => (
                 <option key={p} value={p}>
-                  {p}
+                  {p === 'kokoro' ? 'kokoro (free, local, recommended)' : p}
                 </option>
               ))}
             </select>
+            <p className="text-xs text-gray-400 mt-1">
+              <strong>kokoro</strong> = natural-sounding, free, runs on this Mac (start
+              kokoro-fastapi locally). <strong>elevenlabs</strong>/<strong>openai-tts</strong>{' '}
+              are paid but need no setup. Falls back to the Mac voice automatically.
+            </p>
           </div>
 
           <div>
@@ -368,6 +374,25 @@ export default function Settings() {
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-3 pt-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={(settings.auto_publish_enabled ?? 'false') === 'true'}
+                onChange={(e) =>
+                  set('auto_publish_enabled', e.target.checked ? 'true' : 'false')
+                }
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+              />
+              <span className="text-sm text-gray-700">
+                Auto-publish to YouTube
+                <span className="block text-xs text-gray-400 mt-0.5">
+                  When on, agents set to <strong>auto</strong> upload approved videos straight
+                  away (respecting the daily cap). When off, every video waits for you in the
+                  Review inbox.
+                </span>
+              </span>
+            </label>
 
             <div className="flex items-center justify-between pt-1">
               {quota && (

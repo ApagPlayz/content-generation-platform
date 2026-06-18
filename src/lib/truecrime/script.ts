@@ -6,11 +6,9 @@
 // still clears the gate.
 
 import { prisma } from '../prisma'
+import { resolveModel, claudeCallCost } from '../settings'
 import type { ScriptStructure } from '../compliance'
 import type { CaseBrief, F10FactoryConfig, F10Script } from './types'
-
-const INPUT_COST_PER_TOKEN = 3 / 1_000_000
-const OUTPUT_COST_PER_TOKEN = 15 / 1_000_000
 
 const HOOK_PATTERNS = [
   'cold-open-question',
@@ -45,6 +43,10 @@ export async function generateScript(
     return templateScript(brief, structure, targetDurationSec, citations)
   }
 
+  // Model tier follows the factory's config.scriptModel, else the operator's
+  // global default, else sonnet (see src/lib/settings.ts).
+  const m = await resolveModel(config.scriptModel)
+
   try {
     const subjectLines = brief.subjects
       .map((s) => `- ${s.name}: role=${s.role}, living=${s.living}, minor=${s.isMinor}`)
@@ -58,7 +60,7 @@ export async function generateScript(
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: m.model,
         max_tokens: 1500,
         system: [
           {
@@ -89,19 +91,14 @@ export async function generateScript(
     if (!res.ok) return templateScript(brief, structure, targetDurationSec, citations)
 
     const data = await res.json()
-    const usage = data.usage ?? {}
-    const inputTokens =
-      (usage.input_tokens ?? 0) +
-      (usage.cache_creation_input_tokens ?? 0) +
-      (usage.cache_read_input_tokens ?? 0) * 0.1
+    const { total, units } = claudeCallCost(data.usage ?? {}, m)
     await prisma.costLedger.create({
       data: {
         videoId,
-        service: 'claude-sonnet-4-6',
-        units: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
-        unitCost: INPUT_COST_PER_TOKEN,
-        total:
-          inputTokens * INPUT_COST_PER_TOKEN + (usage.output_tokens ?? 0) * OUTPUT_COST_PER_TOKEN,
+        service: m.model,
+        units,
+        unitCost: m.inputCostPerToken,
+        total,
       },
     })
 

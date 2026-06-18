@@ -6,6 +6,8 @@ import { sourceVisuals } from './visuals'
 import { synthesizeNarration } from './tts'
 import { generateCaptions } from './captions'
 import { assembleVideo } from './assemble'
+import { maybeAutoPublish } from '../tools/publish'
+import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from '../retry'
 import type { F10Context, F10FactoryConfig, F10Stage } from './types'
 
 /**
@@ -177,6 +179,11 @@ export async function executeTrueCrimeRun(
           ? 'approved'
           : 'review'
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
+
+    // Auto-publish only a clean compliance 'pass' for auto agents (a
+    // 'route_to_review' decision already forced finalStatus to 'review').
+    if (finalStatus === 'approved') await maybeAutoPublish(ctx.videoId, agent.autonomy)
+
     await prisma.agentRun.update({
       where: { id: run.id },
       data: { status: 'completed', finishedAt: new Date() },
@@ -206,19 +213,32 @@ async function finalizeCost(videoId: string): Promise<void> {
 
 async function stage(ctx: F10Context, name: F10Stage, fn: () => Promise<void>): Promise<void> {
   const job = await prisma.job.create({
-    data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 1, startedAt: new Date() },
+    data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 0, startedAt: new Date() },
   })
-  try {
-    await fn()
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: 'completed', finishedAt: new Date() },
-    })
-  } catch (e) {
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: 'failed', error: e instanceof Error ? e.message : String(e), finishedAt: new Date() },
-    })
-    throw e
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt++) {
+    await prisma.job.update({ where: { id: job.id }, data: { attempts: attempt, status: 'running' } })
+    try {
+      await fn()
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: 'completed', finishedAt: new Date() },
+      })
+      return
+    } catch (e) {
+      lastErr = e
+      const error = e instanceof Error ? e.message : String(e)
+      if (attempt < MAX_STAGE_ATTEMPTS) {
+        await prisma.job.update({ where: { id: job.id }, data: { status: 'retrying', error } })
+        await sleep(backoffMs(attempt))
+        continue
+      }
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: 'failed', error, finishedAt: new Date() },
+      })
+      throw e
+    }
   }
+  throw lastErr
 }

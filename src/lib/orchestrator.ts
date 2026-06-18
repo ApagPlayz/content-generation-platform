@@ -4,6 +4,8 @@ import { runClipIngest } from './tools/clipIngest'
 import { runMomentDetect } from './tools/momentDetect'
 import { runScript } from './tools/script'
 import { runAssemble } from './tools/assemble'
+import { maybeAutoPublish } from './tools/publish'
+import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
 import type { ToolContext } from './tools/types'
 
 /**
@@ -79,7 +81,10 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     })
 
     await stage(ctx, 'script', async () => {
-      ctx.script = await runScript(ctx.videoId, ctx.playbook, ctx.source!)
+      const modelOverride =
+        (ctx.factoryConfig.scriptModel as string | undefined) ??
+        (ctx.factoryConfig.modelTier as string | undefined)
+      ctx.script = await runScript(ctx.videoId, ctx.playbook, ctx.source!, modelOverride)
       await prisma.video.update({
         where: { id: ctx.videoId },
         data: {
@@ -102,6 +107,12 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
 
     const finalStatus = agent.autonomy === 'auto' ? 'approved' : 'review'
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
+
+    // Auto agents publish straight away when the operator has opted in; this is
+    // non-fatal — publishToYouTube flips the video to 'published' on success and
+    // otherwise leaves it 'approved' for a manual publish from the Review inbox.
+    if (finalStatus === 'approved') await maybeAutoPublish(ctx.videoId, agent.autonomy)
+
     await prisma.agentRun.update({
       where: { id: run.id },
       data: { status: 'completed', finishedAt: new Date() },
@@ -120,23 +131,32 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
 
 async function stage(ctx: ToolContext, name: string, fn: () => Promise<void>) {
   const job = await prisma.job.create({
-    data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 1, startedAt: new Date() },
+    data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 0, startedAt: new Date() },
   })
-  try {
-    await fn()
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: 'completed', finishedAt: new Date() },
-    })
-  } catch (e) {
-    await prisma.job.update({
-      where: { id: job.id },
-      data: {
-        status: 'failed',
-        error: e instanceof Error ? e.message : String(e),
-        finishedAt: new Date(),
-      },
-    })
-    throw e
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt++) {
+    await prisma.job.update({ where: { id: job.id }, data: { attempts: attempt, status: 'running' } })
+    try {
+      await fn()
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: 'completed', finishedAt: new Date() },
+      })
+      return
+    } catch (e) {
+      lastErr = e
+      const error = e instanceof Error ? e.message : String(e)
+      if (attempt < MAX_STAGE_ATTEMPTS) {
+        await prisma.job.update({ where: { id: job.id }, data: { status: 'retrying', error } })
+        await sleep(backoffMs(attempt))
+        continue
+      }
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: 'failed', error, finishedAt: new Date() },
+      })
+      throw e
+    }
   }
+  throw lastErr
 }

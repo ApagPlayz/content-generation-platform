@@ -1,23 +1,24 @@
 import { prisma } from '../prisma'
+import { resolveModel, claudeCallCost } from '../settings'
 import type { ScriptResult, SourceResult } from './types'
-
-// Sonnet pricing per 1M tokens (see docs/Decision-and-Cost-Guide.md / PRD §10).
-const INPUT_COST_PER_TOKEN = 3 / 1_000_000
-const OUTPUT_COST_PER_TOKEN = 15 / 1_000_000
 
 /**
  * Generate title/hook/description/hashtags with Claude. The playbook is the
  * stable cached prefix; only the per-video trigger goes after the breakpoint.
- * Falls back to a template if ANTHROPIC_API_KEY is not set.
+ * The Claude model follows the factory's tier (config.scriptModel/modelTier)
+ * or the operator's default tier — see src/lib/settings.ts. Falls back to a
+ * template if ANTHROPIC_API_KEY is not set.
  */
 export async function runScript(
   videoId: string,
   playbook: string,
-  source: SourceResult
+  source: SourceResult,
+  modelOverride?: string
 ): Promise<ScriptResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return templateScript(source)
 
+  const m = await resolveModel(modelOverride)
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -26,7 +27,7 @@ export async function runScript(
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
+      model: m.model,
       max_tokens: 1024,
       system: [
         {
@@ -49,19 +50,13 @@ export async function runScript(
   }
 
   const data = await res.json()
-  const usage = data.usage ?? {}
-  const inputTokens =
-    (usage.input_tokens ?? 0) +
-    (usage.cache_creation_input_tokens ?? 0) +
-    (usage.cache_read_input_tokens ?? 0) * 0.1
-  const total =
-    inputTokens * INPUT_COST_PER_TOKEN + (usage.output_tokens ?? 0) * OUTPUT_COST_PER_TOKEN
+  const { total, units } = claudeCallCost(data.usage ?? {}, m)
   await prisma.costLedger.create({
     data: {
       videoId,
-      service: 'claude-sonnet-4-6',
-      units: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
-      unitCost: INPUT_COST_PER_TOKEN,
+      service: m.model,
+      units,
+      unitCost: m.inputCostPerToken,
       total,
     },
   })

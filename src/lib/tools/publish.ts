@@ -1,6 +1,7 @@
 import { createReadStream, existsSync } from 'fs'
 import { google } from 'googleapis'
 import { prisma } from '../prisma'
+import { autoPublishEnabled } from '../settings'
 import { authedClient, connection, PLATFORM } from '../youtube'
 
 /**
@@ -169,5 +170,37 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
       data: { status: 'failed', error: message },
     })
     throw e
+  }
+}
+
+export type AutoPublishOutcome =
+  | { published: true; permalink: string }
+  | { published: false; reason: string }
+
+/**
+ * Auto-publish hook for autonomy=auto agents. Called by the orchestrators after
+ * a video is approved. It is deliberately NON-FATAL: any reason it can't publish
+ * (feature off, YouTube not connected, daily quota spent, upload error) leaves
+ * the video 'approved' for a later manual publish and returns a reason rather
+ * than throwing — a publish hiccup must never fail an otherwise-good run.
+ */
+export async function maybeAutoPublish(
+  videoId: string,
+  autonomy: string
+): Promise<AutoPublishOutcome> {
+  if (autonomy !== 'auto') return { published: false, reason: 'agent is review-gated' }
+  if (!(await autoPublishEnabled()))
+    return { published: false, reason: 'auto-publish disabled in Settings' }
+  if (!(await connection())) return { published: false, reason: 'YouTube not connected' }
+
+  const { remaining, cap } = await quotaStatus()
+  if (remaining <= 0)
+    return { published: false, reason: `daily upload quota reached (${cap}/day)` }
+
+  try {
+    const r = await publishToYouTube(videoId)
+    return { published: true, permalink: r.permalink }
+  } catch (e) {
+    return { published: false, reason: e instanceof Error ? e.message : String(e) }
   }
 }

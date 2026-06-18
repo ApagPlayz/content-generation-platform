@@ -3,6 +3,7 @@ import { promisify } from 'util'
 import path from 'path'
 import { existsSync } from 'fs'
 import type { AssembleResult, MomentResult, ScriptResult } from './types'
+import { isRemotionEnabled, renderSportsHighlight } from '../render/remotion'
 
 const exec = promisify(execFile)
 
@@ -22,15 +23,26 @@ async function hasDrawtext(): Promise<boolean> {
 }
 
 /**
- * Cut the detected moment and crop to 9:16 vertical with the hook burned in
- * at the top. ffmpeg-only v1; a Remotion template (animated captions,
- * score overlays, audio beds) replaces this behind the same interface.
+ * Cut the detected moment and crop to 9:16 vertical with the hook caption.
+ *
+ * Two render engines behind one interface: when RENDER_ENGINE=remotion the
+ * Remotion template (animated word-by-word hook, proper framing) runs; on any
+ * failure — or by default — we fall back to the ffmpeg `drawtext` path below,
+ * so the unattended factory never stalls while we validate Remotion.
  */
 export async function runAssemble(
   sourcePath: string,
   moment: MomentResult,
   script: ScriptResult
 ): Promise<AssembleResult> {
+  if (isRemotionEnabled()) {
+    try {
+      return await renderSportsHighlight(sourcePath, moment, script)
+    } catch (err) {
+      console.warn('[assemble] Remotion render failed, falling back to ffmpeg:', err)
+    }
+  }
+
   const dir = path.dirname(sourcePath)
   const outputPath = path.join(dir, 'final.mp4')
   const duration = moment.endSec - moment.startSec

@@ -16,11 +16,20 @@ type OAuth2Client = InstanceType<typeof google.auth.OAuth2>
 
 export const PLATFORM = 'youtube'
 
-// Upload + readonly (to read the connected channel handle for display).
+// Upload + readonly (channel handle) + analytics (watch time, avg view %, subs
+// gained). Connections made before analytics was added won't carry the last
+// scope until the operator reconnects — the analytics read degrades gracefully.
 export const SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube.readonly',
+  'https://www.googleapis.com/auth/yt-analytics.readonly',
 ]
+
+/** True if the active connection was granted the analytics scope. */
+export async function hasAnalyticsScope(): Promise<boolean> {
+  const conn = await connection()
+  return !!conn?.scopes?.includes('yt-analytics.readonly')
+}
 
 function baseUrl(): string {
   return process.env.APP_BASE_URL || 'http://localhost:3000'

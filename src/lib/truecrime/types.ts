@@ -41,6 +41,8 @@ export interface CuratedCase {
 
 export interface F10FactoryConfig {
   description?: string
+  /** Claude tier for scripting: 'haiku' | 'sonnet' | 'opus' (or a model id). */
+  scriptModel?: string
   /** Curated cases rotated through, one per run (deterministic by day). */
   caseWatchlist?: CuratedCase[]
   /** Target seconds — ≥60 for TikTok Creator Rewards eligibility. Default 75. */
@@ -69,7 +71,7 @@ export interface CaseBrief {
 export interface TtsResult {
   audioPath: string
   durationSec: number
-  provider: 'elevenlabs' | 'macos-say' | 'silent-stub'
+  provider: 'elevenlabs' | 'openai-tts' | 'kokoro' | 'macos-say' | 'silent-stub'
 }
 
 export interface CaptionCue {
