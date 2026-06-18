@@ -33,6 +33,16 @@ const DEFAULT_KOKORO_URL = 'http://localhost:8880/v1'
 const DEFAULT_KOKORO_VOICE = 'af_bella' // warm, neutral default kokoro voice
 const DEFAULT_OPENAI_VOICE = 'onyx' // deep, documentary-leaning openai voice
 
+// Kokoro voice ids are namespaced `<lang><gender>_<name>` (af_bella, am_adam,
+// bf_emma…). The factory's `voice` setting is provider-specific and often holds
+// a macOS voice ('Daniel') or an ElevenLabs name ('Rachel') — passing those to
+// Kokoro returns 400. So only honour a voice that looks like a Kokoro id and
+// otherwise fall back to the default, instead of breaking the whole tier.
+const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/i
+function kokoroVoice(voice: string): string {
+  return KOKORO_VOICE_RE.test(voice.trim()) ? voice.trim() : DEFAULT_KOKORO_VOICE
+}
+
 type ProviderName = TtsResult['provider']
 
 async function commandExists(cmd: string): Promise<boolean> {
@@ -61,7 +71,10 @@ async function probeDuration(file: string, fallback: number): Promise<number> {
 
 /** Normalise an arbitrary audio buffer to the 48kHz mono WAV the render expects. */
 async function toWav(srcBytes: ArrayBuffer, ext: string, wavPath: string): Promise<boolean> {
-  const tmp = path.join(path.dirname(wavPath), `narration.${ext}`)
+  // Use a distinct source name: providers that return WAV (Kokoro, OpenAI) would
+  // otherwise collide with wavPath (narration.wav) and ffmpeg refuses to read and
+  // write the same file in-place ("FFmpeg cannot edit existing files in-place").
+  const tmp = path.join(path.dirname(wavPath), `narration-raw.${ext}`)
   await writeFile(tmp, Buffer.from(srcBytes))
   await exec('ffmpeg', ['-y', '-i', tmp, '-ar', '48000', '-ac', '1', wavPath])
   await unlink(tmp).catch(() => {})
@@ -127,7 +140,7 @@ async function kokoro(text: string, voice: string, wavPath: string): Promise<boo
       body: JSON.stringify({
         model: 'kokoro',
         input: text,
-        voice: voice || DEFAULT_KOKORO_VOICE,
+        voice: kokoroVoice(voice),
         response_format: 'wav',
       }),
     })

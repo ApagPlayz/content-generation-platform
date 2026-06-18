@@ -3,7 +3,12 @@ import { promisify } from 'util'
 import path from 'path'
 import { existsSync } from 'fs'
 import type { AssembleResult, MomentResult, ScriptResult } from './types'
-import { isRemotionEnabled, renderSportsHighlight } from '../render/remotion'
+// NB: ../render/remotion is loaded with a dynamic import() below, never a static
+// one. It (transitively) pulls @remotion/bundler → @rspack's native .node binary,
+// which can't be compiled for the browser/edge. A static import drags that graph
+// into Next's eager dev/edge compilation and crashes every pipeline route. The
+// dynamic import keeps it a server-only, on-demand chunk loaded only when the
+// RENDER_ENGINE=remotion flag is actually set.
 
 const exec = promisify(execFile)
 
@@ -35,8 +40,9 @@ export async function runAssemble(
   moment: MomentResult,
   script: ScriptResult
 ): Promise<AssembleResult> {
-  if (isRemotionEnabled()) {
+  if ((process.env.RENDER_ENGINE || '').trim().toLowerCase() === 'remotion') {
     try {
+      const { renderSportsHighlight } = await import('../render/remotion')
       return await renderSportsHighlight(sourcePath, moment, script)
     } catch (err) {
       console.warn('[assemble] Remotion render failed, falling back to ffmpeg:', err)
