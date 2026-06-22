@@ -42,18 +42,41 @@ async function fetchSummary(title: string): Promise<WikiSummary | null> {
   return (await safeJson(url)) as WikiSummary | null
 }
 
-/** Split a summary extract into short factual bullets. */
+/**
+ * The REST summary endpoint returns only the lead sentence — too thin to build
+ * a multi-beat script. The action API's `exintro` extract returns the FULL
+ * intro section (several paragraphs), giving us 5–6 real factual sentences.
+ */
+async function fetchIntroExtract(title: string): Promise<string> {
+  const url =
+    'https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&redirects=1&format=json&titles=' +
+    encodeURIComponent(title)
+  const data = (await safeJson(url)) as
+    | { query?: { pages?: Record<string, { extract?: string }> } }
+    | null
+  const page = data?.query?.pages ? Object.values(data.query.pages)[0] : undefined
+  return page?.extract ?? ''
+}
+
+/** Remove parenthetical birth/death date ranges like "(November 19, 1904 –
+ *  August 29, 1971)" — narration noise that also misleads year detection. */
+function stripDateParens(text: string): string {
+  return text.replace(/\s*\([^)]*\d{4}[^)]*\)/g, '').replace(/\s+/g, ' ').trim()
+}
+
+/** Split a summary extract into short factual bullets, dates cleaned. */
 function toFacts(extract: string): string[] {
-  return extract
-    .replace(/\s+/g, ' ')
+  return stripDateParens(extract)
     .split(/(?<=[.!?])\s+(?=[A-Z0-9"])/)
     .map((s) => s.trim())
     .filter((s) => s.length > 20)
     .slice(0, 6)
 }
 
+/** Year of the case — skip parenthetical birth/death years so we land on the
+ *  event year (e.g. the crime), not a subject's birth year. */
 function extractYear(text: string): number | undefined {
-  const m = text.match(/\b(18|19|20)\d{2}\b/)
+  const m = stripDateParens(text).match(/\b(18|19|20)\d{2}\b/)
   return m ? Number(m[0]) : undefined
 }
 
@@ -105,9 +128,14 @@ export async function discoverCase(config: F10FactoryConfig): Promise<CaseBrief>
     throw new Error(`Could not resolve a Wikipedia article for case "${chosen.caseName}".`)
   }
 
-  const summary = await fetchSummary(title)
-  const extract = summary?.extract ?? ''
-  const livingWarnings = await verifyLiving(chosen.subjects)
+  const [summary, introExtract, livingWarnings] = await Promise.all([
+    fetchSummary(title),
+    fetchIntroExtract(title),
+    verifyLiving(chosen.subjects),
+  ])
+  // Prefer the fuller intro extract for facts; fall back to the lead summary.
+  const leadExtract = summary?.extract ?? ''
+  const extract = introExtract.length > leadExtract.length ? introExtract : leadExtract
 
   return {
     caseName: chosen.caseName,

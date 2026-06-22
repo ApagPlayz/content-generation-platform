@@ -298,29 +298,37 @@ function templateScript(
   citations: string[]
 ): F10Script {
   const facts = brief.facts.length ? brief.facts : [brief.summary.slice(0, 200)]
-  const year = brief.year ? ` in ${brief.year}` : ''
-  const lead = facts[0]
   const hedgeLine = hedge(brief)
-  const angle = brief.angle ? `${brief.angle} ` : ''
-
-  // One sentence per beat. The hook is an unresolved framing; the rising beats
-  // walk the verified facts in order (a cursor so none are skipped); the climax
-  // uses the final fact; the resolution is sourced + hedged. Match beat names
-  // precisely so "Turn / re-hook" isn't caught by the hook branch.
+  const hasAngle = !!brief.angle?.trim()
   const lastFact = facts[facts.length - 1]
-  let cursor = 1 // facts[0] is the hook; consume the rest in order
+
+  // Varied fillers so a fact-poor case never repeats the same line verbatim.
+  const fillers = [
+    'Investigators kept returning to the same unanswered questions.',
+    'The timeline is where the case gets complicated.',
+    'The official account still left gaps that were never fully closed.',
+  ]
+  let fillerIdx = 0
+
+  // The hook is the crafted angle when the operator supplied one (tight,
+  // scroll-stopping); otherwise the first verified sentence. Content beats then
+  // walk the remaining facts in order — reserving the LAST fact for the climax —
+  // so none repeat and the strongest fact lands at the peak.
+  let cursor = hasAngle ? 0 : 1 // if no angle, facts[0] is spent on the hook
+  const nextFact = (): string => {
+    if (cursor < facts.length - 1) return facts[cursor++]
+    return fillers[fillerIdx++ % fillers.length]
+  }
+
   const beatTexts: string[] = specs.map((spec, i) => {
     const n = spec.name.toLowerCase()
-    if (i === 0) return `${angle}${lead}`.trim()
-    if (n.includes('setup')) return `Here is what the record shows${year}.`
+    if (i === 0) return (hasAngle ? brief.angle! : facts[0]).trim()
     if (n.includes('climax'))
       return `According to public records and reporting, this is the part that still draws scrutiny. ${lastFact}`.trim()
     if (n.includes('resolution'))
       return `${hedgeLine} The full account is documented at the source linked below.`.trim()
-    // Inciting / rising / turn / falling: next unused fact.
-    const fact = facts[cursor]
-    cursor++
-    return fact ?? 'Investigators kept returning to the same unanswered questions.'
+    // Setup / inciting / rising / turn / falling: next unused fact.
+    return nextFact()
   })
 
   const beats: ScriptBeat[] = specs.map((spec, i) => ({
