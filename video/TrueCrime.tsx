@@ -112,13 +112,21 @@ const KaraokeCaptions: React.FC<{ cues: CaptionCue[] }> = ({ cues }) => {
     (cues.length && t >= cues[cues.length - 1].endSec ? cues[cues.length - 1] : null)
   if (!cue) return null
 
+  // Prefer real per-word stamps (Kokoro). Without them, split the page's window
+  // evenly across its words so the karaoke still sweeps word-by-word instead of
+  // flashing the whole page at once.
   const tokens =
     cue.tokens && cue.tokens.length > 0
       ? cue.tokens
-      : cue.text
-          .split(/\s+/)
-          .filter(Boolean)
-          .map((text) => ({ text, startSec: cue.startSec, endSec: cue.endSec }))
+      : (() => {
+          const ws = cue.text.split(/\s+/).filter(Boolean)
+          const span = (cue.endSec - cue.startSec) / Math.max(1, ws.length)
+          return ws.map((text, i) => ({
+            text,
+            startSec: cue.startSec + i * span,
+            endSec: cue.startSec + (i + 1) * span,
+          }))
+        })()
 
   return (
     <AbsoluteFill
@@ -133,7 +141,9 @@ const KaraokeCaptions: React.FC<{ cues: CaptionCue[] }> = ({ cues }) => {
           display: 'flex',
           flexWrap: 'wrap',
           justifyContent: 'center',
-          gap: '10px 18px',
+          // Per-span margin (not flex `gap`, which renders inconsistently in
+          // the headless Chromium) guarantees visible spacing between words.
+          rowGap: '10px',
         }}
       >
         {tokens.map((tok, i) => {
@@ -152,6 +162,7 @@ const KaraokeCaptions: React.FC<{ cues: CaptionCue[] }> = ({ cues }) => {
                 color,
                 lineHeight: 1.04,
                 letterSpacing: '-0.5px',
+                margin: '0 9px',
                 transform: active ? 'scale(1.12)' : 'scale(1)',
                 transition: 'none',
                 WebkitTextStroke: '3px #000',
