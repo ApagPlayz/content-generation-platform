@@ -15,6 +15,38 @@ export interface SportsHighlightProps {
   fps: number
 }
 
+// ── F10 True Crime: karaoke slideshow ──────────────────────────────────────
+
+/** One word inside a caption page, with its spoken time window (seconds). */
+export interface CaptionToken {
+  text: string
+  startSec: number
+  endSec: number
+}
+
+/** A ~3-word caption page. `tokens` drive word-by-word (karaoke) highlighting;
+ *  when absent the whole page is shown without per-word emphasis. */
+export interface CaptionCue {
+  text: string
+  startSec: number
+  endSec: number
+  tokens?: CaptionToken[]
+}
+
+export interface TrueCrimeProps {
+  /** HTTP(S) URLs of the sourced public-domain stills, shown as a Ken-Burns
+   *  slideshow. Remotion rejects file://, so the renderer serves them. */
+  imageSrcs: string[]
+  /** HTTP(S) URL of the narration audio bed. */
+  audioSrc: string
+  /** Total narration length; the composition runs exactly this long. */
+  durationSec: number
+  /** Timed caption pages with optional per-word stamps for karaoke. */
+  cues: CaptionCue[]
+  /** Composition frame rate. */
+  fps: number
+}
+
 export const DEFAULT_FPS = 30
 export const VIDEO_WIDTH = 1080
 export const VIDEO_HEIGHT = 1920

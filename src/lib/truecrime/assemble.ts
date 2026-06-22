@@ -94,6 +94,18 @@ export async function assembleVideo(
   const dir = path.dirname(audioPath)
   const outputPath = path.join(dir, 'final.mp4')
 
+  // Preferred path: the Remotion karaoke composition (Ken-Burns slideshow +
+  // word-by-word captions). Opt-in via RENDER_ENGINE=remotion; on any failure
+  // we fall through to the ffmpeg slideshow below so the factory never stalls.
+  if ((process.env.RENDER_ENGINE || '').trim().toLowerCase() === 'remotion') {
+    try {
+      const { renderTrueCrime } = await import('../render/remotion')
+      return await renderTrueCrime(imagePaths, audioPath, audioDurationSec, captions)
+    } catch (err) {
+      console.warn('[truecrime/assemble] Remotion render failed, falling back to ffmpeg:', err)
+    }
+  }
+
   if (!(await ffmpegAvailable())) {
     const planPath = path.join(dir, 'timeline.json')
     await writeFile(

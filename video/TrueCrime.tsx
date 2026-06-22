@@ -1,0 +1,168 @@
+import {
+  AbsoluteFill,
+  Audio,
+  Img,
+  interpolate,
+  Sequence,
+  useCurrentFrame,
+  useVideoConfig,
+} from 'remotion'
+import type { CaptionCue, TrueCrimeProps } from './types'
+
+// 9:16 True Crime slideshow: public-domain stills with a slow Ken-Burns drift,
+// the narration as the audio bed, and word-by-word (karaoke) captions in the
+// lower third. The captions read their per-word timings from `cues[].tokens`
+// (supplied by the Kokoro TTS engine); when a page has no token stamps it falls
+// back to highlighting the whole page for its window. This is the animated
+// alternative to assemble.ts's ffmpeg slideshow + static SRT burn.
+export const TrueCrime: React.FC<TrueCrimeProps> = ({
+  imageSrcs,
+  audioSrc,
+  durationSec,
+  cues,
+}) => {
+  const { fps, durationInFrames } = useVideoConfig()
+  const total = durationInFrames || Math.max(1, Math.round(durationSec * fps))
+
+  // Split the runtime evenly across the stills. A tiny overlap (extra frames on
+  // each clip) keeps the crossfade from flashing black at the seam.
+  const count = Math.max(1, imageSrcs.length)
+  const per = Math.ceil(total / count)
+  const overlap = Math.round(fps * 0.5)
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: '#000' }}>
+      {imageSrcs.length > 0 ? (
+        imageSrcs.map((src, i) => (
+          <Sequence
+            key={i}
+            from={i * per}
+            durationInFrames={per + overlap}
+            layout="none"
+          >
+            <KenBurns src={src} durationInFrames={per + overlap} index={i} />
+          </Sequence>
+        ))
+      ) : (
+        <AbsoluteFill style={{ backgroundColor: '#0c0f14' }} />
+      )}
+
+      {/* Cinematic darkening so the white captions stay legible over any still. */}
+      <AbsoluteFill
+        style={{
+          background:
+            'linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 52%, rgba(0,0,0,0.85) 100%)',
+        }}
+      />
+
+      <KaraokeCaptions cues={cues} />
+
+      {audioSrc ? <Audio src={audioSrc} /> : null}
+    </AbsoluteFill>
+  )
+}
+
+// A single still with a slow zoom + pan and short fades at both ends. Direction
+// alternates per image so the motion doesn't feel mechanical.
+const KenBurns: React.FC<{ src: string; durationInFrames: number; index: number }> = ({
+  src,
+  durationInFrames,
+  index,
+}) => {
+  const frame = useCurrentFrame()
+  const dir = index % 2 === 0 ? 1 : -1
+
+  const scale = interpolate(frame, [0, durationInFrames], [1.05, 1.18], {
+    extrapolateRight: 'clamp',
+  })
+  const translateX = interpolate(frame, [0, durationInFrames], [0, dir * 40], {
+    extrapolateRight: 'clamp',
+  })
+  const fade = Math.round((durationInFrames || 30) * 0.12)
+  const opacity = interpolate(
+    frame,
+    [0, fade, durationInFrames - fade, durationInFrames],
+    [0, 1, 1, 0],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  )
+
+  return (
+    <AbsoluteFill style={{ opacity }}>
+      <Img
+        src={src}
+        style={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          transform: `scale(${scale}) translateX(${translateX}px)`,
+        }}
+      />
+    </AbsoluteFill>
+  )
+}
+
+const KaraokeCaptions: React.FC<{ cues: CaptionCue[] }> = ({ cues }) => {
+  const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+  const t = frame / fps
+
+  const cue =
+    cues.find((c) => t >= c.startSec && t < c.endSec) ??
+    // After the last cue ends, keep the final page on screen.
+    (cues.length && t >= cues[cues.length - 1].endSec ? cues[cues.length - 1] : null)
+  if (!cue) return null
+
+  const tokens =
+    cue.tokens && cue.tokens.length > 0
+      ? cue.tokens
+      : cue.text
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((text) => ({ text, startSec: cue.startSec, endSec: cue.endSec }))
+
+  return (
+    <AbsoluteFill
+      style={{
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+        padding: '0 72px 360px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          gap: '10px 18px',
+        }}
+      >
+        {tokens.map((tok, i) => {
+          const active = t >= tok.startSec && t < tok.endSec
+          const spoken = t >= tok.endSec
+          // Active word pops bright amber; already-spoken words stay white;
+          // upcoming words sit dimmed so the eye tracks the current word.
+          const color = active ? '#ffd54a' : spoken ? '#ffffff' : 'rgba(255,255,255,0.55)'
+          return (
+            <span
+              key={i}
+              style={{
+                fontFamily: 'Arial, Helvetica, sans-serif',
+                fontSize: 82,
+                fontWeight: 900,
+                color,
+                lineHeight: 1.04,
+                letterSpacing: '-0.5px',
+                transform: active ? 'scale(1.12)' : 'scale(1)',
+                transition: 'none',
+                WebkitTextStroke: '3px #000',
+                textShadow: '0 6px 26px rgba(0,0,0,0.9)',
+              }}
+            >
+              {tok.text}
+            </span>
+          )
+        })}
+      </div>
+    </AbsoluteFill>
+  )
+}

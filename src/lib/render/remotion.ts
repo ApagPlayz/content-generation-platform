@@ -16,6 +16,7 @@ import http from 'http'
 import path from 'path'
 import type { AddressInfo } from 'net'
 import type { AssembleResult, MomentResult, ScriptResult } from '../tools/types'
+import type { CaptionsResult, RenderResult } from '../truecrime/types'
 
 const FPS = 30
 
@@ -45,6 +46,30 @@ async function getServeUrl(): Promise<string> {
   return bundlePromise
 }
 
+/** Minimal extension → MIME map for the loopback asset server (mp4 reels for
+ *  sports, jpg stills + wav narration for true crime). */
+function contentType(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.mp4':
+      return 'video/mp4'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.png':
+      return 'image/png'
+    case '.webp':
+      return 'image/webp'
+    case '.wav':
+      return 'audio/wav'
+    case '.mp3':
+      return 'audio/mpeg'
+    case '.m4a':
+      return 'audio/mp4'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
 interface FileServer {
   /** Base URL, e.g. http://127.0.0.1:54123 */
   baseUrl: string
@@ -71,7 +96,7 @@ function serveDirectory(dir: string): Promise<FileServer> {
         const stat = statSync(filePath)
         const range = req.headers.range
         res.setHeader('Accept-Ranges', 'bytes')
-        res.setHeader('Content-Type', 'video/mp4')
+        res.setHeader('Content-Type', contentType(filePath))
 
         if (range) {
           const match = /bytes=(\d*)-(\d*)/.exec(range)
@@ -151,4 +176,59 @@ export async function renderSportsHighlight(
     throw new Error('Remotion finished but final.mp4 not found')
   }
   return { outputPath, durationSec }
+}
+
+/**
+ * Render the F10 True Crime piece: a Ken-Burns slideshow over the sourced
+ * stills with word-by-word (karaoke) captions driven by the caption cues.
+ * Mirrors assembleVideo's contract so assemble.ts can drop it in behind the
+ * RENDER_ENGINE=remotion flag and fall back to ffmpeg on any failure.
+ *
+ * Images and audio share one directory (media/<videoId>/), so a single
+ * loopback server covers every asset; props reference them by basename URL.
+ */
+export async function renderTrueCrime(
+  imagePaths: string[],
+  audioPath: string,
+  durationSec: number,
+  captions: CaptionsResult
+): Promise<RenderResult> {
+  const dir = path.dirname(audioPath)
+  const outputPath = path.join(dir, 'final.mp4')
+
+  const { renderMedia, selectComposition } = await import('@remotion/renderer')
+  const serveUrl = await getServeUrl()
+  const fileServer = await serveDirectory(dir)
+
+  try {
+    const url = (p: string) => `${fileServer.baseUrl}/${encodeURIComponent(path.basename(p))}`
+    const inputProps = {
+      imageSrcs: imagePaths.map(url),
+      audioSrc: url(audioPath),
+      durationSec,
+      cues: captions.cues,
+      fps: FPS,
+    }
+
+    const composition = await selectComposition({
+      serveUrl,
+      id: 'TrueCrime',
+      inputProps,
+    })
+
+    await renderMedia({
+      composition,
+      serveUrl,
+      codec: 'h264',
+      outputLocation: outputPath,
+      inputProps,
+    })
+  } finally {
+    fileServer.close()
+  }
+
+  if (!existsSync(outputPath)) {
+    throw new Error('Remotion finished but final.mp4 not found')
+  }
+  return { outputPath, durationSec, rendered: true }
 }
