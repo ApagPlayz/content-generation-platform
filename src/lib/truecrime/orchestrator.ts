@@ -136,7 +136,8 @@ export async function executeTrueCrimeRun(
       ctx.captions = await generateCaptions(
         ctx.tts!.audioPath,
         ctx.script!.narration,
-        ctx.tts!.durationSec
+        ctx.tts!.durationSec,
+        ctx.tts!.words
       )
       await prisma.asset.create({
         data: {

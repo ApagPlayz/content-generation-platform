@@ -9,6 +9,9 @@
 // Kokoro is the recommended free default (see Updates/2026-06-17-voiceover-
 // research.md): run kokoro-fastapi locally and it serves an OpenAI-compatible
 // /v1/audio/speech endpoint at KOKORO_URL (default http://localhost:8880/v1).
+// We prefer its /dev/captioned_speech endpoint, which also returns word-level
+// timestamps used for accurate (karaoke) captions, and fall back to plain
+// /v1/audio/speech when that endpoint isn't present.
 // Duration is measured with ffprobe (falls back to a words-per-second estimate).
 
 import { execFile } from 'child_process'
@@ -18,7 +21,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { prisma } from '../prisma'
 import { getSetting } from '../settings'
-import type { TtsResult } from './types'
+import type { TtsResult, WordStamp } from './types'
 
 const exec = promisify(execFile)
 const MEDIA_DIR = path.join(process.cwd(), 'media')
@@ -70,12 +73,13 @@ async function probeDuration(file: string, fallback: number): Promise<number> {
 }
 
 /** Normalise an arbitrary audio buffer to the 48kHz mono WAV the render expects. */
-async function toWav(srcBytes: ArrayBuffer, ext: string, wavPath: string): Promise<boolean> {
+async function toWav(srcBytes: ArrayBuffer | Uint8Array, ext: string, wavPath: string): Promise<boolean> {
   // Use a distinct source name: providers that return WAV (Kokoro, OpenAI) would
   // otherwise collide with wavPath (narration.wav) and ffmpeg refuses to read and
   // write the same file in-place ("FFmpeg cannot edit existing files in-place").
   const tmp = path.join(path.dirname(wavPath), `narration-raw.${ext}`)
-  await writeFile(tmp, Buffer.from(srcBytes))
+  const u8 = srcBytes instanceof Uint8Array ? srcBytes : new Uint8Array(srcBytes)
+  await writeFile(tmp, u8)
   await exec('ffmpeg', ['-y', '-i', tmp, '-ar', '48000', '-ac', '1', wavPath])
   await unlink(tmp).catch(() => {})
   return existsSync(wavPath)
@@ -125,16 +129,65 @@ async function openaiTts(text: string, voice: string, wavPath: string): Promise<
   }
 }
 
+/** A timestamp object as returned by kokoro-fastapi's /dev/captioned_speech. */
+interface KokoroTimestamp {
+  word: string
+  start_time: number
+  end_time: number
+}
+
+/** Result of a Kokoro synthesis: success flag plus optional word timings. */
+interface KokoroResult {
+  ok: boolean
+  words?: WordStamp[]
+}
+
 /**
  * Kokoro via a local OpenAI-compatible endpoint (kokoro-fastapi). No API key,
  * runs on the operator's machine. Endpoint + voice are configurable in Settings
  * (kokoro_url / kokoro_voice) or via the KOKORO_URL env var.
+ *
+ * We first try the `/dev/captioned_speech` endpoint, which returns the audio
+ * plus word-level timestamps (used for accurate, karaoke-style captions). If
+ * that endpoint isn't available we fall back to the plain `/audio/speech`
+ * endpoint (audio only) so older kokoro-fastapi builds still narrate.
  */
-async function kokoro(text: string, voice: string, wavPath: string): Promise<boolean> {
+async function kokoro(text: string, voice: string, wavPath: string): Promise<KokoroResult> {
   const base =
     (await getSetting('kokoro_url')) || process.env.KOKORO_URL || DEFAULT_KOKORO_URL
+  const root = base.replace(/\/+$/, '').replace(/\/v1$/, '') // /dev lives at the host root, not under /v1
+  const v1 = `${base.replace(/\/+$/, '')}`
+
+  // 1. Captioned endpoint — audio + word timings in one JSON response.
   try {
-    const res = await fetch(`${base.replace(/\/$/, '')}/audio/speech`, {
+    const res = await fetch(`${root}/dev/captioned_speech`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'kokoro',
+        input: text,
+        voice: kokoroVoice(voice),
+        response_format: 'wav',
+        stream: false,
+      }),
+    })
+    if (res.ok) {
+      const json = (await res.json()) as { audio?: string; timestamps?: KokoroTimestamp[] }
+      if (json.audio) {
+        const ok = await toWav(Buffer.from(json.audio, 'base64'), 'wav', wavPath)
+        const words = (json.timestamps ?? [])
+          .filter((t) => t && typeof t.word === 'string' && t.word.trim().length > 0)
+          .map((t) => ({ word: t.word, startSec: t.start_time, endSec: t.end_time }))
+        return { ok, words: words.length ? words : undefined }
+      }
+    }
+  } catch {
+    // Captioned endpoint not available on this build — try plain speech below.
+  }
+
+  // 2. Plain speech endpoint — audio only, no timings.
+  try {
+    const res = await fetch(`${v1}/audio/speech`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -144,11 +197,11 @@ async function kokoro(text: string, voice: string, wavPath: string): Promise<boo
         response_format: 'wav',
       }),
     })
-    if (!res.ok) return false
-    return toWav(await res.arrayBuffer(), 'wav', wavPath)
+    if (!res.ok) return { ok: false }
+    return { ok: await toWav(await res.arrayBuffer(), 'wav', wavPath) }
   } catch {
     // Endpoint not running — fall through to the next tier.
-    return false
+    return { ok: false }
   }
 }
 
@@ -212,10 +265,14 @@ export async function synthesizeNarration(
 
   for (const provider of providerChain(preferred)) {
     let ok = false
+    let words: WordStamp[] | undefined
     if (provider === 'elevenlabs') ok = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
     else if (provider === 'openai-tts') ok = await openaiTts(narration, voiceSetting ?? '', wavPath)
-    else if (provider === 'kokoro') ok = await kokoro(narration, voiceSetting ?? '', wavPath)
-    else if (provider === 'macos-say') ok = await macSay(narration, voiceSetting, wavPath)
+    else if (provider === 'kokoro') {
+      const r = await kokoro(narration, voiceSetting ?? '', wavPath)
+      ok = r.ok
+      words = r.words
+    } else if (provider === 'macos-say') ok = await macSay(narration, voiceSetting, wavPath)
     if (!ok) continue
 
     if (provider === 'elevenlabs') {
@@ -223,7 +280,7 @@ export async function synthesizeNarration(
     } else if (provider === 'openai-tts') {
       await ledger(videoId, 'openai-tts', narration.length, OPENAI_COST_PER_CHAR)
     }
-    return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider }
+    return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider, words }
   }
 
   // Final tier: silent stub so the render stage still has an audio bed.

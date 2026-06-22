@@ -68,22 +68,40 @@ export interface CaseBrief {
   livingWarnings: string[]
 }
 
+/** A single word with its spoken time window (seconds). */
+export interface WordStamp {
+  word: string
+  startSec: number
+  endSec: number
+}
+
 export interface TtsResult {
   audioPath: string
   durationSec: number
   provider: 'elevenlabs' | 'openai-tts' | 'kokoro' | 'macos-say' | 'silent-stub'
+  /** Word-level timings when the provider supplies them (Kokoro captioned). */
+  words?: WordStamp[]
+}
+
+/** One word inside a caption page, for word-by-word (karaoke) highlighting. */
+export interface CaptionToken {
+  text: string
+  startSec: number
+  endSec: number
 }
 
 export interface CaptionCue {
   text: string
   startSec: number
   endSec: number
+  /** Per-word timings within this page; present when built from word stamps. */
+  tokens?: CaptionToken[]
 }
 
 export interface CaptionsResult {
   cues: CaptionCue[]
   captionsPath: string
-  method: 'whisper' | 'heuristic'
+  method: 'kokoro' | 'whisper' | 'heuristic'
 }
 
 export interface RenderResult {
