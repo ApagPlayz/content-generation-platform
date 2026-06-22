@@ -1,30 +1,82 @@
-// Script stage. Turns a CaseBrief into a structured TrueCrimeScript (narration +
-// subjects + claims + structure + citations) for the compliance gate and TTS.
+// Script stage. Turns a CaseBrief into a beat-structured TrueCrimeScript: an
+// engineered opening hook plus an ordered set of beats that build rising action
+// to a climax (~75–85% of runtime) and link causally with "but"/"therefore".
+// The beats carry pacing + visual-cue hints the footage and render phases use.
+//
 // Uses Claude when ANTHROPIC_API_KEY is set; otherwise a deterministic template
-// that narrates the (neutrally-worded) Wikipedia summary and hedges guilt for
-// any non-convicted subject — compliant-by-construction so the offline path
-// still clears the gate.
+// that narrates the (neutrally-worded) Wikipedia facts as beats and hedges guilt
+// for any non-convicted subject — compliant-by-construction so the offline path
+// still clears the gate. Pacing numbers (durations, cut cadence, music curve)
+// are fixed in code; the model only fills language and visual cues.
 
 import { prisma } from '../prisma'
 import { resolveModel, claudeCallCost } from '../settings'
 import type { ScriptStructure } from '../compliance'
-import type { CaseBrief, F10FactoryConfig, F10Script } from './types'
+import type {
+  CaseBrief,
+  F10FactoryConfig,
+  F10Script,
+  HookCandidate,
+  HookType,
+  ScriptBeat,
+} from './types'
 
-const HOOK_PATTERNS = [
-  'cold-open-question',
+const HOOK_TYPES: HookType[] = [
+  'open_loop',
+  'statistic',
+  'question',
+  'in_media_res',
+  'contradiction',
+  'overlooked_detail',
   'timeline',
-  'myth-bust',
-  'courtroom-reveal',
-  'unsolved-hook',
+  'unresolved_mystery',
 ]
 
-/** Vary the structural signature by case so the inauthentic-content check passes. */
-function structureFor(brief: CaseBrief): ScriptStructure {
-  const seed = brief.caseName.length + (brief.year ?? 0)
+/** Fixed pacing per beat. Cut cadence tightens and music swells toward the
+ *  climax; the climax lands at ~75–85% of runtime. Two templates by length. */
+interface BeatSpec {
+  name: string
+  targetSeconds: number
+  cutIntervalSec: number
+  musicIntensity: number
+  isClimax?: boolean
+}
+
+const BEATS_60: BeatSpec[] = [
+  { name: 'Hook', targetSeconds: 4, cutIntervalSec: 3.5, musicIntensity: 0.3 },
+  { name: 'Setup', targetSeconds: 8, cutIntervalSec: 3.5, musicIntensity: 0.35 },
+  { name: 'Inciting detail', targetSeconds: 10, cutIntervalSec: 2.5, musicIntensity: 0.45 },
+  { name: 'Rising complication', targetSeconds: 11, cutIntervalSec: 2.2, musicIntensity: 0.6 },
+  { name: 'Turn / re-hook', targetSeconds: 12, cutIntervalSec: 2.0, musicIntensity: 0.7 },
+  { name: 'Climax', targetSeconds: 9, cutIntervalSec: 1.2, musicIntensity: 0.95, isClimax: true },
+  { name: 'Resolution', targetSeconds: 6, cutIntervalSec: 2.5, musicIntensity: 0.5 },
+]
+
+const BEATS_90: BeatSpec[] = [
+  { name: 'Hook', targetSeconds: 5, cutIntervalSec: 3.5, musicIntensity: 0.3 },
+  { name: 'Setup', targetSeconds: 10, cutIntervalSec: 3.5, musicIntensity: 0.35 },
+  { name: 'Inciting detail', targetSeconds: 12, cutIntervalSec: 2.6, musicIntensity: 0.45 },
+  { name: 'Rising complication', targetSeconds: 13, cutIntervalSec: 2.3, musicIntensity: 0.55 },
+  { name: 'Rising complication 2', targetSeconds: 13, cutIntervalSec: 2.1, musicIntensity: 0.65 },
+  { name: 'Turn / re-hook', targetSeconds: 10, cutIntervalSec: 1.8, musicIntensity: 0.75 },
+  { name: 'Climax', targetSeconds: 13, cutIntervalSec: 1.2, musicIntensity: 0.95, isClimax: true },
+  { name: 'Falling action', targetSeconds: 8, cutIntervalSec: 2.0, musicIntensity: 0.6 },
+  { name: 'Resolution', targetSeconds: 6, cutIntervalSec: 2.5, musicIntensity: 0.5 },
+]
+
+const WORDS_PER_SEC = 2.7
+
+function specsFor(targetDurationSec: number): BeatSpec[] {
+  return targetDurationSec >= 80 ? BEATS_90 : BEATS_60
+}
+
+/** Structural signature reflects the real beats so the inauthentic-content
+ *  variation check sees genuine per-case variety. */
+function structureFor(brief: CaseBrief, specs: BeatSpec[], hookType: string): ScriptStructure {
   return {
-    hookPattern: brief.angle ? 'operator-angle' : HOOK_PATTERNS[seed % HOOK_PATTERNS.length],
-    sections: ['hook', 'background', 'investigation', 'resolution', 'reflection'],
-    visualStyle: 'archival-kenburns',
+    hookPattern: brief.angle ? `operator-angle:${hookType}` : hookType,
+    sections: specs.map((s) => s.name.toLowerCase()),
+    visualStyle: 'beat-paced-broll',
   }
 }
 
@@ -35,21 +87,28 @@ export async function generateScript(
   config: F10FactoryConfig
 ): Promise<F10Script> {
   const apiKey = process.env.ANTHROPIC_API_KEY
-  const structure = structureFor(brief)
   const targetDurationSec = config.targetDurationSec ?? 75
+  const specs = specsFor(targetDurationSec)
   const citations = [brief.wikipediaUrl]
 
   if (!apiKey) {
-    return templateScript(brief, structure, targetDurationSec, citations)
+    return templateScript(brief, specs, targetDurationSec, citations)
   }
 
-  // Model tier follows the factory's config.scriptModel, else the operator's
-  // global default, else sonnet (see src/lib/settings.ts).
   const m = await resolveModel(config.scriptModel)
+  const wordBudget = Math.round(targetDurationSec * WORDS_PER_SEC)
 
   try {
     const subjectLines = brief.subjects
       .map((s) => `- ${s.name}: role=${s.role}, living=${s.living}, minor=${s.isMinor}`)
+      .join('\n')
+
+    const beatGuide = specs
+      .map(
+        (s, i) =>
+          `${i + 1}. ${s.name} (~${s.targetSeconds}s, ~${Math.round(s.targetSeconds * WORDS_PER_SEC)} words)` +
+          (s.isClimax ? ' ← CLIMAX / key reveal' : '')
+      )
       .join('\n')
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -61,19 +120,36 @@ export async function generateScript(
       },
       body: JSON.stringify({
         model: m.model,
-        max_tokens: 1500,
+        max_tokens: 2200,
         system: [
           {
             type: 'text',
             text:
               `${playbook}\n\n` +
-              'You write a 60–90s documentary-tone true-crime narration for a faceless short. ' +
-              'HARD RULES: never assert guilt as fact about anyone whose role is not "convicted"; ' +
-              'use "alleged/accused/reportedly" for accused or acquitted people; never name or depict ' +
-              'minors; add a unique angle and original framing (avoid templated phrasing); investigation/' +
-              'resolution focus, not violence. Respond with ONLY JSON: ' +
-              '{"narration": string, "title": string (≤80 chars), "description": string, ' +
-              '"hashtags": string[] (5-8, no #)}.',
+              'You write a documentary-tone, faceless true-crime SHORT as a structured ' +
+              'dramatic arc. Internally brainstorm several hook angles (open_loop, statistic, ' +
+              'question, in_media_res, contradiction, overlooked_detail, timeline, ' +
+              'unresolved_mystery) and output only the single strongest hook.\n\n' +
+              'STORYTELLING RULES:\n' +
+              `- Total spoken narration ≈ ${wordBudget} words across the beats below.\n` +
+              '- Every beat after the Hook MUST connect to the previous beat with "but" or ' +
+              '"therefore" (causal), never "and then" (sequential). Set linkWord accordingly.\n' +
+              '- Build rising tension; the CLIMAX beat carries the key documented reveal or the ' +
+              'central unresolved question. Include a mid-video re-hook at the Turn beat.\n' +
+              '- The hook fires 3 layers: verbal (10–14 words, calm, lands in 3s), onscreenText ' +
+              '(≤7 words, NOT a copy of the verbal line), visualCue (a non-graphic opening shot).\n\n' +
+              'HARD COMPLIANCE RULES:\n' +
+              '- Never assert guilt as fact about anyone whose role is not "convicted"; use ' +
+              '"alleged/accused/charged/reportedly" and ATTRIBUTE contested claims ("investigators ' +
+              'say", "according to court records"). Set sourceAttribution on any beat with a ' +
+              'contested claim, and complianceFlag = factual | attributed | opinion-clear.\n' +
+              '- Never name or depict minors. No gore; focus on investigation/timeline/mystery. ' +
+              'Build tension from documented unresolved facts, not speculation.\n\n' +
+              `BEAT TEMPLATE (return EXACTLY ${specs.length} beats, in this order):\n${beatGuide}\n\n` +
+              'Respond with ONLY JSON: {"hook":{"type","verbal","onscreenText","visualCue",' +
+              '"opensLoop","payoffRef"},"beats":[{"name","narration","linkWord","visualCue",' +
+              '"captionEmphasisWord","sourceAttribution","complianceFlag"}],"title"(≤80 chars),' +
+              '"description","hashtags"(5-8, no #)}. The first beat\'s narration is the hook verbal line.',
             cache_control: { type: 'ephemeral' },
           },
         ],
@@ -88,85 +164,207 @@ export async function generateScript(
         ],
       }),
     })
-    if (!res.ok) return templateScript(brief, structure, targetDurationSec, citations)
+    if (!res.ok) return templateScript(brief, specs, targetDurationSec, citations)
 
     const data = await res.json()
     const { total, units } = claudeCallCost(data.usage ?? {}, m)
     await prisma.costLedger.create({
-      data: {
-        videoId,
-        service: m.model,
-        units,
-        unitCost: m.inputCostPerToken,
-        total,
-      },
+      data: { videoId, service: m.model, units, unitCost: m.inputCostPerToken, total },
     })
 
     const text: string = data.content?.[0]?.text ?? ''
     const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return templateScript(brief, structure, targetDurationSec, citations)
+    if (!jsonMatch) return templateScript(brief, specs, targetDurationSec, citations)
     const parsed = JSON.parse(jsonMatch[0])
-    const fallback = templateScript(brief, structure, targetDurationSec, citations)
 
+    const built = buildFromModel(parsed, specs)
+    if (!built) return templateScript(brief, specs, targetDurationSec, citations)
+
+    const fallback = templateScript(brief, specs, targetDurationSec, citations)
     return {
       caseName: brief.caseName,
       subjects: brief.subjects,
-      narration: String(parsed.narration ?? '').trim() || fallback.narration,
+      narration: built.narration,
       visuals: [],
       citations,
       targetDurationSec,
-      structure,
+      structure: structureFor(brief, specs, built.hook.type),
+      hook: built.hook,
+      beats: built.beats,
       title: parsed.title ? String(parsed.title).slice(0, 100) : fallback.title,
       description: parsed.description ? String(parsed.description) : fallback.description,
       hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags.map(String) : fallback.hashtags,
     }
   } catch {
-    return templateScript(brief, structure, targetDurationSec, citations)
+    return templateScript(brief, specs, targetDurationSec, citations)
   }
 }
 
+/** Validate + normalize the model's JSON into a hook + beats, zipping the
+ *  fixed pacing template onto each beat. Returns null if the shape is unusable
+ *  (caller falls back to the template script). */
+function buildFromModel(
+  parsed: unknown,
+  specs: BeatSpec[]
+): { hook: HookCandidate; beats: ScriptBeat[]; narration: string } | null {
+  const p = parsed as {
+    hook?: Partial<HookCandidate>
+    beats?: Array<Partial<ScriptBeat>>
+  }
+  const rawBeats = Array.isArray(p.beats) ? p.beats : []
+  if (rawBeats.length === 0 || !p.hook?.verbal) return null
+
+  const beats: ScriptBeat[] = specs.map((spec, i) => {
+    const rb = rawBeats[i] ?? {}
+    const narration = String(rb.narration ?? '').trim()
+    return {
+      name: spec.name,
+      index: i,
+      narration,
+      targetSeconds: spec.targetSeconds,
+      linkWord: rb.linkWord === 'but' || rb.linkWord === 'therefore' ? rb.linkWord : i === 0 ? undefined : 'therefore',
+      visualCue: String(rb.visualCue ?? '').trim() || defaultVisualCue(spec.name),
+      cutIntervalSec: spec.cutIntervalSec,
+      musicIntensity: spec.musicIntensity,
+      captionEmphasisWord: rb.captionEmphasisWord ? String(rb.captionEmphasisWord) : undefined,
+      sourceAttribution: rb.sourceAttribution ? String(rb.sourceAttribution) : undefined,
+      complianceFlag:
+        rb.complianceFlag === 'attributed' || rb.complianceFlag === 'opinion-clear'
+          ? rb.complianceFlag
+          : 'factual',
+    }
+  })
+
+  const hookType = (HOOK_TYPES as string[]).includes(String(p.hook.type))
+    ? (p.hook.type as HookType)
+    : 'open_loop'
+  const hook: HookCandidate = {
+    type: hookType,
+    verbal: String(p.hook.verbal).trim(),
+    onscreenText: String(p.hook.onscreenText ?? '').trim().split(/\s+/).slice(0, 7).join(' '),
+    visualCue: String(p.hook.visualCue ?? '').trim() || defaultVisualCue('Hook'),
+    opensLoop: String(p.hook.opensLoop ?? '').trim(),
+    payoffRef: p.hook.payoffRef ? String(p.hook.payoffRef) : 'Climax',
+  }
+
+  // The spoken hook is exactly the chosen verbal line.
+  beats[0].narration = hook.verbal
+
+  // Reject if too many beats came back empty (model didn't follow the template).
+  if (beats.filter((b) => b.narration.length > 0).length < Math.ceil(specs.length / 2)) return null
+
+  const narration = beats
+    .map((b) => b.narration)
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return { hook, beats, narration }
+}
+
+/** Generic, person-free mood cue per beat — the safe default the footage stage
+ *  searches for. Never references the real people/case. */
+function defaultVisualCue(beatName: string): string {
+  const n = beatName.toLowerCase()
+  // Order matters: check 'turn' before 'hook' so "Turn / re-hook" doesn't match.
+  if (n.includes('turn')) return 'empty courtroom, cold light'
+  if (n.startsWith('hook')) return 'slow push-in on an old case file, dim light'
+  if (n.includes('setup')) return 'establishing shot, quiet street at dusk'
+  if (n.includes('inciting')) return 'newspaper clipping, shallow focus'
+  if (n.includes('rising')) return 'rain on a window at night'
+  if (n.includes('climax')) return 'redacted document close-up, rapid focus'
+  if (n.includes('falling')) return 'long empty road, overcast'
+  return 'archival photograph, slow drift'
+}
+
+// ─────────────────────────── Offline / fallback template ───────────────────────────
+
 function hedge(brief: CaseBrief): string {
-  // If every named accused party is convicted, no special hedging line needed.
-  const unproven = brief.subjects.filter(
-    (s) => (s.role === 'accused' || s.role === 'acquitted')
-  )
+  const unproven = brief.subjects.filter((s) => s.role === 'accused' || s.role === 'acquitted')
   if (unproven.length === 0) return ''
   const acquitted = unproven.filter((s) => s.role === 'acquitted').map((s) => s.name)
   if (acquitted.length > 0) {
-    return ` ${acquitted.join(' and ')} ${acquitted.length > 1 ? 'were' : 'was'} acquitted; nothing here asserts guilt.`
+    return `${acquitted.join(' and ')} ${acquitted.length > 1 ? 'were' : 'was'} acquitted; nothing here asserts guilt.`
   }
-  return ` The allegations against ${unproven.map((s) => s.name).join(' and ')} remain unproven in court.`
+  return `The allegations against ${unproven.map((s) => s.name).join(' and ')} remain unproven in court.`
 }
 
-function templateNarration(brief: CaseBrief): string {
-  const lead = brief.facts[0] ?? brief.summary.slice(0, 200)
-  const body = brief.facts.slice(1, 4).join(' ')
-  const angle = brief.angle ? `${brief.angle} ` : ''
-  return (
-    `${angle}${lead} ` +
-    `${body} ` +
-    `According to public records and reporting, here is what is known.${hedge(brief)} ` +
-    `The full account is documented at the source linked below.`
-  ).replace(/\s+/g, ' ').trim()
-}
-
+/** Deterministic beat script from the neutral Wikipedia facts. Compliant by
+ *  construction: attributes claims, hedges guilt, never invents a resolution. */
 function templateScript(
   brief: CaseBrief,
-  structure: ScriptStructure,
+  specs: BeatSpec[],
   targetDurationSec: number,
   citations: string[]
 ): F10Script {
-  const year = brief.year ? ` (${brief.year})` : ''
+  const facts = brief.facts.length ? brief.facts : [brief.summary.slice(0, 200)]
+  const year = brief.year ? ` in ${brief.year}` : ''
+  const lead = facts[0]
+  const hedgeLine = hedge(brief)
+  const angle = brief.angle ? `${brief.angle} ` : ''
+
+  // One sentence per beat. The hook is an unresolved framing; the rising beats
+  // walk the verified facts in order (a cursor so none are skipped); the climax
+  // uses the final fact; the resolution is sourced + hedged. Match beat names
+  // precisely so "Turn / re-hook" isn't caught by the hook branch.
+  const lastFact = facts[facts.length - 1]
+  let cursor = 1 // facts[0] is the hook; consume the rest in order
+  const beatTexts: string[] = specs.map((spec, i) => {
+    const n = spec.name.toLowerCase()
+    if (i === 0) return `${angle}${lead}`.trim()
+    if (n.includes('setup')) return `Here is what the record shows${year}.`
+    if (n.includes('climax'))
+      return `According to public records and reporting, this is the part that still draws scrutiny. ${lastFact}`.trim()
+    if (n.includes('resolution'))
+      return `${hedgeLine} The full account is documented at the source linked below.`.trim()
+    // Inciting / rising / turn / falling: next unused fact.
+    const fact = facts[cursor]
+    cursor++
+    return fact ?? 'Investigators kept returning to the same unanswered questions.'
+  })
+
+  const beats: ScriptBeat[] = specs.map((spec, i) => ({
+    name: spec.name,
+    index: i,
+    narration: beatTexts[i],
+    targetSeconds: spec.targetSeconds,
+    linkWord: i === 0 ? undefined : i % 2 === 0 ? 'therefore' : 'but',
+    visualCue: defaultVisualCue(spec.name),
+    cutIntervalSec: spec.cutIntervalSec,
+    musicIntensity: spec.musicIntensity,
+    sourceAttribution: spec.name.toLowerCase().includes('climax') ? 'public records and reporting' : undefined,
+    complianceFlag: spec.name.toLowerCase().includes('climax') ? 'attributed' : 'factual',
+  }))
+
+  const hook: HookCandidate = {
+    type: 'unresolved_mystery',
+    verbal: beatTexts[0],
+    onscreenText: `${brief.caseName}`.split(/\s+/).slice(0, 7).join(' '),
+    visualCue: defaultVisualCue('Hook'),
+    opensLoop: 'what the record actually shows',
+    payoffRef: 'Resolution',
+  }
+
+  const narration = beats
+    .map((b) => b.narration)
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const yr = brief.year ? ` (${brief.year})` : ''
   return {
     caseName: brief.caseName,
     subjects: brief.subjects,
-    narration: templateNarration(brief),
+    narration,
     visuals: [],
     citations,
     targetDurationSec,
-    structure,
-    title: `${brief.caseName}${year}: what really happened`.slice(0, 100),
-    description: (brief.facts[0] ?? brief.summary.slice(0, 160)) + ` Source: ${brief.wikipediaUrl}`,
+    structure: structureFor(brief, specs, hook.type),
+    hook,
+    beats,
+    title: `${brief.caseName}${yr}: what really happened`.slice(0, 100),
+    description: (facts[0] ?? brief.summary.slice(0, 160)) + ` Source: ${brief.wikipediaUrl}`,
     hashtags: ['truecrime', 'coldcase', 'mystery', 'history', 'unsolved'],
   }
 }

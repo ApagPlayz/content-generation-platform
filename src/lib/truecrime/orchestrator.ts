@@ -77,6 +77,18 @@ export async function executeTrueCrimeRun(
           scriptText: ctx.script.narration,
         },
       })
+      // Persist the beat-structured plan (hook + beats) so the footage and
+      // render phases can pace cuts and source per-beat b-roll.
+      if (ctx.script.beats?.length) {
+        await prisma.asset.create({
+          data: {
+            videoId: ctx.videoId,
+            kind: 'script-plan',
+            provider: 'f10-beats',
+            meta: JSON.stringify({ hook: ctx.script.hook, beats: ctx.script.beats }),
+          },
+        })
+      }
     })
 
     await stage(ctx, 'visuals', async () => {

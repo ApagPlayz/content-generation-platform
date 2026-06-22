@@ -9,6 +9,12 @@ const exec = promisify(execFile)
 
 export const MEDIA_DIR = path.join(process.cwd(), 'media')
 
+// We only keep a ~20s highlight, so there's no need to pull a whole 10–30 min
+// reel (hundreds of MB, minutes of transfer, frequent timeouts). Grab a window
+// from the start that's big enough for moment-detect to search within, then cut
+// the final clip from it. Tunable via the factory's `ingestWindowSec` config.
+const DEFAULT_INGEST_WINDOW_SEC = 90
+
 async function commandExists(cmd: string): Promise<boolean> {
   try {
     await exec('which', [cmd])

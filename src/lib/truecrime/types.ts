@@ -6,11 +6,62 @@
 
 import type { CaseSubject, TrueCrimeScript, VisualAsset } from '../compliance'
 
-/** A TrueCrimeScript plus the publish metadata the Video row needs. */
+/**
+ * An engineered opening hook. Fires three layers in the first ~3s: a calm
+ * spoken line (`verbal`), a compressed on-screen overlay (`onscreenText`, ≤7
+ * words, never a copy of the verbal line), and an opening shot (`visualCue`).
+ * `opensLoop` is the curiosity gap it raises; `payoffRef` names the beat that
+ * closes it (enforced so we never promise a payoff the script can't deliver).
+ */
+export type HookType =
+  | 'open_loop'
+  | 'statistic'
+  | 'question'
+  | 'in_media_res'
+  | 'contradiction'
+  | 'overlooked_detail'
+  | 'timeline'
+  | 'unresolved_mystery'
+
+export interface HookCandidate {
+  type: HookType
+  verbal: string
+  onscreenText: string
+  visualCue: string
+  opensLoop: string
+  payoffRef?: string
+}
+
+/**
+ * One beat of the dramatic arc. Beats link with "but"/"therefore" (causal, not
+ * sequential) and the climax lands at ~75–85% of runtime. The visual/pacing
+ * fields (`visualCue`, `cutIntervalSec`, `musicIntensity`, `captionEmphasisWord`)
+ * are planning hints consumed by the footage + render phases. `sourceAttribution`
+ * is required on any beat carrying a contested claim about a non-convicted person.
+ */
+export interface ScriptBeat {
+  name: string
+  index: number
+  narration: string
+  targetSeconds: number
+  /** Required on every beat after the hook; never "and then". */
+  linkWord?: 'but' | 'therefore'
+  visualCue: string
+  cutIntervalSec: number
+  musicIntensity: number
+  captionEmphasisWord?: string
+  sourceAttribution?: string
+  complianceFlag: 'factual' | 'attributed' | 'opinion-clear'
+}
+
+/** A TrueCrimeScript plus the publish metadata the Video row needs and the
+ *  beat-structured plan (hook + beats) that drives pacing and footage. */
 export interface F10Script extends TrueCrimeScript {
   title: string
   description: string
   hashtags: string[]
+  hook?: HookCandidate
+  beats?: ScriptBeat[]
 }
 
 export const F10_STAGES = [
