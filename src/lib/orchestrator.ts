@@ -55,7 +55,8 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     })
 
     await stage(ctx, 'clip-ingest', async () => {
-      ctx.ingest = await runClipIngest(ctx.videoId, ctx.source!.youtubeQuery)
+      const windowSec = Number(ctx.factoryConfig.ingestWindowSec) || undefined
+      ctx.ingest = await runClipIngest(ctx.videoId, ctx.source!.youtubeQuery, windowSec)
       await prisma.highlightSource.updateMany({
         where: { videoId: ctx.videoId },
         data: { youtubeUrl: ctx.ingest.youtubeUrl },

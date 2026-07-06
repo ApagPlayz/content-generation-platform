@@ -28,7 +28,11 @@ async function commandExists(cmd: string): Promise<boolean> {
  * Find and download the source highlight reel via yt-dlp (capped at 720p —
  * we only need a vertical crop of it). Returns the local path + metadata.
  */
-export async function runClipIngest(videoId: string, youtubeQuery: string): Promise<IngestResult> {
+export async function runClipIngest(
+  videoId: string,
+  youtubeQuery: string,
+  windowSec: number = DEFAULT_INGEST_WINDOW_SEC
+): Promise<IngestResult> {
   if (!(await commandExists('yt-dlp'))) {
     throw new Error('yt-dlp not installed. Install with: brew install yt-dlp')
   }
@@ -51,6 +55,16 @@ export async function runClipIngest(videoId: string, youtubeQuery: string): Prom
   const [url, durationStr] = meta.trim().split('\t')
   if (!url) throw new Error(`No YouTube result for query: ${youtubeQuery}`)
 
+  const fullDuration = Math.round(Number(durationStr) || 0)
+
+  // Only fetch a window from the start unless the whole video is already short.
+  // --download-sections (ffmpeg-backed) avoids pulling the entire reel; the
+  // keyframe flag keeps the cut accurate so moment-detect timestamps line up.
+  const sectionArgs =
+    fullDuration === 0 || fullDuration > windowSec
+      ? ['--download-sections', `*0-${windowSec}`, '--force-keyframes-at-cuts']
+      : []
+
   await exec(
     'yt-dlp',
     [
@@ -59,6 +73,7 @@ export async function runClipIngest(videoId: string, youtubeQuery: string): Prom
       '--merge-output-format', 'mp4',
       '-o', outTemplate,
       '--no-playlist',
+      ...sectionArgs,
     ],
     { timeout: 600_000 }
   )
@@ -68,9 +83,14 @@ export async function runClipIngest(videoId: string, youtubeQuery: string): Prom
     throw new Error(`yt-dlp finished but ${sourcePath} not found`)
   }
 
+  // The clip we actually downloaded is at most `windowSec` long; report that
+  // (not the full reel length) so downstream moment-detect bounds are correct.
+  const durationSec =
+    fullDuration === 0 ? windowSec : Math.min(fullDuration, windowSec)
+
   return {
     sourcePath,
     youtubeUrl: url,
-    durationSec: Math.round(Number(durationStr) || 0),
+    durationSec,
   }
 }
