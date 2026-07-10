@@ -345,6 +345,35 @@ async function AgentsTab() {
   )
 }
 
+// Friendly labels for the F10 footage-ladder tier keys stored in the
+// 'footage-map' asset (see src/lib/truecrime/footage.ts TIERS).
+const FOOTAGE_TIER_LABELS: Record<string, string> = {
+  ai_still: 'AI still',
+  stock: 'stock',
+  archive: 'archive',
+  moodbank: 'mood bank',
+  placeholder: 'archive photo',
+}
+
+// "3× archive · 2× AI still · 1× mood bank" from a footage-map asset's meta.
+// Returns null when there's no map or it can't be parsed (older/sports videos).
+function footageSummaryFromMeta(meta: string | null): string | null {
+  if (!meta) return null
+  try {
+    const parsed = JSON.parse(meta) as { footageSources?: Record<string, string> }
+    const tiers = Object.values(parsed.footageSources ?? {})
+    if (!tiers.length) return null
+    const counts = new Map<string, number>()
+    for (const tier of tiers) counts.set(tier, (counts.get(tier) ?? 0) + 1)
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([tier, n]) => `${n}× ${FOOTAGE_TIER_LABELS[tier] ?? tier}`)
+      .join(' · ')
+  } catch {
+    return null
+  }
+}
+
 async function InboxTab() {
   const pending = await prisma.video.findMany({
     where: { status: 'review' },
@@ -352,6 +381,8 @@ async function InboxTab() {
     include: {
       factory: { select: { name: true, type: true } },
       highlightSources: true,
+      complianceReports: { orderBy: { createdAt: 'desc' }, take: 1 },
+      assets: { where: { kind: 'footage-map' }, orderBy: { createdAt: 'desc' }, take: 1 },
     },
   })
 
@@ -381,23 +412,40 @@ async function InboxTab() {
         </div>
       ) : (
         <div className="space-y-4">
-          {pending.map((video) => (
-            <InboxCard
-              key={video.id}
-              id={video.id}
-              title={video.title}
-              scriptText={video.scriptText}
-              factoryType={video.factory.type}
-              factoryName={video.factory.name}
-              costEstimate={video.costEstimate}
-              createdAt={video.createdAt.toISOString()}
-              hasMedia={Boolean(video.localPath)}
-              strategy={video.highlightSources[0]?.strategy ?? null}
-              sourceUrl={video.highlightSources[0]?.youtubeUrl ?? null}
-              momentStart={video.highlightSources[0]?.momentStart ?? null}
-              momentEnd={video.highlightSources[0]?.momentEnd ?? null}
-            />
-          ))}
+          {pending.map((video) => {
+            const report = video.complianceReports[0] ?? null
+            return (
+              <InboxCard
+                key={video.id}
+                id={video.id}
+                title={video.title}
+                scriptText={video.scriptText}
+                factoryType={video.factory.type}
+                factoryName={video.factory.name}
+                costEstimate={video.costEstimate}
+                createdAt={video.createdAt.toISOString()}
+                hasMedia={Boolean(video.localPath)}
+                strategy={video.highlightSources[0]?.strategy ?? null}
+                sourceUrl={video.highlightSources[0]?.youtubeUrl ?? null}
+                momentStart={video.highlightSources[0]?.momentStart ?? null}
+                momentEnd={video.highlightSources[0]?.momentEnd ?? null}
+                caseName={report?.caseName ?? null}
+                compliance={
+                  report
+                    ? {
+                        decision: report.decision,
+                        summary: report.summary,
+                        caseSelectionOk: report.caseSelectionOk,
+                        corroboratedPct: report.corroboratedPct,
+                        defamationFlags: report.defamationFlags,
+                        variationOk: report.variationOk,
+                      }
+                    : null
+                }
+                footageSummary={footageSummaryFromMeta(video.assets[0]?.meta ?? null)}
+              />
+            )
+          })}
         </div>
       )}
     </div>
@@ -412,18 +460,6 @@ async function QueueTab() {
       video: { include: { factory: { select: { name: true, type: true } } } },
     },
   })
-
-  const TYPE_META_LOCAL: Record<string, { color: string }> = {
-    F1: { color: 'bg-orange-100 text-orange-700' },
-    F2: { color: 'bg-purple-100 text-purple-700' },
-    F3: { color: 'bg-blue-100 text-blue-700' },
-    F4: { color: 'bg-green-100 text-green-700' },
-    F5: { color: 'bg-yellow-100 text-yellow-700' },
-    F6: { color: 'bg-pink-100 text-pink-700' },
-    F7: { color: 'bg-cyan-100 text-cyan-700' },
-    F8: { color: 'bg-rose-100 text-rose-700' },
-    F9: { color: 'bg-indigo-100 text-indigo-700' },
-  }
 
   const JOB_STATUS: Record<string, { label: string; color: string; dot: string }> = {
     pending:   { label: 'Pending',   color: 'text-gray-500',   dot: 'bg-gray-300' },
@@ -457,7 +493,7 @@ async function QueueTab() {
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <div className="divide-y divide-gray-100">
             {jobs.map((job) => {
-              const tm = TYPE_META_LOCAL[job.video.factory.type] ?? {
+              const tm = TYPE_META[job.video.factory.type] ?? {
                 color: 'bg-gray-100 text-gray-600',
               }
               const jm = JOB_STATUS[job.status] ?? JOB_STATUS.pending
