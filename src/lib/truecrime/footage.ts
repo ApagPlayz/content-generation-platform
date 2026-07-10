@@ -84,7 +84,7 @@ const DEFAULT_LADDER = ['ai_still', 'stock', 'archive', 'moodbank', 'placeholder
 // older factory config doesn't silently skip a tier. Unknown-after-alias
 // tokens are dropped by the TIERS lookup. 'wikimedia'/'commons' map to the
 // placeholder floor (owned by the visuals stage), so they're filtered out.
-const TIER_ALIASES: Record<string, string> = {
+export const TIER_ALIASES: Record<string, string> = {
   ai: 'ai_still',
   aistill: 'ai_still',
   'ai-still': 'ai_still',
