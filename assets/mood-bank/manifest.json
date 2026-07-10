@@ -300,5 +300,225 @@
     "depictsRealPerson": false,
     "aiGenerated": false,
     "populated": false
+  },
+  {
+    "id": "courtroom-search-01",
+    "category": "courtroom",
+    "tags": [
+      "courtroom",
+      "court",
+      "trial",
+      "justice"
+    ],
+    "description": "No local clip yet for this high-frequency true-crime beat theme (courtroom/trial). Populate script attempts a live archive.org search; selection degrades gracefully to another mood category if this stays unpopulated.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"courtroom\" OR \"court room\" OR \"empty courtroom\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "courtroom-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "courtroom-pexels-01",
+    "category": "courtroom",
+    "tags": [
+      "courtroom",
+      "court",
+      "trial",
+      "justice"
+    ],
+    "description": "Pexels-sourced empty-courtroom clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "empty courtroom vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "courtroom-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "prison-search-01",
+    "category": "prison",
+    "tags": [
+      "prison",
+      "jail",
+      "cell",
+      "hallway"
+    ],
+    "description": "No local clip yet for this high-frequency true-crime beat theme (prison/jail). Populate script attempts a live archive.org search; selection degrades gracefully to another mood category if this stays unpopulated.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"prison\" OR \"jail cell\" OR \"prison hallway\" OR \"cell block\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "prison-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "prison-pexels-01",
+    "category": "prison",
+    "tags": [
+      "prison",
+      "jail",
+      "cell",
+      "hallway"
+    ],
+    "description": "Pexels-sourced prison/jail hallway clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "prison hallway vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "prison-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "forest-search-01",
+    "category": "forest",
+    "tags": [
+      "forest",
+      "woods",
+      "trees",
+      "wilderness"
+    ],
+    "description": "No local clip yet for this high-frequency true-crime beat theme (forest/woods). Populate script attempts a live archive.org search; selection degrades gracefully to another mood category if this stays unpopulated.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"forest\" OR \"foggy forest\" OR \"dark woods\" OR \"wilderness trail\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "forest-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "forest-pexels-01",
+    "category": "forest",
+    "tags": [
+      "forest",
+      "woods",
+      "trees",
+      "wilderness"
+    ],
+    "description": "Pexels-sourced dark/foggy forest clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "dark foggy forest vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "forest-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "highway-night-search-01",
+    "category": "highway-night",
+    "tags": [
+      "highway",
+      "road",
+      "night",
+      "driving"
+    ],
+    "description": "No local clip yet for this high-frequency true-crime beat theme (empty road/highway at night). Populate script attempts a live archive.org search; selection degrades gracefully to another mood category if this stays unpopulated.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"empty road\" OR \"highway at night\" OR \"road at night\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "highway-night-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "highway-night-pexels-01",
+    "category": "highway-night",
+    "tags": [
+      "highway",
+      "road",
+      "night",
+      "driving"
+    ],
+    "description": "Pexels-sourced empty-road-at-night clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "empty road night driving vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "highway-night-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "still-water-search-01",
+    "category": "still-water",
+    "tags": [
+      "water",
+      "lake",
+      "river",
+      "dusk"
+    ],
+    "description": "No local clip yet for this high-frequency true-crime beat theme (still water — lake/river/shoreline). Populate script attempts a live archive.org search; selection degrades gracefully to another mood category if this stays unpopulated.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"still water\" OR \"lake at dusk\" OR \"calm water\" OR \"shoreline\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "still-water-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "still-water-pexels-01",
+    "category": "still-water",
+    "tags": [
+      "water",
+      "lake",
+      "river",
+      "dusk"
+    ],
+    "description": "Pexels-sourced still-water-at-dusk clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "still water dusk vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "still-water-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "interrogation-search-01",
+    "category": "interrogation",
+    "tags": [
+      "interrogation",
+      "interview room",
+      "confession"
+    ],
+    "description": "No local clip yet for this high-frequency true-crime beat theme (interrogation/interview room). Populate script attempts a live archive.org search; selection degrades gracefully to another mood category if this stays unpopulated.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"interrogation room\" OR \"interview room\") AND mediatype:(movies)",
+    "license": "unknown",
+    "file": "interrogation-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "interrogation-pexels-01",
+    "category": "interrogation",
+    "tags": [
+      "interrogation",
+      "interview room",
+      "confession"
+    ],
+    "description": "Pexels-sourced dim interrogation-room clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "dim interrogation room vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "interrogation-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
   }
 ]

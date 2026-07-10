@@ -157,18 +157,30 @@ async function archiveMetadata(identifier) {
   return fetchJson(`https://archive.org/metadata/${encodeURIComponent(identifier)}`)
 }
 
-/** Pick the smallest reasonable video file from an archive.org item's file list. */
+/** Pick the best video file from an archive.org item's file list: highest
+ *  resolution first (a tiny 320×240 transcode blown up to 1080×1920 reads as
+ *  blocky no matter how good the downstream scale filter is), skipping the
+ *  tiny multi-KB thumbnail-scale transcodes some items also carry, and
+ *  tie-breaking by smaller file size when resolution is equal or unknown.
+ *  Actual download size is still capped separately (MAX_BYTES). */
 function pickArchiveFile(files, preferredName) {
   const vids = (files || []).filter((f) => /\.(mp4|m4v|ogv|webm)$/i.test(f.name || ''))
   if (preferredName) {
     const exact = vids.find((f) => f.name === preferredName)
     if (exact) return exact
   }
-  // Prefer smaller files (this is atmospheric b-roll, not a hero shot) but
-  // skip the tiny multi-KB thumbnail-scale transcodes some items also carry.
-  return vids
-    .filter((f) => Number(f.size || 0) > 200_000)
-    .sort((a, b) => Number(a.size || 0) - Number(b.size || 0))[0] || vids[0]
+  const candidates = vids.filter((f) => Number(f.size || 0) > 200_000)
+  const pool = candidates.length ? candidates : vids
+  return (
+    pool
+      .slice()
+      .sort((a, b) => {
+        const resA = Number(a.width || 0) * Number(a.height || 0)
+        const resB = Number(b.width || 0) * Number(b.height || 0)
+        if (resB !== resA) return resB - resA // higher resolution wins
+        return Number(a.size || 0) - Number(b.size || 0) // tie-break: smaller file
+      })[0] || vids[0]
+  )
 }
 
 async function resolveArchiveEntry(entry) {

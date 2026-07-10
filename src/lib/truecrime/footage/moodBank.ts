@@ -15,7 +15,7 @@ export const moodBankTier: Tier = async ({ beat, beatIndex, dest }) => {
     const clip = clips[0]
     if (!clip || !clip.path) return null
 
-    const still = await extractMoodStill(clip.path, dest)
+    const still = await extractMoodStill(clip.path, dest, beatIndex)
     if (!still || !existsSync(still)) return null
 
     return { imagePath: still, asset: { ...clip.asset, beatIndex } }
