@@ -14,6 +14,24 @@ const TYPE_META: Record<string, { color: string }> = {
   F7: { color: 'bg-cyan-100 text-cyan-700' },
   F8: { color: 'bg-rose-100 text-rose-700' },
   F9: { color: 'bg-indigo-100 text-indigo-700' },
+  F10: { color: 'bg-stone-200 text-stone-700' },
+}
+
+// Plain-language rendering of the compliance gate decision.
+const DECISION_META: Record<string, { label: string; color: string }> = {
+  pass:            { label: 'Checks passed',         color: 'bg-green-100 text-green-700' },
+  route_to_review: { label: 'Needs your review',     color: 'bg-yellow-100 text-yellow-800' },
+  block:           { label: 'Blocked by fact-check', color: 'bg-red-100 text-red-700' },
+}
+
+// Per-check rollups persisted on the ComplianceReport row (see prisma schema).
+interface ComplianceSummary {
+  decision: string
+  summary: string
+  caseSelectionOk: boolean
+  corroboratedPct: number
+  defamationFlags: number
+  variationOk: boolean
 }
 
 interface InboxCardProps {
@@ -29,6 +47,9 @@ interface InboxCardProps {
   sourceUrl?: string | null
   momentStart?: number | null
   momentEnd?: number | null
+  caseName?: string | null
+  compliance?: ComplianceSummary | null
+  footageSummary?: string | null
 }
 
 export function InboxCard({
@@ -44,6 +65,9 @@ export function InboxCard({
   sourceUrl,
   momentStart,
   momentEnd,
+  caseName,
+  compliance,
+  footageSummary,
 }: InboxCardProps) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -51,6 +75,34 @@ export function InboxCard({
   const [publishErr, setPublishErr] = useState<string | null>(null)
   const [permalink, setPermalink] = useState<string | null>(null)
   const tm = TYPE_META[factoryType] ?? { color: 'bg-gray-100 text-gray-600' }
+  const isTrueCrime = factoryType === 'F10'
+
+  // Plain-language chips explaining WHY this video is sitting in review.
+  const reviewChips: { label: string; color: string }[] = []
+  if (compliance) {
+    const dm = DECISION_META[compliance.decision] ?? {
+      label: compliance.decision,
+      color: 'bg-gray-100 text-gray-600',
+    }
+    reviewChips.push(dm)
+    const pct = Math.round(compliance.corroboratedPct * 100)
+    reviewChips.push({
+      label: `${pct}% of key facts verified`,
+      color: pct === 100 ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700',
+    })
+    if (compliance.defamationFlags > 0) {
+      reviewChips.push({
+        label: `${compliance.defamationFlags} risky wording flag${compliance.defamationFlags === 1 ? '' : 's'}`,
+        color: 'bg-red-50 text-red-700',
+      })
+    }
+    if (!compliance.caseSelectionOk) {
+      reviewChips.push({ label: 'Case choice needs a second look', color: 'bg-yellow-50 text-yellow-700' })
+    }
+    if (!compliance.variationOk) {
+      reviewChips.push({ label: 'Too similar to recent videos', color: 'bg-yellow-50 text-yellow-700' })
+    }
+  }
 
   async function setStatus(status: string) {
     setBusy(true)
@@ -102,10 +154,16 @@ export function InboxCard({
             {factoryType}
           </span>
           <span className="text-xs text-gray-400">{factoryName}</span>
-          {strategy && (
-            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-700">
-              {strategy.replace(/_/g, ' ')}
+          {isTrueCrime && caseName ? (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-stone-100 text-stone-700">
+              {caseName}
             </span>
+          ) : (
+            strategy && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-700">
+                {strategy.replace(/_/g, ' ')}
+              </span>
+            )
           )}
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400 shrink-0 ml-3">
@@ -124,7 +182,34 @@ export function InboxCard({
         </p>
       )}
 
-      {(momentStart != null || sourceUrl) && (
+      {compliance && (
+        <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+            Review reasons
+          </p>
+          <div className="flex flex-wrap gap-1.5 mb-1.5">
+            {reviewChips.map((chip) => (
+              <span
+                key={chip.label}
+                className={`text-xs px-2 py-0.5 rounded-full font-medium ${chip.color}`}
+              >
+                {chip.label}
+              </span>
+            ))}
+          </div>
+          {compliance.summary && (
+            <p className="text-xs text-gray-500 leading-relaxed">{compliance.summary}</p>
+          )}
+        </div>
+      )}
+
+      {footageSummary && (
+        <p className="text-xs text-gray-400 mb-3">
+          <span className="font-medium text-gray-500">Footage:</span> {footageSummary}
+        </p>
+      )}
+
+      {!isTrueCrime && (momentStart != null || sourceUrl) && (
         <p className="text-xs text-gray-400 mb-3">
           {momentStart != null && `Moment ${momentStart}s–${momentEnd}s`}
           {momentStart != null && sourceUrl && ' · '}
