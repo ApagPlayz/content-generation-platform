@@ -2,6 +2,7 @@ import { prisma } from '../prisma'
 import { gateVideoScript } from '../compliance'
 import { discoverCase } from './caseDiscovery'
 import { generateScript } from './script'
+import { resolveBeatFootage } from './footage'
 import { sourceVisuals } from './visuals'
 import { synthesizeNarration } from './tts'
 import { generateCaptions } from './captions'
@@ -91,26 +92,73 @@ export async function executeTrueCrimeRun(
       }
     })
 
-    await stage(ctx, 'visuals', async () => {
-      const { visuals, imagePaths } = await sourceVisuals(
-        ctx.videoId,
-        ctx.brief!,
-        ctx.config.maxImages ?? 6
-      )
-      ctx.visuals = visuals
-      ctx.imagePaths = imagePaths
-      ctx.script!.visuals = visuals // gate lints the real imagery
-      for (let i = 0; i < visuals.length; i++) {
+    // Per-beat footage ladder (AI still → stock → archive → mood bank). Purely
+    // additive: resolves imagery for each beat and seeds ctx.visuals/imagePaths.
+    // With footage disabled or zero keys it returns nothing and the visuals stage
+    // below sources everything from Wikimedia exactly as before. Never throws.
+    await stage(ctx, 'footage', async () => {
+      const footage = await resolveBeatFootage(ctx.videoId, ctx.script!, ctx.brief!, ctx.config)
+      ctx.visuals = footage.visuals
+      ctx.imagePaths = footage.imagePaths
+      ctx.beatFootage = footage.beatFootage
+      for (let i = 0; i < footage.visuals.length; i++) {
         await prisma.asset.create({
           data: {
             videoId: ctx.videoId,
             kind: 'image',
-            provider: 'wikimedia-commons',
-            localPath: imagePaths[i],
-            meta: JSON.stringify(visuals[i]),
+            provider: footage.imageSources[i] ?? 'footage',
+            localPath: footage.imagePaths[i],
+            meta: JSON.stringify({ ...footage.visuals[i], beatIndex: footage.visuals[i].beatIndex }),
           },
         })
       }
+      // Audit row: which tier won each beat (for the queue UI / provenance log).
+      if (Object.keys(footage.footageSources).length) {
+        await prisma.asset.create({
+          data: {
+            videoId: ctx.videoId,
+            kind: 'footage-map',
+            provider: 'f10-footage',
+            meta: JSON.stringify({
+              footageSources: footage.footageSources,
+              beatFootage: footage.beatFootage,
+            }),
+          },
+        })
+      }
+    })
+
+    // Visuals stage — now the guaranteed BACKFILL floor. Tops up any shortfall
+    // left by the footage stage with the keyless Wikimedia path, then hands the
+    // MERGED asset list to the compliance gate so every asset gets linted.
+    await stage(ctx, 'visuals', async () => {
+      const seedVisuals = ctx.visuals ?? []
+      const seedPaths = ctx.imagePaths ?? []
+      const cap = ctx.config.maxImages ?? 6
+      const backfillCount = Math.max(0, cap - seedPaths.length)
+
+      let mergedVisuals = [...seedVisuals]
+      let mergedPaths = [...seedPaths]
+      if (backfillCount > 0) {
+        const { visuals, imagePaths } = await sourceVisuals(ctx.videoId, ctx.brief!, backfillCount)
+        for (let i = 0; i < visuals.length; i++) {
+          await prisma.asset.create({
+            data: {
+              videoId: ctx.videoId,
+              kind: 'image',
+              provider: 'wikimedia-commons',
+              localPath: imagePaths[i],
+              meta: JSON.stringify(visuals[i]),
+            },
+          })
+        }
+        mergedVisuals = [...mergedVisuals, ...visuals]
+        mergedPaths = [...mergedPaths, ...imagePaths]
+      }
+
+      ctx.visuals = mergedVisuals
+      ctx.imagePaths = mergedPaths
+      ctx.script!.visuals = mergedVisuals // gate lints the full merged imagery
     })
 
     // ── Compliance gate — the decision point ──
@@ -167,7 +215,8 @@ export async function executeTrueCrimeRun(
         ctx.imagePaths ?? [],
         ctx.tts!.audioPath,
         ctx.tts!.durationSec,
-        ctx.captions!
+        ctx.captions!,
+        { beats: ctx.script?.beats, beatFootage: ctx.beatFootage }
       )
       await prisma.video.update({
         where: { id: ctx.videoId },

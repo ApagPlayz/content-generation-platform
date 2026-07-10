@@ -33,6 +33,17 @@ export interface CaptionCue {
   tokens?: CaptionToken[]
 }
 
+/** One segment of the per-beat stitched timeline. `startFrame`/`durationInFrames`
+ *  are on the composition fps grid (server converts seconds→frames on the
+ *  running cumulative total). `inSec` is the trim start into a source video. */
+export interface BeatClip {
+  src: string
+  kind: 'video' | 'image'
+  startFrame: number
+  durationInFrames: number
+  inSec?: number
+}
+
 export interface TrueCrimeProps {
   /** HTTP(S) URLs of the sourced public-domain stills, shown as a Ken-Burns
    *  slideshow. Remotion rejects file://, so the renderer serves them. */
@@ -45,6 +56,10 @@ export interface TrueCrimeProps {
   cues: CaptionCue[]
   /** Composition frame rate. */
   fps: number
+  /** Per-beat stitched timeline (mixed video + Ken-Burns stills). When present
+   *  and non-empty it overrides the even imageSrcs slideshow; when empty the
+   *  composition renders the imageSrcs slideshow for backward compatibility. */
+  beatClips?: BeatClip[]
 }
 
 export const DEFAULT_FPS = 30

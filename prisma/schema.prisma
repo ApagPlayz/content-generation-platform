@@ -274,3 +274,27 @@ model ComplianceReport {
   @@index([decision])
   @@index([createdAt])
 }
+
+// Provider-agnostic footage cache for the F10 True Crime pipeline. Clips are
+// cached ACROSS videoIds (no Video FK by design) so a case sourced twice never
+// re-downloads. Files live under media/stock/<source>/<externalId>.<ext>,
+// separate from the per-run media/<videoId>/ scratch dirs. `beatsUsed` is a
+// JSON-stringified array of beat indices, matching the string-JSON convention.
+// `license` is a raw provider string — the consuming stage maps it to the
+// AssetLicense union before feeding the compliance gate.
+model StockClip {
+  id          String   @id @default(cuid())
+  source      String
+  externalId  String
+  localPath   String
+  width       Int?
+  height      Int?
+  durationSec Float?
+  license     String?
+  attribution String?
+  beatsUsed   String?
+  createdAt   DateTime @default(now())
+
+  @@unique([source, externalId])
+  @@index([source])
+}

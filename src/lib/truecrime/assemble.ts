@@ -11,10 +11,20 @@ import { promisify } from 'util'
 import { writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
-import type { CaptionsResult, RenderResult } from './types'
+import type { CaptionsResult, RenderResult, ScriptBeat, TimelineSegment } from './types'
+import { buildBeatTimeline } from './timeline'
+import { kenBurnsClip } from './kenBurns'
 
 const exec = promisify(execFile)
 const FPS = 25
+
+/** Optional per-beat inputs. When both are present (and yield a non-empty
+ *  timeline) assemble stitches the resolved footage; otherwise it degrades to
+ *  the even-split still slideshow below. */
+export interface AssembleOpts {
+  beats?: ScriptBeat[]
+  beatFootage?: Record<number, string[]>
+}
 
 async function ffmpegAvailable(): Promise<boolean> {
   try {
@@ -45,6 +55,25 @@ async function renderImageClip(img: string, dur: number, out: string): Promise<b
     await exec(
       'ffmpeg',
       ['-y', '-loop', '1', '-i', img, '-t', String(dur), '-r', String(FPS), '-vf', vf,
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '21', '-an', out],
+      { timeout: 300_000 }
+    )
+    return existsSync(out)
+  } catch {
+    return false
+  }
+}
+
+/** Trim a source video clip to a uniform 1080×1920/25fps segment. `-an` drops
+ *  any embedded audio so only the narration bed survives the final mux; params
+ *  match renderImageClip's output so concat -c copy stays valid across a mixed
+ *  video+still timeline. */
+async function renderVideoClip(src: string, inSec: number, dur: number, out: string): Promise<boolean> {
+  try {
+    await exec(
+      'ffmpeg',
+      ['-y', '-ss', String(Math.max(0, inSec)), '-t', String(Math.max(0.1, dur)), '-i', src,
+        '-vf', "crop='min(iw,ih*9/16)':ih,scale=1080:1920,setsar=1,format=yuv420p", '-r', String(FPS),
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '21', '-an', out],
       { timeout: 300_000 }
     )
@@ -89,10 +118,20 @@ export async function assembleVideo(
   imagePaths: string[],
   audioPath: string,
   audioDurationSec: number,
-  captions: CaptionsResult
+  captions: CaptionsResult,
+  opts?: AssembleOpts
 ): Promise<RenderResult> {
   const dir = path.dirname(audioPath)
   const outputPath = path.join(dir, 'final.mp4')
+
+  // Build the shared per-beat timeline when the footage ladder supplied clips.
+  // Empty (no beats / no footage / nothing resolved) → we fall back to the
+  // even-split still slideshow below, so nothing breaks when footage is off.
+  const timeline: TimelineSegment[] =
+    opts?.beats && opts.beats.length > 0 && opts.beatFootage && Object.keys(opts.beatFootage).length > 0
+      ? buildBeatTimeline(opts.beats, opts.beatFootage, audioDurationSec)
+      : []
+  const useTimeline = timeline.length > 0
 
   // Preferred path: the Remotion karaoke composition (Ken-Burns slideshow +
   // word-by-word captions). Opt-in via RENDER_ENGINE=remotion; on any failure
@@ -100,7 +139,7 @@ export async function assembleVideo(
   if ((process.env.RENDER_ENGINE || '').trim().toLowerCase() === 'remotion') {
     try {
       const { renderTrueCrime } = await import('../render/remotion')
-      return await renderTrueCrime(imagePaths, audioPath, audioDurationSec, captions)
+      return await renderTrueCrime(imagePaths, audioPath, audioDurationSec, captions, opts)
     } catch (err) {
       console.warn('[truecrime/assemble] Remotion render failed, falling back to ffmpeg:', err)
     }
@@ -110,14 +149,40 @@ export async function assembleVideo(
     const planPath = path.join(dir, 'timeline.json')
     await writeFile(
       planPath,
-      JSON.stringify({ imagePaths, audioPath, audioDurationSec, captions: captions.cues }, null, 2)
+      JSON.stringify(
+        { imagePaths, audioPath, audioDurationSec, captions: captions.cues, timeline },
+        null,
+        2
+      )
     )
     return { outputPath: null, durationSec: audioDurationSec, rendered: false, planPath }
   }
 
-  // 1. Per-image (or fallback colour) clips.
+  // 1. Render the visual clips.
   const clipPaths: string[] = []
-  if (imagePaths.length > 0) {
+  if (useTimeline) {
+    // Timeline-driven: a mix of trimmed video clips and Ken-Burns stills, each
+    // normalised to identical 1080×1920/25fps/yuv420p params so concat stays valid.
+    for (let i = 0; i < timeline.length; i++) {
+      const seg = timeline[i]
+      const clip = path.join(dir, `seg-${String(i).padStart(3, '0')}.mp4`)
+      let ok = false
+      if (seg.kind === 'video') {
+        ok = await renderVideoClip(seg.assetPath, seg.inSec ?? 0, seg.durationSec, clip)
+      } else {
+        ok = (await kenBurnsClip(seg.assetPath, seg.durationSec, { out: clip, fps: FPS })) !== ''
+      }
+      if (ok) clipPaths.push(clip)
+    }
+    // A partial timeline (some segment failed to render) would sum to LESS than
+    // the narration, and the final `-shortest` mux would then cut the voice off
+    // mid-story. Discard the partial render and use the even-split slideshow,
+    // whose clips always cover the full audio duration.
+    if (clipPaths.length !== timeline.length) clipPaths.length = 0
+  }
+  // Even-split still slideshow — the graceful fallback (also used if the
+  // timeline produced zero usable segments).
+  if (clipPaths.length === 0 && imagePaths.length > 0) {
     const per = audioDurationSec / imagePaths.length
     for (let i = 0; i < imagePaths.length; i++) {
       const clip = path.join(dir, `clip-${String(i).padStart(2, '0')}.mp4`)

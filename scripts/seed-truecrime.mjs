@@ -18,6 +18,41 @@ const config = {
   // macOS `say` voice for the free local-TTS fallback; ElevenLabs voice id wins
   // if ELEVENLABS_API_KEY is set.
   voice: 'Daniel',
+
+  // ── Footage / visuals surface. Every new feature is OFF/dormant by default so
+  //    the demo pipeline keeps using the Wikimedia public-domain slideshow until
+  //    the owner opts in. These document the new config keys downstream stages read.
+  footageEnabled: false,
+  footageSource: 'wikimedia',
+  maxClipsPerBeat: 2,
+  maxImagesPerBeat: 2,
+  // AI script writer (Claude) — off until an API key + opt-in are set.
+  useAiScript: false,
+  scriptModel: 'sonnet',
+  // Pexels/Pixabay stock video — off (needs PEXELS_API_KEY / PIXABAY_API_KEY).
+  useStockFootage: false,
+  maxStockClipsPerBeat: 1,
+  stockProviders: ['pexels', 'pixabay'],
+  // archive.org public-domain footage — off; no key required when enabled.
+  useArchiveFootage: false,
+  archiveMaxClips: 3,
+  archiveCollections: ['prelinger'],
+  // Still-image provider. Default keyless Wikimedia Commons.
+  imageProvider: 'wikimedia',
+  aiStillStyle: 'muted cinematic, symbolic, no faces',
+  // Fallback ladder in tier-key vocabulary (ai_still | stock | archive | moodbank).
+  // Each tier no-ops without its key/flag, then the visuals stage backfills the
+  // keyless Wikimedia floor — so this is safe with zero API keys.
+  footageLadder: ['ai_still', 'stock', 'archive', 'moodbank'],
+  // Named visual styles rotated across videos for variety.
+  styleRotation: ['sepia-archival', 'noir-contrast', 'muted-documentary'],
+  // Editorial angles rotated to avoid "inauthentic content" sameness.
+  editorialAngles: ['investigation', 'forensics', 'courtroom', 'aftermath'],
+  styleDivergenceWindow: 5,
+  enableEditorialLayer: true,
+  // Mood-bank b-roll layer — dormant by default.
+  moodBankEnabled: false,
+  moodBankMaxPerVideo: 3,
   caseWatchlist: [
     {
       caseName: 'The Lindbergh Kidnapping',

@@ -3,6 +3,7 @@ import { runSource } from './tools/source'
 import { runClipIngest } from './tools/clipIngest'
 import { runMomentDetect } from './tools/momentDetect'
 import { runScript } from './tools/script'
+import { runTransform } from './tools/transform'
 import { runAssemble } from './tools/assemble'
 import { maybeAutoPublish } from './tools/publish'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
@@ -97,9 +98,47 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
       })
     })
 
+    await stage(ctx, 'transform', async () => {
+      // Turn the raw window into a transformative edit (commentary overlays,
+      // telestration, slow-mo/punch-in). Gated by factory config; when disabled
+      // or when ffmpeg can't produce a treated clip, ctx.transform stays unset
+      // and assemble falls back to the raw source + original moment.
+      const cfg = (ctx.factoryConfig.transform ?? {}) as { enabled?: boolean }
+      if (cfg.enabled !== true) return
+      const transform = await runTransform(
+        ctx.ingest!.sourcePath,
+        ctx.moment!,
+        ctx.script!,
+        ctx.factoryConfig
+      )
+      if (!transform) return
+      ctx.transform = transform
+      await prisma.asset.create({
+        data: {
+          videoId: ctx.videoId,
+          kind: 'clip',
+          provider: 'ffmpeg-transform',
+          localPath: transform.treatedPath,
+          meta: JSON.stringify({
+            treatments: transform.treatments,
+            telestrationCount: transform.telestrationCount,
+            analysisLines: transform.analysisLines,
+            durationSec: transform.durationSec,
+          }),
+        },
+      })
+    })
+
     await stage(ctx, 'assemble', async () => {
       await prisma.video.update({ where: { id: ctx.videoId }, data: { status: 'rendering' } })
-      ctx.assembled = await runAssemble(ctx.ingest!.sourcePath, ctx.moment!, ctx.script!)
+      // Feed the treated clip when the transform stage produced one — its
+      // moment spans the whole treated file (slow-mo may have changed the
+      // length). runAssemble's signature is intentionally unchanged.
+      const src = ctx.transform?.treatedPath ?? ctx.ingest!.sourcePath
+      const mom = ctx.transform
+        ? { startSec: 0, endSec: ctx.transform.durationSec, method: ctx.moment!.method }
+        : ctx.moment!
+      ctx.assembled = await runAssemble(src, mom, ctx.script!)
       await prisma.video.update({
         where: { id: ctx.videoId },
         data: { localPath: ctx.assembled.outputPath, durationSec: ctx.assembled.durationSec },

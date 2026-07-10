@@ -12,7 +12,8 @@
     "prisma:push": "prisma db push --skip-generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "remotion:studio": "remotion studio video/index.ts"
+    "remotion:studio": "remotion studio video/index.ts",
+    "moodbank:populate": "node scripts/populate-mood-bank.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",

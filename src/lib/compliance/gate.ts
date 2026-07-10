@@ -20,6 +20,7 @@ import { verifyLegalStatus } from './legalStatus'
 import { defamationLint } from './defamationLint'
 import { visualLint, buildDisclosurePlan } from './visualLint'
 import { checkVariation } from './variation'
+import { computeVisualSignature } from './visualSignature'
 
 export async function runComplianceGate(
   script: TrueCrimeScript,
@@ -119,8 +120,11 @@ function buildSummary(a: {
   ]
   if (blocks) parts.push(`${blocks} defamation block(s).`)
   if (vblocks) parts.push(`${vblocks} prohibited visual(s).`)
-  if (a.variation && !a.variation.passed)
-    parts.push(`Variation ${Math.round(a.variation.maxSimilarity * 100)}% — too templated.`)
+  if (a.variation && !a.variation.passed) {
+    const t = Math.round(a.variation.maxSimilarity * 100)
+    const v = Math.round((a.variation.visualSimilarity ?? 0) * 100)
+    parts.push(`Variation flagged — ${t}% text/structure, ${v}% visual overlap with recent videos.`)
+  }
   if (a.script.targetDurationSec !== undefined && a.script.targetDurationSec < 60)
     parts.push('Under 60s — earns $0 on TikTok Creator Rewards.')
   return parts.join(' ')
@@ -136,12 +140,20 @@ export async function gateVideoScript(
 ): Promise<{ report: ComplianceReportJSON; reportId: string }> {
   const report = await runComplianceGate(script, { generatedAt: opts.generatedAt })
 
-  // Embed a compact signature so future variation checks can read this back.
+  // Embed a compact signature so future variation checks can read this back —
+  // narration + structure for the text/structure axes, plus the rotated style
+  // profile and the visual-footage fingerprint that grow the anti-repetition corpus.
   const persisted = {
     ...report,
     _scriptSignature: {
       structure: script.structure,
       narration: script.narration,
+      styleProfile: {
+        visualStyle: script.structure?.visualStyle,
+        hookPattern: script.structure?.hookPattern,
+        editorialAngle: script.structure?.editorialAngle,
+      },
+      visualSignature: computeVisualSignature(script.visuals ?? []),
     },
   }
 

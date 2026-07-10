@@ -27,19 +27,23 @@ export async function getSetting(key: string, fallback = ''): Promise<string> {
 
 // ── Claude model tiering ────────────────────────────────────────────────────
 
-export type ModelTier = 'haiku' | 'sonnet' | 'opus'
+export type ModelTier = 'haiku' | 'sonnet' | 'sonnet5' | 'opus'
 
 /** Tier → current model id (kept in sync with docs/Deferred-Features.md). */
 export const MODEL_BY_TIER: Record<ModelTier, string> = {
   haiku: 'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
+  sonnet5: 'claude-sonnet-5',
   opus: 'claude-opus-4-8',
 }
 
-/** Per-1M-token USD pricing (input, output) — PRD §10. */
+/** Per-1M-token USD pricing (input, output) — PRD §10. Sonnet 5 uses the
+ *  standard $3/$15 rate rather than the 2026-08-31 intro rate, to avoid
+ *  under-billing CostLedger. */
 const PRICE_BY_TIER: Record<ModelTier, { input: number; output: number }> = {
   haiku: { input: 1, output: 5 },
   sonnet: { input: 3, output: 15 },
+  sonnet5: { input: 3, output: 15 },
   opus: { input: 5, output: 25 },
 }
 
@@ -54,7 +58,7 @@ export interface ResolvedModel {
 function tierFromValue(v: string | undefined): ModelTier | null {
   if (!v) return null
   const t = v.toLowerCase()
-  if (t === 'haiku' || t === 'sonnet' || t === 'opus') return t
+  if (t === 'haiku' || t === 'sonnet' || t === 'sonnet5' || t === 'opus') return t
   // Allow passing a full model id too (e.g. factory configs that store the id).
   for (const [tier, id] of Object.entries(MODEL_BY_TIER)) {
     if (id === v) return tier as ModelTier

@@ -1,0 +1,304 @@
+[
+  {
+    "id": "rain-tropical-01",
+    "category": "rain",
+    "tags": [
+      "rain",
+      "storm",
+      "weather",
+      "ambient"
+    ],
+    "description": "Steady tropical rain falling on banana leaves — ambient rain b-roll.",
+    "source": "archive.org",
+    "sourceId": "TropicalRainAndBananaLeavesOne",
+    "sourceFile": "Tropical Rain and Banana Leaves, One.mp4",
+    "sourceUrl": "https://archive.org/details/TropicalRainAndBananaLeavesOne",
+    "downloadUrl": "https://archive.org/download/TropicalRainAndBananaLeavesOne/Tropical%20Rain%20and%20Banana%20Leaves%2C%20One.mp4",
+    "license": "licensed",
+    "licenseRef": "CC BY-SA 3.0 — Scenoptica, via archive.org",
+    "attribution": "Scenoptica, via archive.org (CC BY-SA 3.0)",
+    "file": "rain-tropical-01.mp4",
+    "durationSec": 11.34,
+    "width": 640,
+    "height": 360,
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": true
+  },
+  {
+    "id": "rain-window-02",
+    "category": "rain",
+    "tags": [
+      "rain",
+      "window",
+      "storm",
+      "night"
+    ],
+    "description": "Unresolved rain clip — populate script searches archive.org for a permissively-licensed candidate at run time.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"rain\" OR \"rainstorm\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "rain-window-02.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "rain-pexels-01",
+    "category": "rain",
+    "tags": [
+      "rain",
+      "storm",
+      "weather"
+    ],
+    "description": "Pexels-sourced vertical rain clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "heavy rain vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "rain-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "police-lights-gnr-01",
+    "category": "police-lights",
+    "tags": [
+      "police",
+      "lights",
+      "night",
+      "emergency"
+    ],
+    "description": "4K police car b-roll (GNR, Portugal) with flashing light bar at night; small IA transcode used for size.",
+    "source": "archive.org",
+    "sourceId": "mariojrmatos-4k-free-stock-footage-gnr-police-car",
+    "sourceFile": "mariojrmatos 4k free stock footage gnr police car.ia.mp4",
+    "sourceUrl": "https://archive.org/details/mariojrmatos-4k-free-stock-footage-gnr-police-car",
+    "downloadUrl": "https://archive.org/download/mariojrmatos-4k-free-stock-footage-gnr-police-car/mariojrmatos%204k%20free%20stock%20footage%20gnr%20police%20car.ia.mp4",
+    "license": "cc_by",
+    "licenseRef": "CC BY 4.0 — Mário J.R. Matos, via archive.org",
+    "attribution": "Mário J.R. Matos, via archive.org (CC BY 4.0)",
+    "file": "police-lights-gnr-01.mp4",
+    "durationSec": 26.82,
+    "width": 910,
+    "height": 480,
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": true
+  },
+  {
+    "id": "police-lights-search-02",
+    "category": "police-lights",
+    "tags": [
+      "police",
+      "siren",
+      "night",
+      "city"
+    ],
+    "description": "Unresolved police-car/lights clip — populate script searches archive.org for a permissively-licensed candidate.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"police car\" OR \"police lights\" OR \"squad car\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "police-lights-search-02.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "police-lights-pexels-01",
+    "category": "police-lights",
+    "tags": [
+      "police",
+      "lights",
+      "night"
+    ],
+    "description": "Pexels-sourced vertical police-lights clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "police car lights night vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "police-lights-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "newspaper-macro-headlines-01",
+    "category": "newspaper-macro",
+    "tags": [
+      "newspaper",
+      "print",
+      "headline",
+      "archival"
+    ],
+    "description": "Unresolved newsprint/headline macro clip. No pre-verified small candidate was found; populate script attempts a live search. License requires manual confirmation before promoting above 'unknown'.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"newspaper\" OR \"newsprint\" OR \"headline\") AND mediatype:(movies)",
+    "license": "unknown",
+    "file": "newspaper-macro-headlines-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "newspaper-macro-clipping-02",
+    "category": "newspaper-macro",
+    "tags": [
+      "newspaper",
+      "clipping",
+      "archival"
+    ],
+    "description": "Unresolved newspaper-clipping macro clip; populate script attempts a live archive.org search.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"newspaper clipping\" OR \"front page\") AND mediatype:(movies)",
+    "license": "unknown",
+    "file": "newspaper-macro-clipping-02.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "newspaper-macro-pexels-01",
+    "category": "newspaper-macro",
+    "tags": [
+      "newspaper",
+      "print",
+      "macro"
+    ],
+    "description": "Pexels-sourced newspaper close-up clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "newspaper close up macro",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "newspaper-macro-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "night-street-hangzhou-01",
+    "category": "night-street",
+    "tags": [
+      "street",
+      "city",
+      "night",
+      "urban"
+    ],
+    "description": "City street at night, winter — urban night b-roll.",
+    "source": "archive.org",
+    "sourceId": "HangzhouCityAtNightWinter",
+    "sourceFile": "HangzhouCityAtNight2011Dec2.mp4",
+    "sourceUrl": "https://archive.org/details/HangzhouCityAtNightWinter",
+    "downloadUrl": "https://archive.org/download/HangzhouCityAtNightWinter/HangzhouCityAtNight2011Dec2.mp4",
+    "license": "cc_by",
+    "licenseRef": "CC BY 3.0, via archive.org",
+    "attribution": "Via archive.org (CC BY 3.0)",
+    "file": "night-street-hangzhou-01.mp4",
+    "durationSec": 33.72,
+    "width": 320,
+    "height": 240,
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": true
+  },
+  {
+    "id": "night-street-search-02",
+    "category": "night-street",
+    "tags": [
+      "street",
+      "city",
+      "night",
+      "urban",
+      "traffic"
+    ],
+    "description": "Unresolved night-street clip — populate script searches archive.org for a permissively-licensed candidate.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"night street\" OR \"city street night\" OR \"downtown at night\") AND mediatype:(movies) AND licenseurl:(*licenses/by/* OR *publicdomain/zero*)",
+    "license": "unknown",
+    "file": "night-street-search-02.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "night-street-pexels-01",
+    "category": "night-street",
+    "tags": [
+      "street",
+      "city",
+      "night",
+      "urban"
+    ],
+    "description": "Pexels-sourced vertical night-street clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "city street night vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "night-street-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "foggy-house-search-01",
+    "category": "foggy-house",
+    "tags": [
+      "fog",
+      "house",
+      "mist",
+      "atmosphere"
+    ],
+    "description": "No pre-verified candidate was found for this niche category; populate script attempts a live archive.org search. If nothing suitable turns up this entry simply stays populated:false.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"foggy house\" OR \"misty house\" OR \"house in the fog\" OR \"abandoned house fog\") AND mediatype:(movies)",
+    "license": "unknown",
+    "file": "foggy-house-search-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  },
+  {
+    "id": "foggy-house-search-02",
+    "category": "foggy-house",
+    "tags": [
+      "fog",
+      "mist",
+      "exterior",
+      "night"
+    ],
+    "description": "Broader fallback search for a foggy exterior/house/cabin clip.",
+    "source": "archive.org",
+    "searchQuery": "title:(\"fog\") AND title:(\"house\" OR \"cottage\" OR \"cabin\") AND mediatype:(movies)",
+    "license": "unknown",
+    "file": "foggy-house-search-02.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": true,
+    "downloadUrl": "https://archive.org/download/turner_video_392859/392859.webm",
+    "attribution": "Via archive.org",
+    "sourceUrl": "https://archive.org/details/turner_video_392859",
+    "sourceId": "turner_video_392859",
+    "width": 424,
+    "height": 240,
+    "durationSec": 147.16
+  },
+  {
+    "id": "foggy-house-pexels-01",
+    "category": "foggy-house",
+    "tags": [
+      "fog",
+      "house",
+      "mist"
+    ],
+    "description": "Pexels-sourced foggy-house/exterior clip. Requires PEXELS_API_KEY; skipped (not an error) when absent.",
+    "source": "pexels",
+    "pexelsQuery": "foggy house exterior night vertical",
+    "license": "licensed",
+    "licenseRef": "Pexels License",
+    "file": "foggy-house-pexels-01.mp4",
+    "depictsRealPerson": false,
+    "aiGenerated": false,
+    "populated": false
+  }
+]

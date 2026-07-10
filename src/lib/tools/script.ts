@@ -32,7 +32,7 @@ export async function runScript(
       system: [
         {
           type: 'text',
-          text: `${playbook}\n\nYou write metadata for short-form vertical sports highlight videos. Respond with ONLY a JSON object: {"title": string (max 80 chars, punchy, no clickbait lies), "hook": string (first line of on-screen text, max 60 chars), "description": string (1-2 sentences), "hashtags": string[] (5-8, no # prefix)}`,
+          text: `${playbook}\n\nYou write metadata AND original on-screen analysis for short-form vertical sports highlight videos. The analysis is burned onto the clip as your OWN commentary — it must be substantive and in your words, never transcribed from the source broadcast. Respond with ONLY a JSON object: {"title": string (max 80 chars, punchy, no clickbait lies), "hook": string (first line of on-screen text, max 60 chars), "description": string (1-2 sentences), "hashtags": string[] (5-8, no # prefix), "analysis": string[] (2-4 short original commentary/analysis lines about the play, each max 70 chars), "telestration": [{"label": string (max 18 chars), "atSec": number (seconds into the clip, 0-20)}] (0-3 optional on-screen callouts)}`,
           cache_control: { type: 'ephemeral' },
         },
       ],
@@ -70,6 +70,18 @@ export async function runScript(
     hook: String(parsed.hook ?? ''),
     description: String(parsed.description ?? ''),
     hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags.map(String) : [],
+    analysis: Array.isArray(parsed.analysis)
+      ? parsed.analysis.map(String).slice(0, 4)
+      : [],
+    telestration: Array.isArray(parsed.telestration)
+      ? parsed.telestration
+          .map((t: { label?: unknown; atSec?: unknown }) => ({
+            label: String(t?.label ?? ''),
+            atSec: t?.atSec != null ? Number(t.atSec) : undefined,
+          }))
+          .filter((t: { label: string }) => t.label)
+          .slice(0, 3)
+      : [],
   }
 }
 
@@ -79,17 +91,31 @@ function templateScript(source: SourceResult): ScriptResult {
       title: source.triggerReason.split(' (')[0],
       hook: 'You have to see this finish 🔥',
       hashtags: ['nba', 'basketball', 'highlights', 'sports', 'gamewinner'],
+      analysis: [
+        'Watch the spacing open up before the shot',
+        'One read, one swing — the defense is a step late',
+        'This is the possession that swung the game',
+      ],
     },
     player_career: {
       title: source.triggerReason.replace('Career highlights feature for ', '') + ' — best plays',
       hook: 'Career. Highlights. 🐐',
       hashtags: ['nba', 'basketball', 'goat', 'highlights', 'careerhighlights'],
+      analysis: [
+        'Footwork here is textbook — nothing wasted',
+        'Reads the help defender before he even commits',
+        'A signature move you have seen a hundred times',
+      ],
     },
     trending_audio: {
       title: 'NBA highlights you need to see',
       hook: 'Wait for the drop 👀',
       hashtags: ['nba', 'basketball', 'edit', 'highlights', 'fyp'],
+      analysis: [
+        'Timing the cut to the beat',
+        'Peak energy lands right on the drop',
+      ],
     },
   }[source.strategy]
-  return { ...base, description: source.triggerReason }
+  return { ...base, description: source.triggerReason, telestration: [] }
 }

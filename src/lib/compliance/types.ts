@@ -69,6 +69,8 @@ export interface VisualAsset {
   aiGenerated: boolean
   /** License id / attribution string, required for fair_use and licensed. */
   licenseRef?: string
+  /** Beat index this asset was sourced for; set by the per-beat footage stage. */
+  beatIndex?: number
 }
 
 export interface TrueCrimeScript {
@@ -94,6 +96,10 @@ export interface ScriptStructure {
   /** Ordered section labels, e.g. ["hook","victim","investigation","verdict"]. */
   sections: string[]
   visualStyle: string
+  /** Rotated editorial/commentary framing (e.g. "forensic-breakdown"); a real
+   *  divergence axis so two videos with the same look but different analysis
+   *  don't read as the same template. */
+  editorialAngle?: string
 }
 
 // ─────────────────────────── Source verification ───────────────────────────
@@ -173,6 +179,9 @@ export interface VariationVerdict {
   passed: boolean
   /** Max structural similarity (0..1) against recent F10 videos. */
   maxSimilarity: number
+  /** Max visual-footage overlap (0..1) against recent F10 videos — catches the
+   *  same photos/clips reused across videos, which the text/structure axes miss. */
+  visualSimilarity?: number
   reasons: string[]
 }
 

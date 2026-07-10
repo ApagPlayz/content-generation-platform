@@ -1,4 +1,5 @@
 import { getGames, searchPlayers, gameExcitementScore } from '../balldontlie'
+import { classifyLeague, type LeaguePolicyConfig } from './leaguePolicy'
 import type { SourceResult, SportsStrategy } from './types'
 
 interface SportsFactoryConfig {
@@ -10,6 +11,12 @@ interface SportsFactoryConfig {
   playerWatchlist?: string[]
   /** Manually curated trending audio refs for the trending_audio strategy. */
   trendingAudio?: { name: string; note?: string }[]
+  /** League this factory targets (drives claim-tolerance policy). */
+  league?: string
+  /** Alias for league used by the seed config. */
+  sport?: string
+  /** Per-league claim-tolerance overrides: favor / flag / block. */
+  leaguePolicy?: LeaguePolicyConfig
 }
 
 function recentDates(days: number): string[] {
@@ -101,8 +108,29 @@ export async function runSource(factoryConfig: Record<string, unknown>): Promise
           : strategy === 'player_career'
             ? await playerCareer(config)
             : trendingAudio(config)
-      if (result) return result
-      errors.push(`${strategy}: no viable trigger`)
+      if (!result) {
+        errors.push(`${strategy}: no viable trigger`)
+        continue
+      }
+
+      // Claim-tolerance gate: favor tolerant leagues (NBA), FLAG aggressive
+      // ones into the trigger reason so they land in review, and skip any
+      // hard-blocked league entirely.
+      const cls = classifyLeague(config, strategy, result.youtubeQuery)
+      if (cls.tolerance === 'block') {
+        errors.push(`${strategy}: blocked league (${cls.league}) — ${cls.note}`)
+        continue
+      }
+      result.sourceData = {
+        ...result.sourceData,
+        league: cls.league,
+        claimTolerance: cls.tolerance,
+        policyNote: cls.note,
+      }
+      if (cls.tolerance !== 'favor') {
+        result.triggerReason = `[FLAG: ${cls.note}] ${result.triggerReason}`
+      }
+      return result
     } catch (e) {
       errors.push(`${strategy}: ${e instanceof Error ? e.message : String(e)}`)
     }

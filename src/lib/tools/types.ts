@@ -32,6 +32,25 @@ export interface ScriptResult {
   hook: string
   description: string
   hashtags: string[]
+  /** Short original analytical/commentary lines burned as timed overlays by the
+   *  transform stage (the transformative commentary). Optional — empty when the
+   *  model/template doesn't supply any. */
+  analysis?: string[]
+  /** Optional on-screen callouts for telestration (spotlight + label). */
+  telestration?: { label: string; atSec?: number }[]
+}
+
+/** Output of the transform stage: a treated clip with edit + overlays burned in. */
+export interface TransformResult {
+  /** Local path of the treated clip the assemble stage should consume. */
+  treatedPath: string
+  /** Duration of the treated clip in seconds (may differ from the raw window
+   *  when slow-mo was applied) — thread this to assemble, don't assume. */
+  durationSec: number
+  /** Human-readable list of treatments actually applied (e.g. 'punch-in'). */
+  treatments: string[]
+  telestrationCount: number
+  analysisLines: number
 }
 
 export interface AssembleResult {
@@ -49,6 +68,7 @@ export interface ToolContext {
   ingest?: IngestResult
   moment?: MomentResult
   script?: ScriptResult
+  transform?: TransformResult
   assembled?: AssembleResult
 }
 
@@ -57,6 +77,7 @@ export const PIPELINE_STAGES = [
   'clip-ingest',
   'moment-detect',
   'script',
+  'transform',
   'assemble',
 ] as const
 

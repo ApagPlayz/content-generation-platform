@@ -67,6 +67,7 @@ export interface F10Script extends TrueCrimeScript {
 export const F10_STAGES = [
   'discover',
   'script',
+  'footage',
   'visuals',
   'compliance',
   'tts',
@@ -102,6 +103,76 @@ export interface F10FactoryConfig {
   voice?: string
   /** Max public-domain images to source for the slideshow. Default 6. */
   maxImages?: number
+
+  // ── Footage / visuals surface (all optional; every feature OFF by default so
+  //    the existing Wikimedia-image slideshow stays the behaviour until opted in).
+  //    Pre-declared here so downstream footage/stock/AI-still workstreams can read
+  //    them without re-editing this shared file.
+
+  /** Master switch for the per-beat footage stage. Default false. */
+  footageEnabled?: boolean
+  /** Which provider the footage stage should prefer. */
+  footageSource?: 'wikimedia' | 'pexels' | 'pixabay' | 'archive' | 'ai' | string
+  /** Per-beat cap on sourced video clips. Default small (e.g. 2). */
+  maxClipsPerBeat?: number
+  /** Per-beat cap on sourced still images. */
+  maxImagesPerBeat?: number
+
+  /** Opt in to the Claude AI script writer; falls back to the template. Default false. */
+  useAiScript?: boolean
+
+  /** Opt in to Pexels/Pixabay stock video footage. Default false. */
+  useStockFootage?: boolean
+  /** Per-beat cap on stock clips. Default 1. */
+  maxStockClipsPerBeat?: number
+  /** Ordered stock providers to try (e.g. ['pexels','pixabay']). */
+  stockProviders?: string[]
+
+  /** Opt in to archive.org public-domain footage. Default false. */
+  useArchiveFootage?: boolean
+  /** Per-run cap on archive.org clips. Default ~3. */
+  archiveMaxClips?: number
+  /** archive.org collections to search (e.g. ['prelinger']). */
+  archiveCollections?: string[]
+
+  /** Image provider strategy for stills. Default 'wikimedia'. */
+  imageProvider?: 'wikimedia' | 'ai' | 'wikimedia+ai' | string
+  /** AI image model id (e.g. 'gpt-image-1'). */
+  aiImageModel?: string
+  /** AI still provider override ('openai' | 'stability' | 'local'). */
+  aiStillProvider?: string
+  /** Style suffix appended to every AI still prompt. */
+  aiStillStyle?: string
+
+  /** Ordered fallback ladder of footage sources (keyless-safe order by default). */
+  footageLadder?: string[]
+  /** Named visual styles rotated across videos for variation. */
+  styleRotation?: string[]
+  /** Editorial angles rotated to avoid "inauthentic content" sameness. */
+  editorialAngles?: string[]
+  /** How many recent videos to look back over when diverging style. */
+  styleDivergenceWindow?: number
+  /** Enable the editorial-angle layer. Default true. */
+  enableEditorialLayer?: boolean
+  /** Enable the mood-bank b-roll layer. Default false. */
+  moodBankEnabled?: boolean
+  /** Per-video cap on mood-bank clips. */
+  moodBankMaxPerVideo?: number
+}
+
+/**
+ * One rendered segment on the beat timeline. Durations are seconds-based (the
+ * single source of truth) so both render engines (ffmpeg + Remotion) derive
+ * identical cut timing without drifting against the narration audio.
+ */
+export interface TimelineSegment {
+  beatIndex: number
+  startSec: number
+  durationSec: number
+  assetPath: string
+  kind: 'video' | 'image'
+  /** Trim start into a source video clip (seconds); ignored for images. */
+  inSec?: number
 }
 
 /** Output of the discover stage — facts enriched onto a curated case. */
@@ -174,6 +245,8 @@ export interface F10Context {
   visuals?: VisualAsset[]
   /** Local file paths of downloaded images, parallel to `visuals`. */
   imagePaths?: string[]
+  /** Resolved footage paths per beat index; consumed by the assemble timeline. */
+  beatFootage?: Record<number, string[]>
   complianceDecision?: 'pass' | 'route_to_review' | 'block'
   tts?: TtsResult
   captions?: CaptionsResult

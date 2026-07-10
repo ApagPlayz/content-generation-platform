@@ -3,15 +3,23 @@
 // to a climax (~75–85% of runtime) and link causally with "but"/"therefore".
 // The beats carry pacing + visual-cue hints the footage and render phases use.
 //
-// Uses Claude when ANTHROPIC_API_KEY is set; otherwise a deterministic template
-// that narrates the (neutrally-worded) Wikipedia facts as beats and hedges guilt
-// for any non-convicted subject — compliant-by-construction so the offline path
-// still clears the gate. Pacing numbers (durations, cut cadence, music curve)
-// are fixed in code; the model only fills language and visual cues.
+// Uses Claude (Sonnet 5 by default) when factory.config.useAiScript is on AND
+// ANTHROPIC_API_KEY (or CLAUDE_API_KEY) is set; otherwise a deterministic
+// template that narrates the (neutrally-worded) Wikipedia facts as beats and
+// hedges guilt for any non-convicted subject — compliant-by-construction so
+// the offline path still clears the gate. Pacing numbers (durations, cut
+// cadence, music curve) are fixed in code; the model only fills language and
+// visual cues.
 
 import { prisma } from '../prisma'
 import { resolveModel, claudeCallCost } from '../settings'
 import type { ScriptStructure } from '../compliance'
+import {
+  loadRecentStyleProfiles,
+  pickDivergentStyle,
+  humanizeAngle,
+  type StyleProfile,
+} from './styleVariation'
 import type {
   CaseBrief,
   F10FactoryConfig,
@@ -71,12 +79,20 @@ function specsFor(targetDurationSec: number): BeatSpec[] {
 }
 
 /** Structural signature reflects the real beats so the inauthentic-content
- *  variation check sees genuine per-case variety. */
-function structureFor(brief: CaseBrief, specs: BeatSpec[], hookType: string): ScriptStructure {
+ *  variation check sees genuine per-case variety. The visual style + editorial
+ *  angle come from the per-video divergent rotation (styleVariation) — replacing
+ *  the old hardcoded constant that made every video look identical to the check. */
+function structureFor(
+  brief: CaseBrief,
+  specs: BeatSpec[],
+  hookType: string,
+  style: StyleProfile
+): ScriptStructure {
   return {
     hookPattern: brief.angle ? `operator-angle:${hookType}` : hookType,
     sections: specs.map((s) => s.name.toLowerCase()),
-    visualStyle: 'beat-paced-broll',
+    visualStyle: style.visualStyle,
+    editorialAngle: style.editorialAngle,
   }
 }
 
@@ -86,16 +102,28 @@ export async function generateScript(
   brief: CaseBrief,
   config: F10FactoryConfig
 ): Promise<F10Script> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY
   const targetDurationSec = config.targetDurationSec ?? 75
   const specs = specsFor(targetDurationSec)
   const citations = [brief.wikipediaUrl]
 
-  if (!apiKey) {
-    return templateScript(brief, specs, targetDurationSec, citations)
+  // Force this video's look + editorial framing to DIVERGE from recent runs — the
+  // active defence against the "inauthentic content" policy. Best-effort + keyless:
+  // an empty corpus falls back to a deterministic per-case pick.
+  const window = config.styleDivergenceWindow ?? 5
+  const style = pickDivergentStyle(await loadRecentStyleProfiles(window), {
+    caseName: brief.caseName,
+    pool: config.styleRotation,
+    angles: config.editorialAngles,
+    window,
+  })
+  const editorialLayer = config.enableEditorialLayer !== false
+
+  if (!config.useAiScript || !apiKey) {
+    return templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
   }
 
-  const m = await resolveModel(config.scriptModel)
+  const m = await resolveModel(config.scriptModel ?? 'sonnet5')
   const wordBudget = Math.round(targetDurationSec * WORDS_PER_SEC)
 
   try {
@@ -145,6 +173,12 @@ export async function generateScript(
               'contested claim, and complianceFlag = factual | attributed | opinion-clear.\n' +
               '- Never name or depict minors. No gore; focus on investigation/timeline/mystery. ' +
               'Build tension from documented unresolved facts, not speculation.\n\n' +
+              (editorialLayer
+                ? `EDITORIAL FRAMING: present this as a "${humanizeAngle(style.editorialAngle)}" — ` +
+                  'original analytical commentary on the documented record, not a bare recap. The ' +
+                  'framing must ADD analysis; it must never introduce a new accusation and every ' +
+                  'factual claim stays attributed and hedged.\n\n'
+                : '') +
               `BEAT TEMPLATE (return EXACTLY ${specs.length} beats, in this order):\n${beatGuide}\n\n` +
               'Respond with ONLY JSON: {"hook":{"type","verbal","onscreenText","visualCue",' +
               '"opensLoop","payoffRef"},"beats":[{"name","narration","linkWord","visualCue",' +
@@ -164,7 +198,7 @@ export async function generateScript(
         ],
       }),
     })
-    if (!res.ok) return templateScript(brief, specs, targetDurationSec, citations)
+    if (!res.ok) return templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
 
     const data = await res.json()
     const { total, units } = claudeCallCost(data.usage ?? {}, m)
@@ -174,13 +208,13 @@ export async function generateScript(
 
     const text: string = data.content?.[0]?.text ?? ''
     const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return templateScript(brief, specs, targetDurationSec, citations)
+    if (!jsonMatch) return templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
     const parsed = JSON.parse(jsonMatch[0])
 
     const built = buildFromModel(parsed, specs)
-    if (!built) return templateScript(brief, specs, targetDurationSec, citations)
+    if (!built) return templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
 
-    const fallback = templateScript(brief, specs, targetDurationSec, citations)
+    const fallback = templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
     return {
       caseName: brief.caseName,
       subjects: brief.subjects,
@@ -188,7 +222,7 @@ export async function generateScript(
       visuals: [],
       citations,
       targetDurationSec,
-      structure: structureFor(brief, specs, built.hook.type),
+      structure: structureFor(brief, specs, built.hook.type, style),
       hook: built.hook,
       beats: built.beats,
       title: parsed.title ? String(parsed.title).slice(0, 100) : fallback.title,
@@ -196,7 +230,7 @@ export async function generateScript(
       hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags.map(String) : fallback.hashtags,
     }
   } catch {
-    return templateScript(brief, specs, targetDurationSec, citations)
+    return templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
   }
 }
 
@@ -295,12 +329,19 @@ function templateScript(
   brief: CaseBrief,
   specs: BeatSpec[],
   targetDurationSec: number,
-  citations: string[]
+  citations: string[],
+  style: StyleProfile,
+  editorialLayer: boolean
 ): F10Script {
   const facts = brief.facts.length ? brief.facts : [brief.summary.slice(0, 200)]
   const hedgeLine = hedge(brief)
   const hasAngle = !!brief.angle?.trim()
   const lastFact = facts[facts.length - 1]
+  // A generic, hedged editorial frame — NEVER a case-specific assertion, so it
+  // can't trip the defamation lint or the corroboration rule. Off when the
+  // operator disables the editorial layer.
+  const angleWords = editorialLayer ? humanizeAngle(style.editorialAngle) : ''
+  const editorialClose = angleWords ? ` This ${angleWords} sticks to what the public record documents.` : ''
 
   // Varied fillers so a fact-poor case never repeats the same line verbatim.
   const fillers = [
@@ -326,7 +367,7 @@ function templateScript(
     if (n.includes('climax'))
       return `According to public records and reporting, this is the part that still draws scrutiny. ${lastFact}`.trim()
     if (n.includes('resolution'))
-      return `${hedgeLine} The full account is documented at the source linked below.`.trim()
+      return `${hedgeLine}${editorialClose} The full account is documented at the source linked below.`.trim()
     // Setup / inciting / rising / turn / falling: next unused fact.
     return nextFact()
   })
@@ -349,7 +390,7 @@ function templateScript(
     verbal: beatTexts[0],
     onscreenText: `${brief.caseName}`.split(/\s+/).slice(0, 7).join(' '),
     visualCue: defaultVisualCue('Hook'),
-    opensLoop: 'what the record actually shows',
+    opensLoop: angleWords ? `a ${angleWords} of what the record actually shows` : 'what the record actually shows',
     payoffRef: 'Resolution',
   }
 
@@ -368,11 +409,14 @@ function templateScript(
     visuals: [],
     citations,
     targetDurationSec,
-    structure: structureFor(brief, specs, hook.type),
+    structure: structureFor(brief, specs, hook.type, style),
     hook,
     beats,
     title: `${brief.caseName}${yr}: what really happened`.slice(0, 100),
-    description: (facts[0] ?? brief.summary.slice(0, 160)) + ` Source: ${brief.wikipediaUrl}`,
+    description:
+      (facts[0] ?? brief.summary.slice(0, 160)) +
+      (angleWords ? ` A ${angleWords} of the documented record.` : '') +
+      ` Source: ${brief.wikipediaUrl}`,
     hashtags: ['truecrime', 'coldcase', 'mystery', 'history', 'unsolved'],
   }
 }

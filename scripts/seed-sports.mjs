@@ -10,6 +10,20 @@ const config = {
   description:
     'NBA highlight clips sourced from trending games, player career moments, and trending-audio edits.',
   sport: 'nba',
+  league: 'nba',
+  // Claim-tolerance policy: favor NBA, FLAG rights-aggressive leagues into
+  // review (never auto-publish), block none by default.
+  leaguePolicy: { favor: ['nba', 'wnba'], flag: ['nfl', 'ufc', 'nhl', 'mlb'], block: [] },
+  // Transformative edit layer (ffmpeg-only, no keys): commentary overlays,
+  // telestration, slow-mo peak and punch-in so outputs aren't raw re-uploads.
+  transform: {
+    enabled: true,
+    telestration: true,
+    slowMoPeak: true,
+    punchIn: true,
+    commentaryOverlay: true,
+    editStyle: 'analysis',
+  },
   strategies: ['trending_game', 'player_career', 'trending_audio'],
   minExcitement: 40,
   clipLengthSec: 20,
@@ -42,6 +56,13 @@ Strategy guidance:
 - trending_audio: minimal text, let the edit breathe; hook references the sound or the vibe.
 
 Hashtags: always include nba + basketball, then 3-6 specific tags (teams, players, moment type). Lowercase, no spaces.
+
+On-screen analysis (your transformative commentary — burned onto the clip):
+- Provide 2-4 short "analysis" lines in your OWN words about what makes the play work
+  (spacing, the read, footwork, timing, the stakes). This is original commentary, never
+  a transcription of the broadcast — it's what turns a clip into our edit.
+- Optionally add up to 3 "telestration" callouts: a short label + roughly when it happens.
+
 Hard rules: never invent stats or scores not present in the trigger data. Keep titles under 80 chars.`
 
 async function main() {

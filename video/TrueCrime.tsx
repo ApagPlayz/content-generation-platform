@@ -3,6 +3,7 @@ import {
   Audio,
   Img,
   interpolate,
+  OffthreadVideo,
   Sequence,
   useCurrentFrame,
   useVideoConfig,
@@ -20,6 +21,7 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
   audioSrc,
   durationSec,
   cues,
+  beatClips,
 }) => {
   const { fps, durationInFrames } = useVideoConfig()
   const total = durationInFrames || Math.max(1, Math.round(durationSec * fps))
@@ -32,7 +34,45 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      {imageSrcs.length > 0 ? (
+      {beatClips && beatClips.length > 0 ? (
+        // Per-beat stitched timeline: real video clips and Ken-Burns stills cut
+        // on the shared beat timeline. Each segment is its own <Sequence>; the
+        // single narration <Audio> bed and karaoke captions below are keyed to
+        // absolute audio seconds, so cuts never desync the voice.
+        beatClips.map((clip, i) =>
+          clip.kind === 'video' ? (
+            <Sequence
+              key={i}
+              from={clip.startFrame}
+              durationInFrames={clip.durationInFrames}
+              layout="none"
+            >
+              <OffthreadVideo
+                src={clip.src}
+                // Absolute source-frame window: trim start (inSec) → start+dur.
+                // OffthreadVideo clamps trimAfter to the clip's real length, so a
+                // clip shorter than its slot holds its last frame instead of erroring.
+                trimBefore={Math.max(0, Math.round((clip.inSec ?? 0) * fps))}
+                trimAfter={Math.max(
+                  Math.round((clip.inSec ?? 0) * fps) + 1,
+                  Math.round((clip.inSec ?? 0) * fps) + clip.durationInFrames
+                )}
+                muted
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+            </Sequence>
+          ) : (
+            <Sequence
+              key={i}
+              from={clip.startFrame}
+              durationInFrames={clip.durationInFrames}
+              layout="none"
+            >
+              <KenBurns src={clip.src} durationInFrames={clip.durationInFrames} index={i} />
+            </Sequence>
+          )
+        )
+      ) : imageSrcs.length > 0 ? (
         imageSrcs.map((src, i) => (
           <Sequence
             key={i}

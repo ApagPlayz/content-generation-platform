@@ -16,7 +16,8 @@ import http from 'http'
 import path from 'path'
 import type { AddressInfo } from 'net'
 import type { AssembleResult, MomentResult, ScriptResult } from '../tools/types'
-import type { CaptionsResult, RenderResult } from '../truecrime/types'
+import type { CaptionsResult, RenderResult, ScriptBeat } from '../truecrime/types'
+import { buildBeatTimeline, toCumulativeFrames } from '../truecrime/timeline'
 
 const FPS = 30
 
@@ -191,7 +192,8 @@ export async function renderTrueCrime(
   imagePaths: string[],
   audioPath: string,
   durationSec: number,
-  captions: CaptionsResult
+  captions: CaptionsResult,
+  opts?: { beats?: ScriptBeat[]; beatFootage?: Record<number, string[]> }
 ): Promise<RenderResult> {
   const dir = path.dirname(audioPath)
   const outputPath = path.join(dir, 'final.mp4')
@@ -202,12 +204,37 @@ export async function renderTrueCrime(
 
   try {
     const url = (p: string) => `${fileServer.baseUrl}/${encodeURIComponent(path.basename(p))}`
+
+    // Per-beat stitched timeline (mixed video clips + Ken-Burns stills). Uses
+    // the SAME seconds-based timeline as the ffmpeg path, converted to this
+    // engine's 30fps grid on the running cumulative total to avoid cut drift.
+    // Empty → the composition falls back to the even imageSrcs slideshow.
+    let beatClips: {
+      src: string
+      kind: 'video' | 'image'
+      startFrame: number
+      durationInFrames: number
+      inSec: number
+    }[] = []
+    if (opts?.beats && opts.beats.length > 0 && opts.beatFootage && Object.keys(opts.beatFootage).length > 0) {
+      const segments = buildBeatTimeline(opts.beats, opts.beatFootage, durationSec)
+      const spans = toCumulativeFrames(segments, FPS)
+      beatClips = segments.map((seg, i) => ({
+        src: url(seg.assetPath),
+        kind: seg.kind,
+        startFrame: spans[i].startFrame,
+        durationInFrames: spans[i].durationInFrames,
+        inSec: seg.inSec ?? 0,
+      }))
+    }
+
     const inputProps = {
       imageSrcs: imagePaths.map(url),
       audioSrc: url(audioPath),
       durationSec,
       cues: captions.cues,
       fps: FPS,
+      beatClips,
     }
 
     const composition = await selectComposition({
