@@ -3,39 +3,49 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "go": "bash scripts/dev-start.sh",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push --skip-generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "remotion:studio": "remotion studio video/index.ts",
+    "moodbank:populate": "node scripts/populate-mood-bank.mjs"
   },
   "dependencies": {
-    "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "next": "^15.0.0",
-    "@prisma/client": "^5.7.0",
     "@hookform/resolvers": "^3.3.4",
-    "react-hook-form": "^7.48.0",
-    "zod": "^3.22.4",
+    "@prisma/client": "^5.7.0",
+    "@remotion/bundler": "^4.0.479",
+    "@remotion/cli": "^4.0.479",
+    "@remotion/renderer": "^4.0.479",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
-    "tailwind-merge": "^2.2.0",
+    "date-fns": "^2.30.0",
+    "googleapis": "^173.0.0",
     "lucide-react": "^0.294.0",
-    "date-fns": "^2.30.0"
+    "next": "^15.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-hook-form": "^7.48.0",
+    "remotion": "^4.0.479",
+    "tailwind-merge": "^2.2.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
-    "typescript": "^5.3.3",
     "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "autoprefixer": "^10.4.16",
-    "postcss": "^8.4.32",
-    "tailwindcss": "^3.3.6",
     "eslint": "^8.55.0",
     "eslint-config-next": "^15.0.0",
-    "prisma": "^5.7.0"
+    "postcss": "^8.4.32",
+    "prisma": "^5.7.0",
+    "tailwindcss": "^3.3.6",
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.10"
   }
 }

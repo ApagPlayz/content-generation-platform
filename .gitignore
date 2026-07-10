@@ -56,3 +56,14 @@ Thumbs.db
 
 # Claude local config
 .claude
+
+# downloaded source reels + rendered videos
+/media
+
+# Mood-bank clip binaries — manifest.json + README stay committed, the
+# downloaded clips themselves don't (same posture as /media above).
+/assets/mood-bank/clips/*
+!/assets/mood-bank/clips/.gitkeep
+
+# Build info
+tsconfig.tsbuildinfo
