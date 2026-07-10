@@ -185,6 +185,9 @@ export async function resolveBeatFootage(
     .map((t) => String(t).trim().toLowerCase())
     .map((t) => TIER_ALIASES[t] ?? t) // resolve synonyms/legacy names to tier keys
     .filter((t) => t && t !== 'placeholder') // visuals stage owns the placeholder floor
+    // moodBankEnabled defaults to true (undefined = enabled); only an explicit
+    // `false` drops the tier from the ladder.
+    .filter((t) => t !== 'moodbank' || config.moodBankEnabled !== false)
   const maxPerBeat = Math.max(1, config.maxImagesPerBeat ?? 1)
 
   const dir = path.join(MEDIA_DIR, videoId)

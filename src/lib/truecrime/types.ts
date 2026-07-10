@@ -111,8 +111,6 @@ export interface F10FactoryConfig {
 
   /** Master switch for the per-beat footage stage. Default false. */
   footageEnabled?: boolean
-  /** Which provider the footage stage should prefer. */
-  footageSource?: 'wikimedia' | 'pexels' | 'pixabay' | 'archive' | 'ai' | string
   /** Per-beat cap on sourced video clips. Default small (e.g. 2). */
   maxClipsPerBeat?: number
   /** Per-beat cap on sourced still images. */
@@ -125,18 +123,16 @@ export interface F10FactoryConfig {
   useStockFootage?: boolean
   /** Per-beat cap on stock clips. Default 1. */
   maxStockClipsPerBeat?: number
-  /** Ordered stock providers to try (e.g. ['pexels','pixabay']). */
+  /** Ordered stock providers to try (e.g. ['pexels','pixabay']). Default ['pexels','pixabay']. */
   stockProviders?: string[]
 
   /** Opt in to archive.org public-domain footage. Default false. */
   useArchiveFootage?: boolean
-  /** Per-run cap on archive.org clips. Default ~3. */
+  /** Cap on archive.org candidate clips searched per beat. Default 5. */
   archiveMaxClips?: number
   /** archive.org collections to search (e.g. ['prelinger']). */
   archiveCollections?: string[]
 
-  /** Image provider strategy for stills. Default 'wikimedia'. */
-  imageProvider?: 'wikimedia' | 'ai' | 'wikimedia+ai' | string
   /** AI image model id (e.g. 'gpt-image-1'). */
   aiImageModel?: string
   /** AI still provider override ('openai' | 'stability' | 'local'). */
@@ -154,10 +150,8 @@ export interface F10FactoryConfig {
   styleDivergenceWindow?: number
   /** Enable the editorial-angle layer. Default true. */
   enableEditorialLayer?: boolean
-  /** Enable the mood-bank b-roll layer. Default false. */
+  /** Enable the mood-bank b-roll layer/tier. Default true (enabled); set false to skip it. */
   moodBankEnabled?: boolean
-  /** Per-video cap on mood-bank clips. */
-  moodBankMaxPerVideo?: number
 }
 
 /**

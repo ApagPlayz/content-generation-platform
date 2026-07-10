@@ -23,7 +23,6 @@ const config = {
   //    the demo pipeline keeps using the Wikimedia public-domain slideshow until
   //    the owner opts in. These document the new config keys downstream stages read.
   footageEnabled: false,
-  footageSource: 'wikimedia',
   maxClipsPerBeat: 2,
   maxImagesPerBeat: 2,
   // AI script writer (Claude) — off until an API key + opt-in are set.
@@ -37,8 +36,6 @@ const config = {
   useArchiveFootage: false,
   archiveMaxClips: 3,
   archiveCollections: ['prelinger'],
-  // Still-image provider. Default keyless Wikimedia Commons.
-  imageProvider: 'wikimedia',
   aiStillStyle: 'muted cinematic, symbolic, no faces',
   // Fallback ladder in tier-key vocabulary (ai_still | stock | archive | moodbank).
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
@@ -52,7 +49,6 @@ const config = {
   enableEditorialLayer: true,
   // Mood-bank b-roll layer — dormant by default.
   moodBankEnabled: false,
-  moodBankMaxPerVideo: 3,
   caseWatchlist: [
     {
       caseName: 'The Lindbergh Kidnapping',
