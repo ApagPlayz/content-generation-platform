@@ -108,6 +108,9 @@ const TIER_ALIASES: Record<string, string> = {
 const CUE_QUERY_MAP: { match: RegExp; query: string }[] = [
   { match: /courtroom|court\b|trial|judge|gavel|verdict|jury/i, query: 'empty courtroom interior' },
   { match: /jail|prison|cell|inmate|bars|penitentiary/i, query: 'empty prison hallway' },
+  // Checked before the broader police regex so an interrogation-specific cue
+  // gets the more precise query (mirrors the 'interrogation' mood-bank category).
+  { match: /interrogat|interview room|confession|one-way mirror/i, query: 'dim interrogation room' },
   { match: /police|siren|patrol|squad|cruiser|\bcop\b|detective/i, query: 'police car lights at night' },
   { match: /newspaper|headline|press|clipping|front page|newsprint/i, query: 'vintage newspaper macro' },
   { match: /document|file\b|paperwork|evidence|folder|report|dossier/i, query: 'old documents on a desk' },

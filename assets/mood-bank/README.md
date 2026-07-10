@@ -56,10 +56,18 @@ call.
 
 ## Category vocabulary
 
-`rain`, `foggy-house`, `police-lights`, `newspaper-macro`, `night-street`.
-Add a new category by adding entries with a new `category` value — nothing
-elsewhere needs to change; `selectMoodClips()` reads whatever categories are
-present in the manifest.
+`rain`, `foggy-house`, `police-lights`, `newspaper-macro`, `night-street`,
+`courtroom`, `prison`, `forest`, `highway-night`, `still-water`,
+`interrogation`. Add a new category by adding entries with a new `category`
+value — nothing elsewhere needs to change; `selectMoodClips()` reads whatever
+categories are present in the manifest. (Keep `src/lib/truecrime/moodBank.ts`'s
+`KEYWORD_CATEGORIES` in step so beat cues actually map to it — see that file's
+comment.) Several of the newer categories above are unresolved placeholders
+(`searchQuery`/`pexelsQuery`, `populated: false`) until `npm run
+moodbank:populate` finds and downloads a real candidate; until then
+`selectMoodClips()` just has nothing to match for that category and falls
+through to whatever atmosphere IS populated, same as any other empty
+category.
 
 ## License honesty (read before adding an archive.org entry)
 

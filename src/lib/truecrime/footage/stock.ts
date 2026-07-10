@@ -20,7 +20,7 @@ export const stockTier: Tier = async ({ videoId, query, beatIndex, config, dest,
     if (!clip || !clip.localPath) return null
 
     // Poster-frame the vertical clip into a still so the current assemble works.
-    const still = await extractMoodStill(clip.localPath, dest)
+    const still = await extractMoodStill(clip.localPath, dest, beatIndex)
     if (!still || !existsSync(still)) return null
 
     return { imagePath: still, asset: { ...clip.visual, beatIndex } }

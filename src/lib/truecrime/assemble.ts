@@ -67,13 +67,16 @@ async function renderImageClip(img: string, dur: number, out: string): Promise<b
 /** Trim a source video clip to a uniform 1080×1920/25fps segment. `-an` drops
  *  any embedded audio so only the narration bed survives the final mux; params
  *  match renderImageClip's output so concat -c copy stays valid across a mixed
- *  video+still timeline. */
+ *  video+still timeline. Many footage-ladder sources (archive.org transcodes,
+ *  mood-bank clips) are small (320×240-class); a light hqdn3d denoise before
+ *  the upscale plus a lanczos-filtered scale keeps the blow-up to 1080×1920
+ *  reading as intentional grain rather than blocky compression artifacts. */
 async function renderVideoClip(src: string, inSec: number, dur: number, out: string): Promise<boolean> {
   try {
     await exec(
       'ffmpeg',
       ['-y', '-ss', String(Math.max(0, inSec)), '-t', String(Math.max(0.1, dur)), '-i', src,
-        '-vf', "crop='min(iw,ih*9/16)':ih,scale=1080:1920,setsar=1,format=yuv420p", '-r', String(FPS),
+        '-vf', "hqdn3d=1.5:1.5:6:6,crop='min(iw,ih*9/16)':ih,scale=1080:1920:flags=lanczos,setsar=1,format=yuv420p", '-r', String(FPS),
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '21', '-an', out],
       { timeout: 300_000 }
     )
