@@ -14,6 +14,7 @@ export const archiveTier: Tier = async ({ query, beatIndex, config }) => {
     const result = await fetchArchiveClipForBeat(query, {
       collections: config.archiveCollections,
       beatIndex,
+      maxClips: config.archiveMaxClips,
     })
     if (!result || !result.localPath || !existsSync(result.localPath)) return null
 

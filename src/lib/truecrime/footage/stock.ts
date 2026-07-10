@@ -15,7 +15,7 @@ export const stockTier: Tier = async ({ videoId, query, beatIndex, config, dest,
 
   try {
     const maxPer = config.maxStockClipsPerBeat ?? 1
-    const { clips } = await sourceStockClips(videoId, [{ beatIndex, query }], maxPer)
+    const { clips } = await sourceStockClips(videoId, [{ beatIndex, query }], maxPer, config.stockProviders)
     const clip = clips[0]
     if (!clip || !clip.localPath) return null
 

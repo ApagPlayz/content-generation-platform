@@ -186,19 +186,39 @@ function toAsset(c: StockCandidate): VisualAsset {
   }
 }
 
+const PROVIDER_SEARCH: Record<StockSource, (query: string, perPage: number) => Promise<StockCandidate[]>> = {
+  pexels: searchPexels,
+  pixabay: searchPixabay,
+}
+const DEFAULT_PROVIDER_ORDER: StockSource[] = ['pexels', 'pixabay']
+
+/** Resolve config.stockProviders to a valid, deduped provider order, falling
+ *  back to the default (Pexels → Pixabay) when unset/empty/unrecognized. */
+function resolveProviderOrder(providers?: string[]): StockSource[] {
+  const order = (providers ?? [])
+    .map((p) => String(p).trim().toLowerCase())
+    .filter((p): p is StockSource => p === 'pexels' || p === 'pixabay')
+  const deduped = Array.from(new Set(order))
+  return deduped.length ? deduped : DEFAULT_PROVIDER_ORDER
+}
+
 /**
- * Resolve one beat query to a cached-or-downloaded stock clip. Pexels first,
- * Pixabay fallback. Cache-checked before any network download; every failure
- * path returns null (fail-closed to "no clip"), never throws.
+ * Resolve one beat query to a cached-or-downloaded stock clip, trying
+ * providers in `providers` order (default Pexels then Pixabay). Cache-checked
+ * before any network download; every failure path returns null (fail-closed
+ * to "no clip"), never throws.
  */
 async function fetchOneClip(
   query: string,
-  exclude: Set<string>
+  exclude: Set<string>,
+  providers: StockSource[] = DEFAULT_PROVIDER_ORDER
 ): Promise<{ candidate: StockCandidate; localPath: string } | null> {
   let candidates: StockCandidate[] = []
   try {
-    candidates = await searchPexels(query, 5)
-    if (!candidates.length) candidates = await searchPixabay(query, 5)
+    for (const provider of providers) {
+      candidates = await PROVIDER_SEARCH[provider](query, 5)
+      if (candidates.length) break
+    }
   } catch {
     return null
   }
@@ -246,13 +266,15 @@ async function fetchOneClip(
 export async function sourceStockClips(
   videoId: string,
   queries: { beatIndex: number; query: string }[],
-  maxPerBeat = 1
+  maxPerBeat = 1,
+  providers?: string[]
 ): Promise<{ clips: StockClipResult[] }> {
   if (!stockKeysPresent()) return { clips: [] }
   // videoId is accepted for API symmetry with sourceVisuals/runClipIngest and
   // future per-run diagnostics; clips themselves live in the cross-run cache.
   void videoId
 
+  const providerOrder = resolveProviderOrder(providers)
   const clips: StockClipResult[] = []
   for (const { beatIndex, query } of queries) {
     try {
@@ -260,7 +282,7 @@ export async function sourceStockClips(
       // same beat query; stops early once the provider search is exhausted.
       const usedIds = new Set<string>()
       for (let found = 0; found < Math.max(1, maxPerBeat); found++) {
-        const result = await fetchOneClip(query, usedIds)
+        const result = await fetchOneClip(query, usedIds, providerOrder)
         if (!result) break
         usedIds.add(`${result.candidate.source}:${result.candidate.externalId}`)
         clips.push({

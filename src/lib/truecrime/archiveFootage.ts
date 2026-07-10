@@ -52,6 +52,8 @@ export interface ArchiveFootageOptions {
   beatIndex?: number
   /** Override the conservative depictsRealPerson=true default when the caller knows better. */
   depictsRealPerson?: boolean
+  /** Cap on candidate clips searched/considered per call. Default MAX_SEARCH_RESULTS (5). */
+  maxClips?: number
 }
 
 export interface ArchiveFootageResult {
@@ -100,7 +102,7 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response | nul
   }
 }
 
-async function archiveSearch(query: string, collections: string[]): Promise<ArchiveDoc[]> {
+async function archiveSearch(query: string, collections: string[], maxResults: number): Promise<ArchiveDoc[]> {
   const qParts = [`(${query})`, 'mediatype:(movies OR image)']
   const collClause = collections.map((c) => c.trim()).filter(Boolean)
   if (collClause.length) qParts.push(`collection:(${collClause.join(' OR ')})`)
@@ -110,7 +112,7 @@ async function archiveSearch(query: string, collections: string[]): Promise<Arch
     `q=${encodeURIComponent(q)}` +
     '&fl[]=identifier&fl[]=title&fl[]=mediatype&fl[]=licenseurl&fl[]=rights' +
     '&fl[]=possible-copyright-status&fl[]=collection' +
-    `&sort[]=downloads+desc&rows=${MAX_SEARCH_RESULTS}&page=1&output=json`
+    `&sort[]=downloads+desc&rows=${maxResults}&page=1&output=json`
   try {
     const res = await fetchWithTimeout(url, SEARCH_TIMEOUT_MS)
     if (!res || !res.ok) return []
@@ -258,7 +260,8 @@ export async function fetchArchiveClipForBeat(
 ): Promise<ArchiveFootageResult | null> {
   try {
     const collections = opts.collections?.length ? opts.collections : ['prelinger']
-    const docs = await archiveSearch(query, collections)
+    const maxClips = opts.maxClips && opts.maxClips > 0 ? opts.maxClips : MAX_SEARCH_RESULTS
+    const docs = (await archiveSearch(query, collections, maxClips)).slice(0, maxClips)
 
     for (const doc of docs) {
       const identifier = doc.identifier
