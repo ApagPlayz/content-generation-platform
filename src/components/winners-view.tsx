@@ -7,6 +7,8 @@ import { RefreshMetricsButton } from './refresh-metrics-button'
 // Factory-type badge colors (mirrors the inbox-card convention).
 const TYPE_COLOR: Record<string, string> = {
   F9: 'bg-indigo-100 text-indigo-700',
+  F10: 'bg-stone-200 text-stone-700',
+  F11: 'bg-amber-100 text-amber-700',
 }
 
 function typeColor(type: string | undefined): string {

@@ -16,6 +16,7 @@ const FACTORY_TYPES = [
   { id: 'F8', name: 'AI Avatar',       desc: 'Talking head presenter' },
   // F9 = Sports Highlights — owned by the other agent instance; it adds its own selector entry.
   { id: 'F10', name: 'True Crime',     desc: 'Narrated dark history & real cases' },
+  { id: 'F11', name: 'History & Business Mini-Docs', desc: 'Faceless mini-documentaries on historical events and business rises, falls & scandals' },
 ]
 
 export default function NewFactory() {

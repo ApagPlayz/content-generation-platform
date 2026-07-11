@@ -67,3 +67,5 @@ Thumbs.db
 
 # Build info
 tsconfig.tsbuildinfo
+.dev-server.state
+backup-launcher/

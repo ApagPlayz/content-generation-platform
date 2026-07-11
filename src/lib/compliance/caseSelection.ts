@@ -3,13 +3,26 @@
 // the F10 research doc. A hard block here short-circuits the whole pipeline.
 
 import type { CaseSelectionVerdict, TrueCrimeScript } from './types'
+import { TRUE_CRIME_PROFILE, type ComplianceProfile } from './profile'
 
 // Topics that are permanently demonetized on YouTube (Jan 2026 policy) — never
-// produce these regardless of framing.
+// produce these regardless of framing. These are platform-level categories, not
+// crime-specific, so they apply to EVERY content kind.
 const PERMANENT_DEMONETIZE =
   /\b(child (abuse|sex|porn|exploitation)|csam|minor[- ]?victim|eating disorder|child trafficking)\b/i
 
-export function evaluateCaseSelection(script: TrueCrimeScript): CaseSelectionVerdict {
+// Visual-plan gore heuristic. The crime profile keeps the original wide net
+// (crime-scene / autopsy / body …). For history-business the crime-specific
+// terms — and the very false-positive-prone \bbody\b ("governing body", "body
+// of water") — are dropped, but plain gore terms stay: gore is not
+// advertiser-friendly on any topic.
+const GORE_VISUALS_CRIME = /\b(crime[- ]?scene|autopsy|corpse|body|blood|gore)\b/i
+const GORE_VISUALS_GENERAL = /\b(corpse|blood|gore)\b/i
+
+export function evaluateCaseSelection(
+  script: TrueCrimeScript,
+  profile: ComplianceProfile = TRUE_CRIME_PROFILE
+): CaseSelectionVerdict {
   const hardBlocks: string[] = []
   const warnings: string[] = []
 
@@ -51,12 +64,13 @@ export function evaluateCaseSelection(script: TrueCrimeScript): CaseSelectionVer
   }
 
   // 5) Gore / violence-focal content in the visual plan.
-  const goreVisuals = (script.visuals ?? []).filter((v) =>
-    /\b(crime[- ]?scene|autopsy|corpse|body|blood|gore)\b/i.test(v.source)
-  )
+  const goreRe = profile.contentKind === 'crime' ? GORE_VISUALS_CRIME : GORE_VISUALS_GENERAL
+  const goreVisuals = (script.visuals ?? []).filter((v) => goreRe.test(v.source))
   if (goreVisuals.length > 0) {
     warnings.push(
-      `${goreVisuals.length} visual(s) appear to reference crime-scene/gore imagery — not advertiser-friendly. Replace with symbolic/PD imagery.`
+      profile.contentKind === 'crime'
+        ? `${goreVisuals.length} visual(s) appear to reference crime-scene/gore imagery — not advertiser-friendly. Replace with symbolic/PD imagery.`
+        : `${goreVisuals.length} visual(s) appear to reference graphic/gore imagery — not advertiser-friendly. Replace with symbolic/PD imagery.`
     )
   }
 

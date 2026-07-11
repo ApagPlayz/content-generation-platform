@@ -74,13 +74,48 @@ ensure_kokoro() {
 
 kick_docker
 
-# 1. Already running? Make sure the voice engine is up, then just open it.
+# --- Staleness guard --------------------------------------------------------
+# A dev server left running from before a merge/branch switch serves old code.
+# We stamp the code version at launch; on re-run, a mismatched (or missing)
+# stamp means the running server is stale → kill it and do a full fresh start.
+STATE_FILE=".dev-server.state"
+
+code_stamp() {
+  {
+    git rev-parse HEAD 2>/dev/null || echo "no-git"
+    git status --porcelain 2>/dev/null || true
+    shasum prisma/schema.prisma package-lock.json 2>/dev/null || true
+  } | shasum | awk '{print $1}'
+}
+
+# State file format: "<mode> <stamp>" (e.g. "prod ab12…"). The stamp part tells
+# us whether the code changed; the mode tells us what kind of server/build it was.
+state_stamp() { awk '{print $NF}' "${STATE_FILE}" 2>/dev/null || true; }
+state_mode()  { awk '{print $1}'  "${STATE_FILE}" 2>/dev/null || true; }
+
+# The mode we want this launch: prod (default) or dev (DEV=1 npm run go).
+WANT_MODE="prod"; [ "${DEV:-0}" = "1" ] && WANT_MODE="dev"
+
+# 1. Already running? Reuse it only if it's serving the current code in the right mode.
 if lsof -ti:"${PORT}" >/dev/null 2>&1; then
-  ensure_kokoro || true
-  echo "✓ Dev server already running on port ${PORT}. Opening browser."
-  open "${URL}" 2>/dev/null || true
-  echo "  (To restart cleanly:  lsof -ti:${PORT} | xargs kill  then re-run this script.)"
-  exit 0
+  if [ -f "${STATE_FILE}" ] && [ "$(state_stamp)" = "$(code_stamp)" ] && [ "$(state_mode)" = "${WANT_MODE}" ]; then
+    ensure_kokoro || true
+    echo "✓ Content Engine already running on port ${PORT} with current code. Opening it."
+    open "${URL}" 2>/dev/null || true
+    exit 0
+  fi
+  echo "▶ A server is running but the code (or mode) has changed since it started."
+  echo "  Restarting it so you never see a stale version…"
+  pm2 delete content-engine >/dev/null 2>&1 || true
+  lsof -ti:"${PORT}" | xargs kill 2>/dev/null || true
+  for _ in $(seq 1 15); do
+    lsof -ti:"${PORT}" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  if lsof -ti:"${PORT}" >/dev/null 2>&1; then
+    lsof -ti:"${PORT}" | xargs kill -9 2>/dev/null || true
+    sleep 2
+  fi
 fi
 
 # 2. Dependencies.
@@ -104,7 +139,50 @@ fi
 # 5. Make sure the free voice engine is up (Docker has been booting since step 0).
 ensure_kokoro || true
 
-# 6. Launch dev server and open the browser.
-echo "▶ Launching Next.js dev server. Ctrl+C to stop."
-( sleep 3; open "${URL}" 2>/dev/null || true ) &
-exec npm run dev
+# 6. Launch the app.
+#    Default: PRODUCTION mode — pre-built, fast, no blank compile pauses, no
+#    hot-reload breakage. Rebuilds only when the code fingerprint changed.
+#    Escape hatch for development work:  DEV=1 npm run go  (live-reloading dev server).
+if [ "${DEV:-0}" = "1" ]; then
+  echo "dev $(code_stamp)" > "${STATE_FILE}"
+  echo "▶ Launching Next.js DEV server (live reload). Ctrl+C to stop."
+  ( sleep 3; open "${URL}" 2>/dev/null || true ) &
+  exec npm run dev
+fi
+
+# A real production build leaves .next/BUILD_ID behind; dev mode does not.
+if [ ! -f .next/BUILD_ID ] || [ "$(state_mode)" != "prod" ] || [ "$(state_stamp)" != "$(code_stamp)" ]; then
+  echo "▶ Building the app (code changed since last build — takes a minute)…"
+  if npm run build; then
+    echo "prod $(code_stamp)" > "${STATE_FILE}"
+  else
+    echo "  ⚠ Build failed — starting in dev mode instead so you're not stuck."
+    echo "    (The next launch will retry the build.)"
+    rm -f "${STATE_FILE}"
+    ( sleep 3; open "${URL}" 2>/dev/null || true ) &
+    exec npm run dev
+  fi
+else
+  echo "✓ App already built for this code version — skipping build."
+fi
+
+# Production server is managed by PM2 when available: it stays up in the
+# background, survives crashes, and (via the login LaunchAgent) starts at login.
+if command -v pm2 >/dev/null 2>&1; then
+  echo "▶ Launching Content Engine (production mode, kept alive by PM2)…"
+  pm2 delete content-engine >/dev/null 2>&1 || true
+  pm2 start npm --name content-engine -- start >/dev/null
+  pm2 save >/dev/null 2>&1 || true
+  for _ in $(seq 1 30); do
+    curl -fsS -m 2 "${URL}" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  open "${URL}" 2>/dev/null || true
+  echo "✓ Content Engine is up and will stay running in the background."
+  echo "  (Logs: pm2 logs content-engine · Stop: pm2 stop content-engine)"
+  exit 0
+fi
+
+echo "▶ Launching Content Engine (production mode). Ctrl+C to stop."
+( sleep 2; open "${URL}" 2>/dev/null || true ) &
+exec npm run start
