@@ -35,6 +35,13 @@ export interface TierInput {
   beatIndex: number
   /** Safe keyword query derived from beat.visualCue (see cueToQuery). */
   query: string
+  /** Archive-tier query: case topic + year + cue (see archiveQuery). May carry
+   *  historical names/years — unlike `query`, which never carries an identity.
+   *  Optional so the archive tier degrades to `query` if a caller omits it. */
+  archiveQuery?: string
+  /** Broad-to-narrow fallbacks for the archive tier (see archiveQueryCandidates):
+   *  archive.org ANDs terms, so the tier walks these until one has results. */
+  archiveQueries?: string[]
   brief: CaseBrief
   config: F10FactoryConfig
   /** Run scratch dir (media/<videoId>). */
@@ -140,6 +147,80 @@ export function cueToQuery(cue: string, brief: CaseBrief): string {
   return cleaned || 'dark moody atmosphere'
 }
 
+// Filler words dropped from the case name when building an archive query —
+// "The Panic of 1907" should search as "panic 1907", not drown in stopwords.
+const ARCHIVE_STOPWORDS = /\b(?:the|a|an|of|in|on|at|and|case)\b/gi
+
+/** Build the archive.org search query for a beat. Unlike AI/stock queries —
+ *  which must never carry a real person's identity (see namesRealSubject) —
+ *  public-domain archive search works far better with the story's own topic
+ *  and year ("panic 1907 …" finds era reels; a bare mood phrase finds a random
+ *  1963 school film). Living subjects' names (and their distinctive tokens)
+ *  are still stripped from the case name — only historical topic words, the
+ *  year, and names of subjects explicitly marked not-living are fair game. */
+export function archiveQuery(cueQuery: string, brief: CaseBrief): string {
+  const topic = archiveTopic(brief)
+  const year = brief.year && !topic.includes(String(brief.year)) ? String(brief.year) : ''
+  return dedupeTokens([topic, year, (cueQuery || '').trim()]) || 'dark moody atmosphere'
+}
+
+/** The story's topic words with living subjects' identities stripped — the
+ *  shared base of every archive query. */
+function archiveTopic(brief: CaseBrief): string {
+  let topic = brief.caseName || ''
+  for (const s of brief.subjects) {
+    // Fail-closed: only a subject explicitly marked not-living keeps their name.
+    if (!s.name || s.living === false) continue
+    topic = topic.replace(new RegExp(escapeRe(s.name), 'gi'), ' ')
+    for (const part of s.name.split(/\s+/).filter((p) => p.length >= 4)) {
+      topic = topic.replace(new RegExp(`\\b${escapeRe(part)}\\b`, 'gi'), ' ')
+    }
+  }
+  return topic
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .replace(ARCHIVE_STOPWORDS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function dedupeTokens(parts: string[]): string {
+  const seen = new Set<string>()
+  return parts
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => {
+      if (seen.has(t)) return false
+      seen.add(t)
+      return true
+    })
+    .join(' ')
+}
+
+/** Progressively broader archive.org queries for one beat. archive.org ANDs
+ *  every term, so the specific query ("panic 1907 vintage newspaper macro")
+ *  often finds NOTHING while "panic 1907" finds era newsreels. The tier tries
+ *  each candidate in order and stops at the first with results. */
+export function archiveQueryCandidates(cueQuery: string, brief: CaseBrief): string[] {
+  const topic = archiveTopic(brief)
+  const year = brief.year ? String(brief.year) : ''
+  const cue = (cueQuery || '').trim()
+  const out: string[] = []
+  for (const cand of [
+    archiveQuery(cueQuery, brief), // topic + year + cue — most specific
+    dedupeTokens([topic, year]),   // topic + year
+    topic,                         // topic only
+    dedupeTokens([year, cue]),     // era + mood
+    cue,                           // generic cue (pre-fix behavior)
+  ]) {
+    const c = cand.trim()
+    if (c && !out.includes(c)) out.push(c)
+  }
+  if (!out.length) out.push('dark moody atmosphere')
+  return out
+}
+
 /** True when the beat's VISUAL CUE (not narration) names a real case subject —
  *  the signal that this beat wants to *show* that person, so AI/stock tiers
  *  (which can't honestly depict them) skip and we prefer archival imagery. */
@@ -206,6 +287,8 @@ export async function resolveBeatFootage(
     const beat = beats[i]
     const beatIndex = beat.index ?? i
     const query = cueToQuery(beat.visualCue, brief)
+    const archiveQ = archiveQuery(query, brief)
+    const archiveQs = archiveQueryCandidates(query, brief)
     const realSubject = namesRealSubject(beat, brief)
 
     for (const tierName of ladder) {
@@ -218,7 +301,7 @@ export async function resolveBeatFootage(
 
       let out: TierOutput | null = null
       try {
-        out = await tier({ videoId, beat, beatIndex, query, brief, config, dir, dest, realSubject })
+        out = await tier({ videoId, beat, beatIndex, query, archiveQuery: archiveQ, archiveQueries: archiveQs, brief, config, dir, dest, realSubject })
       } catch {
         out = null // a tier must never break the ladder
       }

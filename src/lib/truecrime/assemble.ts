@@ -1,10 +1,12 @@
 // Assemble stage. Builds a 1080×1920 vertical video: a Ken-Burns (zoompan)
 // slideshow over the sourced public-domain images, with the narration as the
 // audio bed. Per-image clips are rendered then concat-muxed — robust and easy
-// to reason about vs. one giant filter_complex. Captions are burned only if the
-// local ffmpeg has the `subtitles`/`drawtext` filter (this build often doesn't);
-// either way captions.json is produced for the Remotion path. If ffmpeg is
-// missing entirely, a timeline plan is written and rendered=false.
+// to reason about vs. one giant filter_complex. Captions are burned from a
+// styled .ass file via the libass-backed `ass`/`subtitles` filter when the
+// local ffmpeg has one; if the burn fails (or the filter is missing — this
+// build often lacks libass) the video still ships, just uncaptioned. Either
+// way captions.json is produced for the Remotion path. If ffmpeg is missing
+// entirely, a timeline plan is written and rendered=false.
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -35,12 +37,19 @@ async function ffmpegAvailable(): Promise<boolean> {
   }
 }
 
-async function hasSubtitlesFilter(): Promise<boolean> {
+/** Pick the best available libass-backed burn filter: `ass` renders the .ass
+ *  file's own styles natively; `subtitles` is the broader fallback name. Null
+ *  when the local build has neither (no libass) — captions then stay unburned.
+ *  Filter names are matched at line start so a filter's description text (e.g.
+ *  "Render ASS subtitles…") can't false-positive the check. */
+async function subtitleBurnFilter(): Promise<'ass' | 'subtitles' | null> {
   try {
     const { stdout } = await exec('ffmpeg', ['-hide_banner', '-filters'])
-    return /\bsubtitles\b/.test(stdout)
+    if (/^\s*[TSC.]+\s+ass\s/m.test(stdout)) return 'ass'
+    if (/^\s*[TSC.]+\s+subtitles\s/m.test(stdout)) return 'subtitles'
+    return null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -101,20 +110,43 @@ async function renderColorClip(dur: number, out: string): Promise<boolean> {
   }
 }
 
-/** Write an SRT next to the output for the optional subtitles burn. */
-async function writeSrt(captions: CaptionsResult, srtPath: string): Promise<void> {
+/** Write a styled .ass caption file next to the output for the burn step:
+ *  bold sans, white fill with a black outline, centred in the lower third
+ *  with safe margins on the 1080×1920 canvas. */
+async function writeAss(captions: CaptionsResult, assPath: string): Promise<void> {
   const fmt = (s: number) => {
-    const ms = Math.round((s % 1) * 1000)
-    const total = Math.floor(s)
-    const hh = String(Math.floor(total / 3600)).padStart(2, '0')
+    // ASS timestamps are H:MM:SS.cc (centiseconds). Round on total centiseconds
+    // so e.g. 1.999s becomes 0:00:02.00 rather than an invalid .100 field.
+    const totalCs = Math.max(0, Math.round(s * 100))
+    const cs = String(totalCs % 100).padStart(2, '0')
+    const total = Math.floor(totalCs / 100)
+    const hh = Math.floor(total / 3600)
     const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0')
     const ss = String(total % 60).padStart(2, '0')
-    return `${hh}:${mm}:${ss},${String(ms).padStart(3, '0')}`
+    return `${hh}:${mm}:${ss}.${cs}`
   }
-  const body = captions.cues
-    .map((c, i) => `${i + 1}\n${fmt(c.startSec)} --> ${fmt(c.endSec)}\n${c.text}\n`)
-    .join('\n')
-  await writeFile(srtPath, body)
+  // Braces would open libass override tags mid-narration; newlines become \N.
+  const clean = (t: string) => t.replace(/[{}]/g, '').replace(/\s*\n\s*/g, '\\N')
+  const header = [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    'PlayResX: 1080',
+    'PlayResY: 1920',
+    'ScaledBorderAndShadow: yes',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    // White (&H00FFFFFF) over a black outline+shadow, Bold (-1), Alignment 2 =
+    // bottom-centre, raised into the lower third by MarginV with 90px side margins.
+    'Style: Caption,Arial,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,90,90,380,1',
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  ]
+  const events = captions.cues.map(
+    (c) => `Dialogue: 0,${fmt(c.startSec)},${fmt(c.endSec)},Caption,,0,0,0,,${clean(c.text)}`
+  )
+  await writeFile(assPath, header.concat(events).join('\n') + '\n')
 }
 
 export async function assembleVideo(
@@ -222,23 +254,41 @@ export async function assembleVideo(
     return { outputPath: null, durationSec: audioDurationSec, rendered: false }
   }
 
-  // 3. Optional caption burn, then mux narration.
+  // 3. Caption burn (best-effort), then mux narration. Any failure preparing
+  // or applying the burn falls back to the uncaptioned mux — the factory must
+  // always ship a video.
   const burnArgs: string[] = []
-  if (await hasSubtitlesFilter()) {
-    const srt = path.join(dir, 'captions.srt')
-    await writeSrt(captions, srt)
-    burnArgs.push('-vf', `subtitles='${srt.replace(/'/g, "'\\''")}'`)
+  try {
+    const burnFilter = await subtitleBurnFilter()
+    if (burnFilter && captions.cues.length > 0) {
+      const assPath = path.join(dir, 'captions.ass')
+      await writeAss(captions, assPath)
+      burnArgs.push('-vf', `${burnFilter}='${assPath.replace(/'/g, "'\\''")}'`)
+    }
+  } catch (err) {
+    console.warn('[truecrime/assemble] caption prep failed, skipping burn:', err)
+    burnArgs.length = 0
   }
 
-  await exec(
-    'ffmpeg',
-    ['-y', '-i', silentVideo, '-i', audioPath, ...burnArgs,
-      '-map', '0:v:0', '-map', '1:a:0',
-      '-c:v', burnArgs.length ? 'libx264' : 'copy', ...(burnArgs.length ? ['-preset', 'fast', '-crf', '21'] : []),
-      '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-      '-movflags', '+faststart', '-shortest', outputPath],
-    { timeout: 300_000 }
-  )
+  const mux = (extra: string[]) =>
+    exec(
+      'ffmpeg',
+      ['-y', '-i', silentVideo, '-i', audioPath, ...extra,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-c:v', extra.length ? 'libx264' : 'copy', ...(extra.length ? ['-preset', 'fast', '-crf', '21'] : []),
+        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-movflags', '+faststart', '-shortest', outputPath],
+      { timeout: 300_000 }
+    )
+
+  try {
+    await mux(burnArgs)
+  } catch (err) {
+    // The plain mux failing is fatal exactly as before; a failed BURN is not.
+    if (burnArgs.length === 0) throw err
+    console.warn('[truecrime/assemble] caption burn failed, retrying without captions:', err)
+    await mux([])
+  }
 
   if (!existsSync(outputPath)) {
     return { outputPath: null, durationSec: audioDurationSec, rendered: false }

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   AbsoluteFill,
   Audio,
@@ -103,13 +104,16 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
 }
 
 // A single still with a slow zoom + pan and short fades at both ends. Direction
-// alternates per image so the motion doesn't feel mechanical.
+// alternates per image so the motion doesn't feel mechanical. If Chromium can't
+// decode the image (corrupt download etc.), `onError` swaps in a styled gradient
+// frame instead of letting <Img> cancel the whole render.
 const KenBurns: React.FC<{ src: string; durationInFrames: number; index: number }> = ({
   src,
   durationInFrames,
   index,
 }) => {
   const frame = useCurrentFrame()
+  const [failed, setFailed] = useState(false)
   const dir = index % 2 === 0 ? 1 : -1
 
   const scale = interpolate(frame, [0, durationInFrames], [1.05, 1.18], {
@@ -128,15 +132,27 @@ const KenBurns: React.FC<{ src: string; durationInFrames: number; index: number 
 
   return (
     <AbsoluteFill style={{ opacity }}>
-      <Img
-        src={src}
-        style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'cover',
-          transform: `scale(${scale}) translateX(${translateX}px)`,
-        }}
-      />
+      {failed ? (
+        <AbsoluteFill
+          style={{
+            background:
+              index % 2 === 0
+                ? 'linear-gradient(160deg, #1c2029 0%, #0c0f14 62%, #05070a 100%)'
+                : 'linear-gradient(200deg, #151a22 0%, #0a0d12 58%, #04060a 100%)',
+          }}
+        />
+      ) : (
+        <Img
+          src={src}
+          onError={() => setFailed(true)}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            transform: `scale(${scale}) translateX(${translateX}px)`,
+          }}
+        />
+      )}
     </AbsoluteFill>
   )
 }
@@ -202,8 +218,10 @@ const KaraokeCaptions: React.FC<{ cues: CaptionCue[] }> = ({ cues }) => {
                 color,
                 lineHeight: 1.04,
                 letterSpacing: '-0.5px',
-                margin: '0 9px',
-                transform: active ? 'scale(1.12)' : 'scale(1)',
+                // 16px per side: the 3px text stroke + the active-word scale
+                // both bleed into the gap, so 9px read as words glued together.
+                margin: '0 16px',
+                transform: active ? 'scale(1.06)' : 'scale(1)',
                 transition: 'none',
                 WebkitTextStroke: '3px #000',
                 textShadow: '0 6px 26px rgba(0,0,0,0.9)',

@@ -11,9 +11,11 @@
 // binaries it pulls in (headless Chromium, esbuild) — never load unless the
 // flag is set and a render actually runs.
 
+import { execFile } from 'child_process'
 import { createReadStream, existsSync, statSync } from 'fs'
 import http from 'http'
 import path from 'path'
+import { promisify } from 'util'
 import type { AddressInfo } from 'net'
 import type { AssembleResult, MomentResult, ScriptResult } from '../tools/types'
 import type { CaptionsResult, RenderResult, ScriptBeat } from '../truecrime/types'
@@ -21,9 +23,47 @@ import { buildBeatTimeline, toCumulativeFrames } from '../truecrime/timeline'
 
 const FPS = 30
 
+const exec = promisify(execFile)
+
 /** True when the operator has opted into the Remotion render engine. */
 export function isRemotionEnabled(): boolean {
   return (process.env.RENDER_ENGINE || '').trim().toLowerCase() === 'remotion'
+}
+
+/** True when a media file's first video frame decodes cleanly. Catches the
+ *  corrupt/truncated downloads (e.g. a bad archive.org thumbnail) that make
+ *  Chromium throw EncodingError inside <Img> and cancel the whole render.
+ *  ffmpeg's decoders conceal damage Chromium refuses (a truncated JPEG exits 0
+ *  with an error-level "overread" log), so any `-v error` output counts as a
+ *  failure too — dropping a borderline asset is the safe direction here. */
+async function isDecodable(filePath: string): Promise<boolean> {
+  try {
+    const { stderr } = await exec(
+      'ffmpeg',
+      ['-v', 'error', '-xerror', '-i', filePath, '-frames:v', '1', '-f', 'null', '-'],
+      { timeout: 30_000 }
+    )
+    return stderr.trim() === ''
+  } catch {
+    return false
+  }
+}
+
+/** Drop inputs that fail the decode probe, warning per dropped asset. Fails
+ *  open (returns the list unchanged) when ffmpeg isn't on PATH so validation
+ *  can never block a render on its own. */
+async function filterDecodable(paths: string[]): Promise<string[]> {
+  if (paths.length === 0) return paths
+  try {
+    await exec('which', ['ffmpeg'])
+  } catch {
+    return paths
+  }
+  const checks = await Promise.all(paths.map((p) => isDecodable(p)))
+  paths.forEach((p, i) => {
+    if (!checks[i]) console.warn('[render/remotion] dropping undecodable asset:', p)
+  })
+  return paths.filter((_, i) => checks[i])
 }
 
 // Cache the bundle promise across renders in this process.
@@ -198,6 +238,20 @@ export async function renderTrueCrime(
   const dir = path.dirname(audioPath)
   const outputPath = path.join(dir, 'final.mp4')
 
+  // Pre-validate every visual input: a single undecodable image/clip makes
+  // Chromium abort the whole Remotion render, so drop bad assets up front —
+  // the timeline below simply redistributes across the survivors.
+  const usableImages = await filterDecodable(imagePaths)
+  let beatFootage = opts?.beatFootage
+  if (beatFootage && Object.keys(beatFootage).length > 0) {
+    const checked = await Promise.all(
+      Object.entries(beatFootage).map(
+        async ([idx, clips]) => [idx, await filterDecodable(clips)] as const
+      )
+    )
+    beatFootage = Object.fromEntries(checked.filter(([, clips]) => clips.length > 0))
+  }
+
   const { renderMedia, selectComposition } = await import('@remotion/renderer')
   const serveUrl = await getServeUrl()
   const fileServer = await serveDirectory(dir)
@@ -216,8 +270,8 @@ export async function renderTrueCrime(
       durationInFrames: number
       inSec: number
     }[] = []
-    if (opts?.beats && opts.beats.length > 0 && opts.beatFootage && Object.keys(opts.beatFootage).length > 0) {
-      const segments = buildBeatTimeline(opts.beats, opts.beatFootage, durationSec)
+    if (opts?.beats && opts.beats.length > 0 && beatFootage && Object.keys(beatFootage).length > 0) {
+      const segments = buildBeatTimeline(opts.beats, beatFootage, durationSec)
       const spans = toCumulativeFrames(segments, FPS)
       beatClips = segments.map((seg, i) => ({
         src: url(seg.assetPath),
@@ -229,7 +283,7 @@ export async function renderTrueCrime(
     }
 
     const inputProps = {
-      imageSrcs: imagePaths.map(url),
+      imageSrcs: usableImages.map(url),
       audioSrc: url(audioPath),
       durationSec,
       cues: captions.cues,

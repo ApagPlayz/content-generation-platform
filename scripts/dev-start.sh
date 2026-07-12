@@ -83,6 +83,9 @@ STATE_FILE=".dev-server.state"
 code_stamp() {
   {
     git rev-parse HEAD 2>/dev/null || echo "no-git"
+    # Hash the CONTENT of uncommitted changes, not just the list of dirty
+    # files — re-editing an already-dirty file must change the stamp too.
+    git diff HEAD 2>/dev/null || true
     git status --porcelain 2>/dev/null || true
     shasum prisma/schema.prisma package-lock.json 2>/dev/null || true
   } | shasum | awk '{print $1}'
