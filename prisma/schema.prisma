@@ -258,6 +258,9 @@ model ComplianceReport {
   id              String   @id @default(cuid())
   videoId         String?
   video           Video?   @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  // Which factory ran the gate (F10 true crime, F11 history/business, …). Keeps
+  // the variation corpus per-factory; existing rows default to F10.
+  factoryType     String   @default("F10")
   caseName        String
   decision        String
   // Per-check rollups so the inbox can render badges without re-parsing `report`.
@@ -273,6 +276,7 @@ model ComplianceReport {
   @@index([videoId])
   @@index([decision])
   @@index([createdAt])
+  @@index([factoryType])
 }
 
 // Provider-agnostic footage cache for the F10 True Crime pipeline. Clips are

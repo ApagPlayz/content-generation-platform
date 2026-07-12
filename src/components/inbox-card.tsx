@@ -15,6 +15,7 @@ const TYPE_META: Record<string, { color: string }> = {
   F8: { color: 'bg-rose-100 text-rose-700' },
   F9: { color: 'bg-indigo-100 text-indigo-700' },
   F10: { color: 'bg-stone-200 text-stone-700' },
+  F11: { color: 'bg-amber-100 text-amber-700' },
 }
 
 // Plain-language rendering of the compliance gate decision.
@@ -75,7 +76,9 @@ export function InboxCard({
   const [publishErr, setPublishErr] = useState<string | null>(null)
   const [permalink, setPermalink] = useState<string | null>(null)
   const tm = TYPE_META[factoryType] ?? { color: 'bg-gray-100 text-gray-600' }
-  const isTrueCrime = factoryType === 'F10'
+  // F10 (True Crime) and F11 (History & Business) both surface the story/case
+  // chip and compliance-gate chips instead of the sports moment/source line.
+  const showsCase = factoryType === 'F10' || factoryType === 'F11'
 
   // Plain-language chips explaining WHY this video is sitting in review.
   const reviewChips: { label: string; color: string }[] = []
@@ -154,7 +157,7 @@ export function InboxCard({
             {factoryType}
           </span>
           <span className="text-xs text-gray-400">{factoryName}</span>
-          {isTrueCrime && caseName ? (
+          {showsCase && caseName ? (
             <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-stone-100 text-stone-700">
               {caseName}
             </span>
@@ -209,7 +212,7 @@ export function InboxCard({
         </p>
       )}
 
-      {!isTrueCrime && (momentStart != null || sourceUrl) && (
+      {!showsCase && (momentStart != null || sourceUrl) && (
         <p className="text-xs text-gray-400 mb-3">
           {momentStart != null && `Moment ${momentStart}s–${momentEnd}s`}
           {momentStart != null && sourceUrl && ' · '}

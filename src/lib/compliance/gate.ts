@@ -10,9 +10,15 @@
 // Order matters: case selection runs first and short-circuits expensive network
 // checks when the case is a hard block. The result is persisted (gateVideoScript)
 // for legal auditability and to feed the variation corpus.
+//
+// The gate is shared across factories via ComplianceProfile (see profile.ts):
+// the default TRUE_CRIME_PROFILE reproduces the original F10 behavior exactly;
+// other profiles (e.g. F11 history/business) relax only the clearly
+// crime-specific heuristics while keeping every hard safety rule.
 
 import { prisma } from '../prisma'
 import type { ComplianceReportJSON, GateDecision, TrueCrimeScript } from './types'
+import { TRUE_CRIME_PROFILE, type ComplianceProfile } from './profile'
 import { evaluateCaseSelection } from './caseSelection'
 import { extractClaims } from './claims'
 import { corroborateClaims, corroboratedFraction, uncorroboratedLoadBearing } from './corroboration'
@@ -24,12 +30,13 @@ import { computeVisualSignature } from './visualSignature'
 
 export async function runComplianceGate(
   script: TrueCrimeScript,
-  opts: { generatedAt: string }
+  opts: { generatedAt: string; profile?: ComplianceProfile }
 ): Promise<ComplianceReportJSON> {
+  const profile = opts.profile ?? TRUE_CRIME_PROFILE
   const visuals = script.visuals ?? []
 
   // ── 1. Case selection (cheap, first, can short-circuit) ──
-  const caseSelection = evaluateCaseSelection(script)
+  const caseSelection = evaluateCaseSelection(script, profile)
   const disclosure = buildDisclosurePlan(visuals)
 
   if (!caseSelection.allowed) {
@@ -58,7 +65,7 @@ export async function runComplianceGate(
 
   const [corroboration, variation] = await Promise.all([
     corroborateClaims(script.caseName, claims),
-    checkVariation(script),
+    checkVariation(script, profile),
   ])
   const defamation = defamationLint(script.narration, script.subjects, legalStatus)
   const visualFlags = visualLint(visuals)
@@ -73,7 +80,7 @@ export async function runComplianceGate(
     failedClaims.length > 0 ||
     !variation.passed ||
     caseSelection.warnings.length > 0 ||
-    (script.targetDurationSec !== undefined && script.targetDurationSec < 60)
+    (script.targetDurationSec !== undefined && script.targetDurationSec < profile.minDurationSec)
 
   let decision: GateDecision = 'pass'
   if (hasDefamationBlock || hasVisualBlock) decision = 'block'
@@ -92,6 +99,7 @@ export async function runComplianceGate(
     summary: buildSummary({
       decision,
       script,
+      profile,
       corroboration,
       failedClaims: failedClaims.length,
       defamation,
@@ -105,6 +113,7 @@ export async function runComplianceGate(
 function buildSummary(a: {
   decision: GateDecision
   script: TrueCrimeScript
+  profile: ComplianceProfile
   corroboration: ComplianceReportJSON['corroboration']
   failedClaims: number
   defamation: ComplianceReportJSON['defamation']
@@ -125,8 +134,11 @@ function buildSummary(a: {
     const v = Math.round((a.variation.visualSimilarity ?? 0) * 100)
     parts.push(`Variation flagged — ${t}% text/structure, ${v}% visual overlap with recent videos.`)
   }
-  if (a.script.targetDurationSec !== undefined && a.script.targetDurationSec < 60)
-    parts.push('Under 60s — earns $0 on TikTok Creator Rewards.')
+  if (
+    a.script.targetDurationSec !== undefined &&
+    a.script.targetDurationSec < a.profile.minDurationSec
+  )
+    parts.push(`Under ${a.profile.minDurationSec}s — earns $0 on TikTok Creator Rewards.`)
   return parts.join(' ')
 }
 
@@ -136,9 +148,10 @@ function buildSummary(a: {
  */
 export async function gateVideoScript(
   script: TrueCrimeScript,
-  opts: { videoId?: string; generatedAt: string }
+  opts: { videoId?: string; generatedAt: string; profile?: ComplianceProfile }
 ): Promise<{ report: ComplianceReportJSON; reportId: string }> {
-  const report = await runComplianceGate(script, { generatedAt: opts.generatedAt })
+  const profile = opts.profile ?? TRUE_CRIME_PROFILE
+  const report = await runComplianceGate(script, { generatedAt: opts.generatedAt, profile })
 
   // Embed a compact signature so future variation checks can read this back —
   // narration + structure for the text/structure axes, plus the rotated style
@@ -160,6 +173,7 @@ export async function gateVideoScript(
   const row = await prisma.complianceReport.create({
     data: {
       videoId: opts.videoId,
+      factoryType: profile.factoryType,
       caseName: report.caseName,
       decision: report.decision,
       caseSelectionOk: report.caseSelection.allowed,

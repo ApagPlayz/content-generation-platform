@@ -14,6 +14,8 @@ const TYPE_META: Record<string, { color: string }> = {
   F7: { color: 'bg-cyan-100 text-cyan-700' },
   F8: { color: 'bg-rose-100 text-rose-700' },
   F9: { color: 'bg-indigo-100 text-indigo-700' },
+  F10: { color: 'bg-stone-200 text-stone-700' },
+  F11: { color: 'bg-amber-100 text-amber-700' },
 }
 
 interface AgentCardProps {

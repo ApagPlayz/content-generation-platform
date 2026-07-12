@@ -9,6 +9,7 @@
 
 import { prisma } from '../prisma'
 import type { ScriptStructure, TrueCrimeScript, VariationVerdict } from './types'
+import { TRUE_CRIME_PROFILE, type ComplianceProfile } from './profile'
 import { tokenize } from './sources'
 import { computeVisualSignature, visualRepetition } from './visualSignature'
 
@@ -60,14 +61,20 @@ interface PriorSig {
  * Compare against recent F10 videos. We persist a script's structure/narration
  * inside the ComplianceReport JSON, so we read prior reports as the corpus.
  */
-export async function checkVariation(script: TrueCrimeScript): Promise<VariationVerdict> {
-  const priors = await loadRecentSignatures()
+export async function checkVariation(
+  script: TrueCrimeScript,
+  profile: ComplianceProfile = TRUE_CRIME_PROFILE
+): Promise<VariationVerdict> {
+  const priors = await loadRecentSignatures(
+    profile.factoryType,
+    profile.variationWindow ?? RECENT_WINDOW
+  )
   if (priors.length === 0) {
     return {
       passed: true,
       maxSimilarity: 0,
       visualSimilarity: 0,
-      reasons: ['No prior F10 videos to compare against.'],
+      reasons: [`No prior ${profile.factoryType} videos to compare against.`],
     }
   }
 
@@ -113,7 +120,7 @@ export async function checkVariation(script: TrueCrimeScript): Promise<Variation
 
   if (!textStructPass) {
     reasons.push(
-      `Structure/narration ${(maxSim * 100).toFixed(0)}% similar to a recent F10 video — risks the ` +
+      `Structure/narration ${(maxSim * 100).toFixed(0)}% similar to a recent ${profile.factoryType} video — risks the ` +
         '"inauthentic content" policy. Add a unique angle, original analysis, and varied structure/visuals.'
     )
   }
@@ -133,11 +140,18 @@ export async function checkVariation(script: TrueCrimeScript): Promise<Variation
   return { passed, maxSimilarity: maxSim, visualSimilarity: maxVisual, reasons }
 }
 
-async function loadRecentSignatures(): Promise<PriorSig[]> {
+async function loadRecentSignatures(
+  factoryType: string = 'F10',
+  window: number = RECENT_WINDOW
+): Promise<PriorSig[]> {
   try {
+    // Same-factory rows ONLY — comparing an F11 history doc against F10 crime
+    // videos (or vice versa) would poison both corpora. All pre-existing rows
+    // default to 'F10', so the default keeps historical behavior.
     const rows = await prisma.complianceReport.findMany({
+      where: { factoryType },
       orderBy: { createdAt: 'desc' },
-      take: RECENT_WINDOW,
+      take: window,
       select: { report: true },
     })
     const sigs: PriorSig[] = []

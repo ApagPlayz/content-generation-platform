@@ -23,6 +23,7 @@ const DEFAULT_PRIVACY = 'unlisted'
 const CATEGORY_BY_FACTORY: Record<string, string> = {
   F9: '17', // Sports highlights
   F10: '22', // True Crime → People & Blogs
+  F11: '27', // History & Business Mini-Docs → Education
   F1: '22', // Reddit stories → People & Blogs
 }
 const DEFAULT_CATEGORY = '22' // People & Blogs
