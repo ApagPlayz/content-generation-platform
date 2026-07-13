@@ -27,7 +27,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 50
-            --allowedTools "Bash(gh:*),Bash(git:*)"
+            --allowedTools "Bash,Read,Write,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,NotebookEdit"
           prompt: |
             You are the weekly SCOUT for ${{ github.repository }}. You never write or change
             code. You find work that is worth doing, and you make the case for it.

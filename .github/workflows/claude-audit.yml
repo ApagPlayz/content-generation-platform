@@ -34,7 +34,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 60
-            --allowedTools "Bash(gh:*),Bash(git:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
+            --allowedTools "Bash,Read,Write,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,NotebookEdit"
           prompt: |
             You are the ADVERSARIAL AUDITOR for PR #${{ github.event.pull_request.number }}
             in ${{ github.repository }}. Your job is to find reasons this PR should NOT be
