@@ -37,4 +37,5 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 40
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
             --append-system-prompt "The person you are replying to is NON-TECHNICAL and is reading on a phone. Answer in plain English, short paragraphs, no jargon. If you changed code, push a claude/ branch and open a PR — never push to main. Read LEARNINGS.md before you start and obey it."

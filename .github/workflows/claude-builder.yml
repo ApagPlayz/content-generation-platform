@@ -55,6 +55,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 80
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
           prompt: |
             You are the nightly BUILDER for ${{ github.repository }}.
 

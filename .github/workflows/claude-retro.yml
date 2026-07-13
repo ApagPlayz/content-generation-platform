@@ -33,6 +33,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 50
+            --allowedTools "Bash(gh:*),Bash(git:*)"
           prompt: |
             You are the RETRO for ${{ github.repository }}'s autonomous improvement loop.
             You improve the loop itself. You do not touch product code.
