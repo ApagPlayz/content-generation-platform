@@ -13,6 +13,18 @@ import type { ScriptBeat, TimelineSegment } from './types'
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff'])
 
+/**
+ * Minimum on-screen hold for a STILL image (round 6 — "scenes changing every
+ * half a second"). Stills used to be sliced by the beat's cutIntervalSec and
+ * round-robined, so a 15.4s beat with cutIntervalSec 1.2 showed its 2 stills
+ * 13 times at 1.18s each. A still now holds ≥ this long and is shown AT MOST
+ * ONCE per beat — when a beat has more stills than fit, the extras are dropped
+ * (fewer images with longer holds beat rapid repeats). Video clips keep their
+ * cutIntervalSec pacing: a moving shot can sustain fast cuts, a static photo
+ * cannot.
+ */
+export const MIN_IMAGE_HOLD_SEC = 5
+
 /** Infer whether a resolved asset is a still image (Ken-Burns) or a video clip. */
 function isImageAsset(assetPath: string): boolean {
   const dot = assetPath.lastIndexOf('.')
@@ -25,10 +37,12 @@ function isImageAsset(assetPath: string): boolean {
  * resolved for each beat (keyed by beat index). Only beats that actually have
  * resolved footage contribute segments; their `targetSeconds` become weights
  * that are proportionally rescaled so the timeline sums to `audioDurationSec`
- * EXACTLY — the voice-sync guarantee. Within a beat the runtime is sliced by
- * `cutIntervalSec` (falling back to one slice per resolved clip) and slices are
- * assigned to the beat's clips round-robin; when the same video clip is reused
- * its `inSec` advances so it plays through rather than replaying the same trim.
+ * EXACTLY — the voice-sync guarantee. Within an all-STILL beat each image is
+ * shown at most once and holds ≥ MIN_IMAGE_HOLD_SEC (see the constant's note);
+ * beats containing video are sliced by `cutIntervalSec` (falling back to one
+ * slice per resolved clip) with slices assigned round-robin; when the same
+ * video clip is reused its `inSec` advances so it plays through rather than
+ * replaying the same trim.
  *
  * Returns [] when there is no usable footage — the caller then degrades to its
  * existing even-split slideshow, so nothing breaks when the footage ladder is
@@ -66,12 +80,23 @@ export function buildBeatTimeline(
       continue
     }
 
-    // Slice the beat by cutIntervalSec; at least one slice per resolved clip so
-    // every clip is shown, at least one slice overall.
-    const cut = beat.cutIntervalSec > 0 ? beat.cutIntervalSec : beatDur
-    let nSlices = Math.round(beatDur / cut)
-    if (!Number.isFinite(nSlices)) nSlices = clips.length
-    nSlices = Math.max(clips.length, nSlices, 1)
+    // Slicing policy (round 6):
+    // • All-still beats: each still shown AT MOST once, held ≥ MIN_IMAGE_HOLD_SEC
+    //   (a single still absorbs the whole beat when it's short). Extras beyond
+    //   what the beat can hold calmly are DROPPED — never repeated or rushed.
+    // • Beats with any video: the original cutIntervalSec slicing, at least one
+    //   slice per clip so every clip is shown.
+    const allStills = clips.every(isImageAsset)
+    let nSlices: number
+    if (allStills) {
+      const maxByHold = Math.max(1, Math.floor(beatDur / MIN_IMAGE_HOLD_SEC))
+      nSlices = Math.min(clips.length, maxByHold)
+    } else {
+      const cut = beat.cutIntervalSec > 0 ? beat.cutIntervalSec : beatDur
+      nSlices = Math.round(beatDur / cut)
+      if (!Number.isFinite(nSlices)) nSlices = clips.length
+      nSlices = Math.max(clips.length, nSlices, 1)
+    }
 
     // Track how far we've already trimmed into each reused video clip.
     const advance: Record<number, number> = {}

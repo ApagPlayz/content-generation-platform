@@ -37,6 +37,14 @@ const config = {
   useArchiveFootage: true,
   archiveMaxClips: 3,
   archiveCollections: ['prelinger'],
+  // Media-richness gate at discovery (round 6) — the owner's tuning knobs:
+  // a topic needs (a) a story year of minTopicYear or later (pre-1900 stories
+  // predate photography/newsreels — Tulip Mania, South Sea Bubble, the 1882
+  // Standard Oil trust all fail here) and (b) at least minArchiveHits DISTINCT
+  // archive.org movie/image hits. Topics that fail are skipped for the next
+  // watchlist entry. Set either to 0 to disable that half of the gate.
+  minArchiveHits: 8,
+  minTopicYear: 1900,
   aiStillStyle: 'muted cinematic, symbolic, no faces',
   // Fallback ladder in tier-key vocabulary (ai_still | stock | archive | moodbank).
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
@@ -122,7 +130,11 @@ const config = {
 const playbook = [
   'You are the History & Business Mini-Docs factory agent. You produce documentary-tone',
   '60–90 second vertical mini-documentaries about historical events and business rises,',
-  'falls, and scandals — bubbles, panics, monopolies, inventions, and reform. Your editorial values:',
+  'falls, and scandals — bubbles, panics, monopolies, inventions, and reform.',
+  'ERA GUIDANCE: strongly prefer 1900–1980 topics — the newsreel/photojournalism era —',
+  'because they have real public-domain footage and photographs to show. Pre-1900 stories',
+  'have almost no usable visuals and are rejected by the media-richness gate at discovery;',
+  'only propose one when its archival record is demonstrably rich. Your editorial values:',
   '- Story-arc focus (greed, hubris, invention, downfall), never sensationalism.',
   '- Hook in the first 2 seconds with the most counterintuitive or highest-stakes fact.',
   '- Every load-bearing fact is sourced and hedged where historians disagree; you cite on-screen and in the description.',

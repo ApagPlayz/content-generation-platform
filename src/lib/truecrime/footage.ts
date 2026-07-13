@@ -334,7 +334,10 @@ export async function resolveBeatFootage(
     ladder.includes('archive') && poolQueries.length
       ? new ArchiveStillPool(poolQueries, {
           collections: config.archiveCollections,
-          beatCount: beats.length,
+          // The pool serves every image SLOT (beats × images per beat) and
+          // over-fetches 3× that internally, so a few dead items can't force
+          // a shortfall (round 6 — no repeats, ever).
+          beatCount: beats.length * maxPerBeat,
           maxClips: config.archiveMaxClips,
         })
       : undefined
@@ -401,8 +404,11 @@ export interface BeatSlot {
  * nothing reaches the result ungated (round-5 regression: the second per-beat
  * still used to bypass all gates). Multi-slot tiers (see MULTI_SLOT_TIERS)
  * are re-invoked while they keep producing and slots remain; other tiers get
- * one shot each. A tier miss or throw simply falls through — never breaks
- * the ladder. Exported (with injectable `tiers`) for tests.
+ * one shot each. The ladder only BACKSTOPS empty beats — once any tier has
+ * produced, lower tiers never top the beat up with filler (round 6: fewer
+ * images with longer holds beat generic padding). A tier miss or throw simply
+ * falls through — never breaks the ladder. Exported (with injectable `tiers`)
+ * for tests.
  */
 export async function walkTierLadder(
   input: Omit<TierInput, 'dest'>,
@@ -425,9 +431,15 @@ export async function walkTierLadder(
       } catch {
         out = null // a tier must never break the ladder
       }
-      if (!out || !out.imagePath) break // tier miss → next tier
+      if (!out || !out.imagePath) break // tier miss
       slots.push({ tierName, out })
     } while (MULTI_SLOT_TIERS.has(tierName) && slots.length < maxPerBeat)
+
+    // No low-tier TOP-UP (round 6): once any tier has produced for this beat,
+    // extra slots are optional — a beat with one strong image held long reads
+    // better than one padded out with a generic fallback clip. Lower tiers
+    // only backstop beats that are still EMPTY.
+    if (slots.length > 0) break
   }
   return slots
 }

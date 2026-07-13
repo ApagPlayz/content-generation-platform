@@ -5,7 +5,7 @@
 // round(totalSeconds * fps) with no cumulative drift.
 
 import { describe, expect, it } from 'vitest'
-import { buildBeatTimeline, toCumulativeFrames } from './timeline'
+import { buildBeatTimeline, MIN_IMAGE_HOLD_SEC, toCumulativeFrames } from './timeline'
 import type { ScriptBeat, TimelineSegment } from './types'
 
 function makeBeat(overrides: Partial<ScriptBeat> = {}): ScriptBeat {
@@ -132,15 +132,95 @@ describe('buildBeatTimeline', () => {
     expect(segments[1].inSec).toBe(0)
   })
 
-  it('ensures every clip gets at least one slice even when cutIntervalSec is very long', () => {
+  it('ensures every VIDEO clip gets at least one slice even when cutIntervalSec is very long', () => {
     const beats = [makeBeat({ index: 0, targetSeconds: 10, cutIntervalSec: 1000 })]
-    const beatFootage = { 0: ['a.jpg', 'b.jpg', 'c.jpg'] }
+    const beatFootage = { 0: ['a.mp4', 'b.mp4', 'c.mp4'] }
     const segments = buildBeatTimeline(beats, beatFootage, 10)
 
     // nSlices = round(10/1000) = 0, but clips.length=3 forces at least 3 slices.
     expect(segments).toHaveLength(3)
-    expect(new Set(segments.map((s) => s.assetPath))).toEqual(new Set(['a.jpg', 'b.jpg', 'c.jpg']))
+    expect(new Set(segments.map((s) => s.assetPath))).toEqual(new Set(['a.mp4', 'b.mp4', 'c.mp4']))
     expect(sumDurations(segments)).toBeCloseTo(10, 9)
+  })
+
+  describe('still-image pacing (round 6 — calm documentary cadence)', () => {
+    /** The exact shape of the round-5 video the owner rejected: 71s narration,
+     *  6 beats with the real seeded targetSeconds/cutIntervalSec, 2 stills per
+     *  beat. The old slicer produced 35 segments (beat 4 alone: 13 cuts of
+     *  1.18s, stills repeating A-B-A-B) — "scenes changing every half a
+     *  second" + "scenes repeating". */
+    function ownerRejectedShape() {
+      const spec: [number, number][] = [
+        [4, 3.5],
+        [9, 3.5],
+        [13, 2.5],
+        [12, 2],
+        [13, 1.2],
+        [9, 2.5],
+      ]
+      const beats = spec.map(([targetSeconds, cutIntervalSec], i) =>
+        makeBeat({ index: i, targetSeconds, cutIntervalSec })
+      )
+      const beatFootage: Record<number, string[]> = {}
+      beats.forEach((b) => {
+        beatFootage[b.index] = [`beat-${b.index}-0.jpg`, `beat-${b.index}-1.jpg`]
+      })
+      return { beats, beatFootage }
+    }
+
+    it('every still holds >= MIN_IMAGE_HOLD_SEC (or its whole short beat) — no sub-second cuts', () => {
+      const { beats, beatFootage } = ownerRejectedShape()
+      const segments = buildBeatTimeline(beats, beatFootage, 71)
+
+      for (const seg of segments) {
+        const beatSegs = segments.filter((s) => s.beatIndex === seg.beatIndex)
+        if (beatSegs.length > 1) {
+          expect(seg.durationSec).toBeGreaterThanOrEqual(MIN_IMAGE_HOLD_SEC)
+        }
+      }
+      expect(sumDurations(segments)).toBeCloseTo(71, 9)
+    })
+
+    it('never shows the same still twice within a beat (no A-B-A-B cycling)', () => {
+      const { beats, beatFootage } = ownerRejectedShape()
+      const segments = buildBeatTimeline(beats, beatFootage, 71)
+
+      for (const b of beats) {
+        const paths = segments.filter((s) => s.beatIndex === b.index).map((s) => s.assetPath)
+        expect(new Set(paths).size).toBe(paths.length)
+      }
+    })
+
+    it('cuts the owner-rejected 35-segment timeline down to ~11 calm holds', () => {
+      const { beats, beatFootage } = ownerRejectedShape()
+      const segments = buildBeatTimeline(beats, beatFootage, 71)
+
+      // Beat 0 (4.73s) holds ONE still; every other beat holds its two stills
+      // once each: 1 + 2*5 = 11 segments, average hold 71/11 ≈ 6.5s (was 2.0s).
+      expect(segments).toHaveLength(11)
+      const avg = 71 / segments.length
+      expect(avg).toBeGreaterThanOrEqual(MIN_IMAGE_HOLD_SEC)
+    })
+
+    it('a short beat with 2 stills shows only the FIRST, held for the whole beat', () => {
+      const beats = [makeBeat({ index: 0, targetSeconds: 4, cutIntervalSec: 1.2 })]
+      const beatFootage = { 0: ['a.jpg', 'b.jpg'] }
+      const segments = buildBeatTimeline(beats, beatFootage, 4)
+
+      expect(segments).toHaveLength(1)
+      expect(segments[0].assetPath).toBe('a.jpg')
+      expect(segments[0].durationSec).toBeCloseTo(4, 9)
+    })
+
+    it('video beats keep their cutIntervalSec pacing — only stills are slowed', () => {
+      const beats = [makeBeat({ index: 0, targetSeconds: 12, cutIntervalSec: 1.5 })]
+      const beatFootage = { 0: ['reel.mp4'] }
+      const segments = buildBeatTimeline(beats, beatFootage, 12)
+
+      // round(12/1.5) = 8 fast video slices — a moving shot sustains fast cuts.
+      expect(segments).toHaveLength(8)
+      expect(segments.every((s) => s.kind === 'video')).toBe(true)
+    })
   })
 
   it('handles rounding edge cases where the duration does not divide evenly by cutIntervalSec', () => {

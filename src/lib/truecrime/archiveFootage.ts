@@ -770,7 +770,8 @@ export interface ArchivePoolDeps {
 export interface ArchivePoolOptions {
   /** archive.org collections to search first. Default ['prelinger']. */
   collections?: string[]
-  /** Beats this pool must serve — drives search breadth and the relaxation trigger. */
+  /** Image SLOTS this pool must serve for the video (beats × images per beat)
+   *  — drives search breadth (3× over-fetch) and the relaxation trigger. */
   beatCount: number
   /** Floor on search rows (mirrors archiveMaxClips). Default MAX_SEARCH_RESULTS. */
   maxClips?: number
@@ -779,24 +780,70 @@ export interface ArchivePoolOptions {
 }
 
 /**
- * Per-video archive.org still pool (video-quality round 3). Searches ONCE per
- * video — walking the topic-anchored query candidates and accumulating
- * distinct identifiers — then hands each beat a DISTINCT item via
- * pickNextIdentifier, so one reel can no longer paper every beat. When the
- * collection-scoped search finds fewer distinct items than beats, the SAME
- * topic/year queries (never looser ones) are re-run against the curated
- * RELAXED_ARCHIVE_COLLECTIONS — not an unscoped search, which round-3
- * verification showed pulls modern junk into historical stories. Scoped hits
- * sit ahead of relaxed hits in the pool, so the pick order is: unused scoped →
- * unused relaxed → least-used repeats (scoped first on ties). Repeated
- * identifiers (pool exhausted) get a beat-suffixed cache variant, so even a
- * repeat shows a different poster frame of the reel — a tasteful repeat beats
- * junk. Items that fail to resolve are marked dead and never retried. Never
- * throws; every miss degrades to null.
+ * Shared broad-to-narrow gather over the query candidates: one pass against
+ * the given collections, then (when still short of `need`) the SAME queries
+ * against the curated RELAXED_ARCHIVE_COLLECTIONS — never unscoped. Dedupes
+ * by identifier, stops as soon as `need` distinct items are found. Used by
+ * ArchiveStillPool and by the discovery media-richness gate so both count
+ * "usable inventory" identically.
+ */
+export async function gatherArchiveDocs(
+  queries: string[],
+  opts: { collections?: string[]; need: number; rows: number },
+  search: ArchivePoolDeps['search'] = archiveSearch
+): Promise<ArchiveDoc[]> {
+  const collections = opts.collections?.length ? opts.collections : ['prelinger']
+  const seen = new Set<string>()
+  const docs: ArchiveDoc[] = []
+  const gather = async (colls: string[]) => {
+    for (const q of queries) {
+      if (docs.length >= opts.need) return
+      for (const doc of await search(q, colls, opts.rows)) {
+        if (!doc.identifier || seen.has(doc.identifier)) continue
+        seen.add(doc.identifier)
+        docs.push(doc)
+      }
+    }
+  }
+  await gather(collections)
+  if (docs.length < opts.need) await gather(RELAXED_ARCHIVE_COLLECTIONS)
+  return docs
+}
+
+/**
+ * Discovery media-richness probe (round 6): how many DISTINCT archive.org
+ * movie/image items exist for a topic's pool queries, counted with exactly
+ * the machinery the footage stage will later use, capped at `need` (early
+ * stop — we only care whether the floor is met, not the true total).
+ */
+export async function countDistinctArchiveItems(
+  queries: string[],
+  opts: { collections?: string[]; need: number },
+  search: ArchivePoolDeps['search'] = archiveSearch
+): Promise<number> {
+  if (!queries.length || opts.need <= 0) return 0
+  const docs = await gatherArchiveDocs(queries, { ...opts, rows: Math.max(opts.need, MAX_SEARCH_RESULTS) }, search)
+  return Math.min(docs.length, opts.need)
+}
+
+/**
+ * Per-video archive.org still pool (rounds 3-6). Searches ONCE per video —
+ * walking the topic-anchored query candidates and accumulating distinct
+ * identifiers via gatherArchiveDocs — then hands each slot a DISTINCT item,
+ * so one reel can never paper multiple slots. When the collection-scoped
+ * search finds fewer distinct items than slots, the SAME topic/year queries
+ * (never looser ones) are re-run against the curated
+ * RELAXED_ARCHIVE_COLLECTIONS — not an unscoped search, which pulls modern
+ * junk into historical stories. Scoped hits sit ahead of relaxed hits, so
+ * unused scoped items are picked before unused relaxed ones. Identifiers are
+ * used AT MOST ONCE per video (round 6): once the pool is exhausted it
+ * returns null and the beat keeps fewer, longer-held images instead of a
+ * repeated scene. Items that fail to resolve are marked dead and never
+ * retried. Never throws; every miss degrades to null.
  */
 export class ArchiveStillPool {
   private docs: ArchiveDoc[] | null = null
-  private readonly useCounts = new Map<string, number>()
+  private readonly used = new Set<string>()
   private readonly dead = new Set<string>()
 
   constructor(
@@ -805,53 +852,40 @@ export class ArchiveStillPool {
     private readonly deps: ArchivePoolDeps = { search: archiveSearch, resolve: resolveDocStill }
   ) {}
 
-  /** One search pass per video, lazily on first acquire. */
+  /** One search pass per video, lazily on first acquire. Over-fetches 3× the
+   *  needed slots (round 6) so junk/unreachable items don't force shortfalls. */
   private async ensureDocs(): Promise<ArchiveDoc[]> {
     if (this.docs) return this.docs
-    const collections = this.opts.collections?.length ? this.opts.collections : ['prelinger']
     const maxClips = this.opts.maxClips && this.opts.maxClips > 0 ? this.opts.maxClips : MAX_SEARCH_RESULTS
-    // Headroom over beatCount: some items will turn out junk/undecodable.
-    const rows = Math.max(maxClips, this.opts.beatCount * 2)
-    const seen = new Set<string>()
-    const docs: ArchiveDoc[] = []
-    const gather = async (colls: string[]) => {
-      for (const q of this.queries) {
-        if (docs.length >= this.opts.beatCount) return
-        for (const doc of await this.deps.search(q, colls, rows)) {
-          if (!doc.identifier || seen.has(doc.identifier)) continue
-          seen.add(doc.identifier)
-          docs.push(doc)
-        }
-      }
-    }
-    await gather(collections)
-    // Too few distinct hits for the beats → relax to the CURATED historical
-    // collections (same topic/year queries — the terms stay mandatory) to
-    // widen the pool before we allow any identifier to repeat. Never unscoped.
-    if (docs.length < this.opts.beatCount) await gather(RELAXED_ARCHIVE_COLLECTIONS)
-    this.docs = docs
-    return docs
+    const rows = Math.max(maxClips, this.opts.beatCount * 3)
+    this.docs = await gatherArchiveDocs(
+      this.queries,
+      { collections: this.opts.collections, need: this.opts.beatCount, rows },
+      this.deps.search
+    )
+    return this.docs
   }
 
-  /** Resolve a still for one beat, preferring never-used identifiers. */
+  /**
+   * Resolve a still for one slot. DISTINCT-ONLY (round 6): every identifier is
+   * used at most once per video — when the pool runs out of unused items this
+   * returns null and the beat simply keeps fewer images with longer holds,
+   * which reads far better than a repeated scene ("scenes repeating" owner
+   * feedback). The old exhaustion behavior (beat-variant repeats) is gone.
+   */
   async acquireStill(beatIndex: number): Promise<ArchiveFootageResult | null> {
     try {
       const docs = await this.ensureDocs()
       for (;;) {
-        const alive = docs.filter((d) => d.identifier && !this.dead.has(d.identifier))
-        const id = pickNextIdentifier(alive.map((d) => d.identifier as string), this.useCounts)
-        if (id == null) return null
-        const doc = alive.find((d) => d.identifier === id) as ArchiveDoc
-        const uses = this.useCounts.get(id) ?? 0
-        // Repeat after exhaustion → beat-suffixed variant = a different frame.
-        const variant = uses > 0 ? `beat${beatIndex}` : undefined
-        const result = await this.deps.resolve(
-          doc,
-          { beatIndex, depictsRealPerson: this.opts.depictsRealPerson },
-          variant
-        )
+        const fresh = docs
+          .map((d) => d.identifier)
+          .filter((id): id is string => !!id && !this.dead.has(id) && !this.used.has(id))
+        const id = pickNextIdentifier(fresh, new Map())
+        if (id == null) return null // pool exhausted — fewer images beat repeats
+        const doc = docs.find((d) => d.identifier === id) as ArchiveDoc
+        const result = await this.deps.resolve(doc, { beatIndex, depictsRealPerson: this.opts.depictsRealPerson })
         if (result) {
-          this.useCounts.set(id, uses + 1)
+          this.used.add(id)
           return result
         }
         this.dead.add(id) // junk/unreachable item — stop retrying it for later beats

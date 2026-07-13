@@ -10,6 +10,12 @@
 // Never invents subjects — the operator's curated metadata is the source of
 // truth the compliance gate relies on.
 
+import {
+  briefMediaRichness,
+  DEFAULT_MIN_ARCHIVE_HITS,
+  DEFAULT_MIN_TOPIC_YEAR,
+  pickMediaRichCandidate,
+} from '../truecrime/caseDiscovery'
 import type { CaseSubject } from '../compliance'
 import type { CuratedTopic, F11FactoryConfig, TopicBrief } from './types'
 
@@ -120,18 +126,9 @@ async function verifyLiving(subjects: CaseSubject[]): Promise<string[]> {
   return warnings
 }
 
-function pickTopic(topics: CuratedTopic[]): CuratedTopic {
-  // Deterministic daily rotation so consecutive runs cover different topics.
-  return topics[new Date().getDate() % topics.length]
-}
-
-export async function discoverTopic(config: F11FactoryConfig): Promise<TopicBrief> {
-  const watchlist = config.topicWatchlist ?? []
-  if (watchlist.length === 0) {
-    throw new Error('F11 factory has no topicWatchlist — add curated topics to the factory config.')
-  }
-
-  const chosen = pickTopic(watchlist)
+/** The Wikipedia/Wikidata enrichment for ONE curated topic — extracted so the
+ *  media-richness gate can enrich candidates while walking the rotation. */
+async function enrichTopic(chosen: CuratedTopic): Promise<TopicBrief> {
   const title = chosen.wikipediaTitle ?? (await resolveTitle(chosen.topicName))
   if (!title) {
     throw new Error(`Could not resolve a Wikipedia article for topic "${chosen.topicName}".`)
@@ -162,4 +159,43 @@ export async function discoverTopic(config: F11FactoryConfig): Promise<TopicBrie
     angle: chosen.angle ?? (chosen.era ? `The story of ${chosen.topicName} in the ${chosen.era}.` : undefined),
     livingWarnings,
   }
+}
+
+export async function discoverTopic(config: F11FactoryConfig): Promise<TopicBrief> {
+  const watchlist = config.topicWatchlist ?? []
+  if (watchlist.length === 0) {
+    throw new Error('F11 factory has no topicWatchlist — add curated topics to the factory config.')
+  }
+
+  // Daily rotation start, then the shared media-richness gate (round 6): each
+  // candidate is enriched (Wikipedia year + facts) and must clear the ERA
+  // floor (default 1900 — pre-photography stories have no real era footage,
+  // whatever a word-overlap search returns) AND the distinct-archive-hits
+  // floor. The first topic that clears both wins — this is what steers F11
+  // toward 1900-1980 newsreel-era stories. Fail-open: when nothing on the
+  // watchlist passes, the plain day-pick proceeds. Enrichments are cached so
+  // the accepted candidate is never fetched twice.
+  const threshold = config.minArchiveHits ?? DEFAULT_MIN_ARCHIVE_HITS
+  const briefs = new Map<CuratedTopic, TopicBrief>()
+  const enrich = async (t: CuratedTopic) => {
+    const cached = briefs.get(t)
+    if (cached) return cached
+    const brief = await enrichTopic(t)
+    briefs.set(t, brief)
+    return brief
+  }
+  const pick = await pickMediaRichCandidate(
+    watchlist,
+    new Date().getDate() % watchlist.length,
+    threshold,
+    async (t) => briefMediaRichness(await enrich(t), config, threshold)
+  )
+  if (!pick.passed) {
+    console.warn(
+      `[discover/f11] no watchlist topic met the media-richness gate (minArchiveHits=${threshold}, ` +
+        `minTopicYear=${config.minTopicYear ?? DEFAULT_MIN_TOPIC_YEAR}); falling back to ` +
+        `"${pick.chosen.topicName}" (${pick.hits} hits). Curate newsreel-era (1900-1980) topics.`
+    )
+  }
+  return enrich(pick.chosen)
 }

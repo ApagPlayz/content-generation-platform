@@ -380,11 +380,11 @@ describe('ArchiveStillPool', () => {
   /** Fake deps: a fixed doc set per (scoped | relaxed) search, every resolve
    *  succeeding unless the identifier is listed in `failing`. */
   function fakeDeps(scoped: string[], relaxed: string[] = [], failing: string[] = []) {
-    const searches: { query: string; collections: string[] }[] = []
+    const searches: { query: string; collections: string[]; rows: number }[] = []
     const resolves: { identifier: string; beatIndex?: number; variant?: string }[] = []
     const deps: ArchivePoolDeps = {
-      search: async (query, collections) => {
-        searches.push({ query, collections })
+      search: async (query, collections, rows) => {
+        searches.push({ query, collections, rows })
         return (isRelaxedSearch(collections) ? relaxed : scoped).map(doc)
       },
       resolve: async (d, opts, variant) => {
@@ -436,13 +436,22 @@ describe('ArchiveStillPool', () => {
     for (const s of searches) expect(queries).toContain(s.query)
   })
 
-  it('prefers unused scoped items, then unused relaxed items, then least-used repeats', async () => {
+  it('prefers unused scoped items, then unused relaxed items — then STOPS (no repeats)', async () => {
     const { deps, resolves } = fakeDeps(['scoped-a'], ['relaxed-b'])
     const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 3 }, deps)
-    for (let beat = 0; beat < 3; beat++) await pool.acquireStill(beat)
-    expect(resolves.map((r) => r.identifier)).toEqual(['scoped-a', 'relaxed-b', 'scoped-a'])
-    // The repeat (beat 2) is the LEAST-used identifier, as a distinct-frame variant.
-    expect(resolves[2].variant).toBe('beat2')
+    const picks = []
+    for (let beat = 0; beat < 3; beat++) picks.push(await pool.acquireStill(beat))
+    expect(resolves.map((r) => r.identifier)).toEqual(['scoped-a', 'relaxed-b'])
+    // Slot 3 gets null — the beat keeps fewer, longer-held images instead of
+    // a repeated scene (round-6 owner feedback: "scenes repeating").
+    expect(picks[2]).toBeNull()
+  })
+
+  it('over-fetches 3x the needed slots so dead items cannot force a shortfall', async () => {
+    const { deps, searches } = fakeDeps(['reel-a', 'reel-b', 'reel-c'])
+    const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 12 }, deps)
+    await pool.acquireStill(0)
+    expect(searches[0].rows).toBe(36) // 12 slots × 3
   })
 
   it('does not relax when the scoped pool already covers every beat', async () => {
@@ -452,23 +461,21 @@ describe('ArchiveStillPool', () => {
     expect(searches.some((s) => s.collections === RELAXED_ARCHIVE_COLLECTIONS)).toBe(false)
   })
 
-  it('repeats only after all distinct hits are exhausted, as a beat-variant frame', async () => {
+  it('NEVER reuses an identifier: exhausted pool returns null for the remaining slots', async () => {
     const { deps, resolves } = fakeDeps(['reel-a', 'reel-b'])
     const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 4 }, deps)
     const picks = []
     for (let beat = 0; beat < 4; beat++) picks.push(await pool.acquireStill(beat))
-    // Beats 0-1 took the two distinct reels with no variant…
-    expect(resolves.slice(0, 2).map((r) => ({ id: r.identifier, variant: r.variant }))).toEqual([
+    // The two distinct reels serve slots 0-1; slots 2-3 stay empty — the video
+    // shows 2 images with longer holds rather than the same reel twice.
+    expect(resolves.map((r) => ({ id: r.identifier, variant: r.variant }))).toEqual([
       { id: 'reel-a', variant: undefined },
       { id: 'reel-b', variant: undefined },
     ])
-    // …and only then do beats 2-3 reuse them, each as a beat-suffixed variant
-    // (a different poster frame of the reel, not the identical cached image).
-    expect(resolves.slice(2).map((r) => ({ id: r.identifier, variant: r.variant }))).toEqual([
-      { id: 'reel-a', variant: 'beat2' },
-      { id: 'reel-b', variant: 'beat3' },
-    ])
-    expect(picks.every(Boolean)).toBe(true)
+    expect(picks[0]).not.toBeNull()
+    expect(picks[1]).not.toBeNull()
+    expect(picks[2]).toBeNull()
+    expect(picks[3]).toBeNull()
   })
 
   it('marks a junk item dead, falls through to the next, and never retries it', async () => {
@@ -584,21 +591,31 @@ describe('walkTierLadder', () => {
     expect(slots[0].out.asset.source).not.toBe(slots[1].out.asset.source)
   })
 
-  it('a single-shot tier (metered API) is never re-invoked; the next tier takes slot 1', async () => {
+  it('a single-shot tier (metered API) is never re-invoked, and lower tiers never top up its beat', async () => {
     const aiCalls: TierInput[] = []
     const moodCalls: TierInput[] = []
     const tiers = { ai_still: fakeTier('ai', 5, aiCalls), moodbank: fakeTier('mood', 5, moodCalls) }
     const slots = await walkTierLadder(baseInput(), ['ai_still', 'moodbank'], tiers, 2, (n) => `/d/${n}.jpg`)
     expect(MULTI_SLOT_TIERS.has('ai_still')).toBe(false)
     expect(aiCalls.length).toBe(1) // one shot only — a repeat would re-spend the API
-    expect(slots.map((s) => s.tierName)).toEqual(['ai_still', 'moodbank'])
+    // Round 6: one strong image held long beats padding the beat with filler.
+    expect(slots.map((s) => s.tierName)).toEqual(['ai_still'])
+    expect(moodCalls.length).toBe(0)
   })
 
-  it('falls through to the next tier when a multi-slot tier runs dry mid-beat', async () => {
-    const tiers = { archive: fakeTier('archive', 1, []), moodbank: fakeTier('mood', 5, []) }
+  it('does NOT top up with a lower tier when a multi-slot tier runs dry mid-beat (fewer > filler)', async () => {
+    const moodCalls: TierInput[] = []
+    const tiers = { archive: fakeTier('archive', 1, []), moodbank: fakeTier('mood', 5, moodCalls) }
     const slots = await walkTierLadder(baseInput(), ['archive', 'moodbank'], tiers, 2, (n) => `/d/${n}.jpg`)
-    expect(slots.map((s) => s.tierName)).toEqual(['archive', 'moodbank'])
-    expect(slots.map((s) => s.out.imagePath)).toEqual(['/d/0.jpg', '/d/1.jpg'])
+    expect(slots.map((s) => s.tierName)).toEqual(['archive'])
+    expect(slots.map((s) => s.out.imagePath)).toEqual(['/d/0.jpg'])
+    expect(moodCalls.length).toBe(0) // the beat is NOT empty — no backstop needed
+  })
+
+  it('lower tiers still BACKSTOP a beat that is completely empty', async () => {
+    const tiers = { archive: fakeTier('archive', 0, []), moodbank: fakeTier('mood', 5, []) }
+    const slots = await walkTierLadder(baseInput(), ['archive', 'moodbank'], tiers, 2, (n) => `/d/${n}.jpg`)
+    expect(slots.map((s) => s.tierName)).toEqual(['moodbank', 'moodbank'])
   })
 
   it('a throwing tier never breaks the ladder', async () => {
