@@ -31,12 +31,54 @@ function pageWords(words: string[], perPage = 3): string[][] {
   return pages
 }
 
+/** True for a token that is ONLY punctuation/symbols — no letter or digit in
+ *  any script. These are the tokens that must never open a caption page. */
+export function isPunctuationOnly(token: string): boolean {
+  return token.length > 0 && !/[\p{L}\p{N}]/u.test(token)
+}
+
+/**
+ * Merge punctuation-only tokens into the previous word ("night" + "," →
+ * "night,") so no downstream page can ever begin with a bare "," or ".".
+ * A punctuation token with no previous word (narration starting "— text")
+ * is stripped — there is nothing sensible to attach it to.
+ */
+export function mergeLeadingPunctuation(words: string[]): string[] {
+  const out: string[] = []
+  for (const w of words) {
+    if (!isPunctuationOnly(w)) out.push(w)
+    else if (out.length) out[out.length - 1] += w
+    // else: leading punctuation with no carrier word — drop it
+  }
+  return out
+}
+
+/**
+ * Same merge for provider word stamps (Kokoro): a punctuation-only "word"
+ * folds its text into the previous stamp and extends that stamp's window, so
+ * karaoke pages keep exact timings but never open on bare punctuation.
+ */
+export function mergePunctuationStamps(words: WordStamp[]): WordStamp[] {
+  const out: WordStamp[] = []
+  for (const w of words) {
+    if (!isPunctuationOnly(w.word)) {
+      out.push({ ...w })
+    } else if (out.length) {
+      const prev = out[out.length - 1]
+      prev.word += w.word
+      prev.endSec = Math.max(prev.endSec, w.endSec)
+    }
+    // else: leading punctuation stamp with no carrier word — drop it
+  }
+  return out
+}
+
 /**
  * Heuristic timing: total audio time is divided across pages in proportion to
  * each page's character count, so longer phrases get more screen time.
  */
-function heuristicCues(narration: string, durationSec: number): CaptionCue[] {
-  const words = narration.split(/\s+/).filter(Boolean)
+export function heuristicCues(narration: string, durationSec: number): CaptionCue[] {
+  const words = mergeLeadingPunctuation(narration.split(/\s+/).filter(Boolean))
   const pages = pageWords(words)
   const weights = pages.map((p) => p.join(' ').length)
   const totalWeight = weights.reduce((a, b) => a + b, 0) || 1
@@ -60,7 +102,7 @@ function round(n: number): number {
  * word-by-word (karaoke) highlighting, and the page's start/end come straight
  * from the real spoken timings rather than a character-weighted estimate.
  */
-function kokoroCues(words: WordStamp[], perPage = 3): CaptionCue[] {
+export function kokoroCues(words: WordStamp[], perPage = 3): CaptionCue[] {
   const cues: CaptionCue[] = []
   for (let i = 0; i < words.length; i += perPage) {
     const page = words.slice(i, i + perPage)
@@ -88,8 +130,12 @@ export async function generateCaptions(
   const captionsPath = path.join(dir, 'captions.json')
 
   // Best path: exact, word-level timings supplied by the TTS provider (Kokoro).
-  if (words && words.length > 0) {
-    const cues = kokoroCues(words)
+  // Punctuation-only stamps are merged into their previous word first so no
+  // caption page ever opens on a bare "," / "." token. If merging leaves
+  // nothing (all-punctuation stamps), fall through to the heuristic path.
+  const stamps = words && words.length > 0 ? mergePunctuationStamps(words) : []
+  if (stamps.length > 0) {
+    const cues = kokoroCues(stamps)
     await writeFile(captionsPath, JSON.stringify({ method: 'kokoro', durationSec, cues }, null, 2))
     return { cues, captionsPath, method: 'kokoro' }
   }

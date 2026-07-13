@@ -88,11 +88,15 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
         <AbsoluteFill style={{ backgroundColor: '#0c0f14' }} />
       )}
 
-      {/* Cinematic darkening so the white captions stay legible over any still. */}
+      {/* Cinematic darkening so the white captions stay legible over any still.
+          Bottom stop measured at 0.70 (was 0.85): on a real dark era still the
+          0.85 stop crushed the bottom third to near-black (YAVG ~30 even after
+          the brighten gate); 0.70 keeps it readable (~37) while the captions'
+          own heavy text-shadow carries the contrast. */}
       <AbsoluteFill
         style={{
           background:
-            'linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 52%, rgba(0,0,0,0.85) 100%)',
+            'linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 52%, rgba(0,0,0,0.70) 100%)',
         }}
       />
 

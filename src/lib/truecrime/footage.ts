@@ -21,6 +21,7 @@
 import { mkdir } from 'fs/promises'
 import path from 'path'
 import { MEDIA_DIR } from './visuals'
+import { ArchiveStillPool } from './archiveFootage'
 import type { VisualAsset } from '../compliance'
 import type { CaseBrief, F10FactoryConfig, F10Script, ScriptBeat } from './types'
 import { aiStillTier } from './footage/aiStill'
@@ -51,6 +52,18 @@ export interface TierInput {
   /** True when the beat's visual cue names a real case subject — AI/stock tiers
    *  must skip so we never imply a synthetic/generic likeness of that person. */
   realSubject: boolean
+  /** Shared per-VIDEO archive.org pool: one search per video, distinct item
+   *  identifiers distributed across beats (video-quality round 3). Optional so
+   *  the archive tier degrades to its per-beat search when a caller omits it. */
+  archivePool?: ArchiveStillPool
+  /** Shared per-VIDEO mood-clip use counts (clip path → uses) so the mood-bank
+   *  tier never repeats a clip across beats while an unused eligible clip
+   *  exists (round 4). Optional; without it the tier keeps its old behavior. */
+  moodUsage?: Map<string, number>
+  /** Which per-beat slot (0-based) this call is filling — set by walkTierLadder
+   *  so a multi-slot tier can vary its output (e.g. a different seek) when it
+   *  fills more than one slot of the same beat. */
+  slot?: number
 }
 
 /** What a tier returns on a hit; null means "skip / miss, try the next tier". */
@@ -221,6 +234,41 @@ export function archiveQueryCandidates(cueQuery: string, brief: CaseBrief): stri
   return out
 }
 
+/** Video-level queries for the per-video archive pool: topic-anchored ONLY
+ *  (topic+year → topic → topic minus one token). Unlike the per-beat
+ *  candidates above there is no bare-year or bare-cue fallback — every pool
+ *  search (scoped AND relaxed) keeps topic terms so a widened search can't
+ *  drift into unrelated items.
+ *
+ *  The single-token-drop variants are the round-4 root-cause fix: archive.org
+ *  ANDs every term, so ONE rare word in the case name zeroes the whole search
+ *  ("breakup standard oil" → 0 hits everywhere while "standard oil" → 51 era
+ *  reels — the exact failure that sent all six Standard Oil beats to the mood
+ *  bank). Only generated when the topic has ≥3 tokens, so every variant still
+ *  carries at least two topic words. Empty when the whole topic strips away
+ *  (all-living-subject case name); the caller then skips the pool and the
+ *  archive tier degrades to its per-beat candidate walk. */
+export function archivePoolQueries(brief: CaseBrief): string[] {
+  const topic = archiveTopic(brief)
+  if (!topic) return []
+  const year = brief.year ? String(brief.year) : ''
+  // dedupeTokens also lowercases, so candidates dedupe cleanly against each
+  // other (archive.org search is case-insensitive anyway).
+  const candidates = [dedupeTokens([topic, year]), dedupeTokens([topic])]
+  const tokens = dedupeTokens([topic]).split(/\s+/).filter(Boolean)
+  if (tokens.length >= 3) {
+    for (let i = 0; i < tokens.length; i++) {
+      candidates.push(tokens.filter((_, j) => j !== i).join(' '))
+    }
+  }
+  const out: string[] = []
+  for (const cand of candidates) {
+    const c = cand.trim()
+    if (c && !out.includes(c)) out.push(c)
+  }
+  return out
+}
+
 /** True when the beat's VISUAL CUE (not narration) names a real case subject —
  *  the signal that this beat wants to *show* that person, so AI/stock tiers
  *  (which can't honestly depict them) skip and we prefer archival imagery. */
@@ -274,6 +322,27 @@ export async function resolveBeatFootage(
     .filter((t) => t !== 'moodbank' || config.moodBankEnabled !== false)
   const maxPerBeat = Math.max(1, config.maxImagesPerBeat ?? 1)
 
+  // One archive.org search per VIDEO (not per beat): the pool distributes
+  // distinct item identifiers across beats so a single reel can no longer
+  // repeat on every beat. Video-level queries are topic-anchored ONLY
+  // (topic+year → topic; see archivePoolQueries) so neither the scoped nor
+  // the relaxed pass can drift off-story. Lazy — no network unless the
+  // archive tier is actually reached. No usable topic → no pool, and the
+  // archive tier degrades to its per-beat candidate walk.
+  const poolQueries = archivePoolQueries(brief)
+  const archivePool =
+    ladder.includes('archive') && poolQueries.length
+      ? new ArchiveStillPool(poolQueries, {
+          collections: config.archiveCollections,
+          beatCount: beats.length,
+          maxClips: config.archiveMaxClips,
+        })
+      : undefined
+
+  // Per-VIDEO mood-clip use counts: the mood-bank tier picks least-used-first
+  // so one clip can no longer paper multiple beats while others sit unused.
+  const moodUsage = new Map<string, number>()
+
   const dir = path.join(MEDIA_DIR, videoId)
   await mkdir(dir, { recursive: true })
 
@@ -291,22 +360,15 @@ export async function resolveBeatFootage(
     const archiveQs = archiveQueryCandidates(query, brief)
     const realSubject = namesRealSubject(beat, brief)
 
-    for (const tierName of ladder) {
-      if ((beatFootage[beatIndex]?.length ?? 0) >= maxPerBeat) break
-      const tier = TIERS[tierName]
-      if (!tier) continue
+    const slots = await walkTierLadder(
+      { videoId, beat, beatIndex, query, archiveQuery: archiveQ, archiveQueries: archiveQs, brief, config, dir, realSubject, archivePool, moodUsage },
+      ladder,
+      TIERS,
+      maxPerBeat,
+      (n) => path.join(dir, `beat-${String(beatIndex).padStart(2, '0')}-${n}.jpg`)
+    )
 
-      const n = beatFootage[beatIndex]?.length ?? 0
-      const dest = path.join(dir, `beat-${String(beatIndex).padStart(2, '0')}-${n}.jpg`)
-
-      let out: TierOutput | null = null
-      try {
-        out = await tier({ videoId, beat, beatIndex, query, archiveQuery: archiveQ, archiveQueries: archiveQs, brief, config, dir, dest, realSubject })
-      } catch {
-        out = null // a tier must never break the ladder
-      }
-      if (!out || !out.imagePath) continue
-
+    for (const { tierName, out } of slots) {
       visuals.push({ ...out.asset, beatIndex })
       imagePaths.push(out.imagePath)
       imageSources.push(tierName)
@@ -316,4 +378,56 @@ export async function resolveBeatFootage(
   }
 
   return { visuals, imagePaths, imageSources, beatFootage, footageSources }
+}
+
+/** Tiers allowed to fill MORE THAN ONE slot of the same beat. Both draw from
+ *  per-video diversity state (the archive pool / the mood-usage map), so a
+ *  second call yields a DIFFERENT reel/clip — which is why a beat's second
+ *  still now comes from a second era reel instead of an ungated fallback
+ *  (round 5). AI/stock tiers stay single-call: a repeat there would re-spend
+ *  a metered API for a near-duplicate. */
+export const MULTI_SLOT_TIERS: ReadonlySet<string> = new Set(['archive', 'moodbank'])
+
+/** One filled slot of a beat: which tier won it and what it produced. */
+export interface BeatSlot {
+  tierName: string
+  out: TierOutput
+}
+
+/**
+ * Walk the tier ladder for ONE beat, filling up to `maxPerBeat` slots. Each
+ * slot's still lands at its own `makeDest(n)` path, and EVERY slot goes
+ * through a tier — i.e. through that tier's full junk/luma/staging pipeline;
+ * nothing reaches the result ungated (round-5 regression: the second per-beat
+ * still used to bypass all gates). Multi-slot tiers (see MULTI_SLOT_TIERS)
+ * are re-invoked while they keep producing and slots remain; other tiers get
+ * one shot each. A tier miss or throw simply falls through — never breaks
+ * the ladder. Exported (with injectable `tiers`) for tests.
+ */
+export async function walkTierLadder(
+  input: Omit<TierInput, 'dest'>,
+  ladder: string[],
+  tiers: Record<string, Tier>,
+  maxPerBeat: number,
+  makeDest: (slot: number) => string
+): Promise<BeatSlot[]> {
+  const slots: BeatSlot[] = []
+  for (const tierName of ladder) {
+    if (slots.length >= maxPerBeat) break
+    const tier = tiers[tierName]
+    if (!tier) continue
+
+    do {
+      const dest = makeDest(slots.length)
+      let out: TierOutput | null = null
+      try {
+        out = await tier({ ...input, dest, slot: slots.length })
+      } catch {
+        out = null // a tier must never break the ladder
+      }
+      if (!out || !out.imagePath) break // tier miss → next tier
+      slots.push({ tierName, out })
+    } while (MULTI_SLOT_TIERS.has(tierName) && slots.length < maxPerBeat)
+  }
+  return slots
 }
