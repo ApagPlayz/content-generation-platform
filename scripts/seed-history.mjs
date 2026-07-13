@@ -23,7 +23,7 @@ const config = {
   // ── Footage / visuals surface. Every new feature is OFF/dormant by default so
   //    the demo pipeline keeps using the Wikimedia public-domain slideshow until
   //    the owner opts in. These document the new config keys downstream stages read.
-  footageEnabled: false,
+  footageEnabled: true,
   maxClipsPerBeat: 2,
   maxImagesPerBeat: 2,
   // AI script writer (Claude) — off until an API key + opt-in are set.
@@ -34,14 +34,14 @@ const config = {
   maxStockClipsPerBeat: 1,
   stockProviders: ['pexels', 'pixabay'],
   // archive.org public-domain footage — off; no key required when enabled.
-  useArchiveFootage: false,
+  useArchiveFootage: true,
   archiveMaxClips: 3,
   archiveCollections: ['prelinger'],
   aiStillStyle: 'muted cinematic, symbolic, no faces',
   // Fallback ladder in tier-key vocabulary (ai_still | stock | archive | moodbank).
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
   // keyless Wikimedia floor — so this is safe with zero API keys.
-  footageLadder: ['ai_still', 'stock', 'archive', 'moodbank'],
+  footageLadder: ['archive', 'stock', 'moodbank'],
   // Named visual styles rotated across videos for variety.
   styleRotation: ['sepia-archival', 'noir-contrast', 'muted-documentary'],
   // Editorial angles rotated to avoid "inauthentic content" sameness.
@@ -49,7 +49,7 @@ const config = {
   styleDivergenceWindow: 5,
   enableEditorialLayer: true,
   // Mood-bank b-roll layer — dormant by default.
-  moodBankEnabled: false,
+  moodBankEnabled: true,
   topicWatchlist: [
     {
       topicName: 'The Ponzi Scheme of 1920',

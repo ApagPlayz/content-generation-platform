@@ -1,12 +1,17 @@
-// Unit tests for the pure footage-query helpers (src/lib/truecrime/footage.ts).
-// cueToQuery and namesRealSubject never touch the network/filesystem — they
-// decide (a) what safe search string a beat's visual cue maps to, and
-// (b) whether a beat's cue names a real case subject (so AI/stock tiers must
-// be skipped for that beat). TIER_ALIASES is the pure synonym table the
-// footage ladder resolves config strings through.
+// Unit tests for the pure footage helpers. cueToQuery, archiveQuery and
+// namesRealSubject (src/lib/truecrime/footage.ts) never touch the
+// network/filesystem — they decide (a) what safe search string a beat's visual
+// cue maps to, (b) what topic+year query the archive.org tier searches with,
+// and (c) whether a beat's cue names a real case subject (so AI/stock tiers
+// must be skipped for that beat). TIER_ALIASES is the pure synonym table the
+// footage ladder resolves config strings through. posterSeekFraction and
+// isAcceptableStill (src/lib/truecrime/archiveFootage.ts) are the pure halves
+// of the junk-still gate: deterministic poster-seek offsets and still stats
+// accept/reject.
 
 import { describe, expect, it } from 'vitest'
-import { cueToQuery, namesRealSubject, TIER_ALIASES } from './footage'
+import { archiveQuery, cueToQuery, namesRealSubject, TIER_ALIASES } from './footage'
+import { isAcceptableStill, MIN_STILL_BYTES, MIN_STILL_DIM, posterSeekFraction } from './archiveFootage'
 import type { CaseBrief } from './types'
 import type { CaseSubject } from '../compliance'
 
@@ -108,6 +113,103 @@ describe('namesRealSubject', () => {
     // contains "Smith" only as a prefix of an unrelated word.
     const beat = beatFixture({ visualCue: 'The blacksmithing shop on Main Street' })
     expect(namesRealSubject(beat, brief)).toBe(false)
+  })
+})
+
+describe('archiveQuery', () => {
+  it('folds the case topic and year into the query (Panic of 1907 regression)', () => {
+    const brief = { ...makeBrief(), caseName: 'The Panic of 1907', year: 1907 }
+    // The generic cue alone ("vintage newspaper macro") found a 1963 school
+    // film; the topic+year anchors the search to the actual story's era.
+    expect(archiveQuery('vintage newspaper macro', brief)).toBe('panic 1907 vintage newspaper macro')
+  })
+
+  it('appends the year when the case name does not already contain it', () => {
+    const brief = { ...makeBrief(), caseName: 'Wall Street Bankers Panic', year: 1907 }
+    expect(archiveQuery('city street at night', brief)).toBe('wall street bankers panic 1907 city at night')
+  })
+
+  it('omits the year cleanly when the brief has none', () => {
+    const brief = { ...makeBrief(), caseName: 'Wall Street Bankers Panic' }
+    expect(archiveQuery('city street at night', brief)).toBe('wall street bankers panic city at night')
+  })
+
+  it('strips a living subject name (and distinctive tokens) from the topic', () => {
+    const brief = {
+      ...makeBrief([makeSubject({ name: 'John Smith', living: true })]),
+      caseName: 'Trial of John Smith',
+      year: 1999,
+    }
+    const q = archiveQuery('empty courtroom interior', brief)
+    expect(q).toBe('trial 1999 empty courtroom interior')
+    expect(q).not.toContain('smith')
+    expect(q).not.toContain('john')
+  })
+
+  it('keeps a subject explicitly marked not-living (historical archive search may use the name)', () => {
+    const brief = {
+      ...makeBrief([makeSubject({ name: 'Jesse James', living: false })]),
+      caseName: 'Jesse James Train Robbery',
+      year: 1873,
+    }
+    expect(archiveQuery('empty road at night', brief)).toBe('jesse james train robbery 1873 empty road at night')
+  })
+
+  it('dedupes tokens shared by the topic and the cue', () => {
+    const brief = { ...makeBrief(), caseName: 'The Panic of 1907', year: 1907 }
+    expect(archiveQuery('panic on wall street', brief)).toBe('panic 1907 on wall street')
+  })
+
+  it('falls back to the atmosphere query when everything strips away', () => {
+    const brief = { ...makeBrief([makeSubject({ name: 'Jane Doe', living: true })]), caseName: 'Jane Doe' }
+    expect(archiveQuery('', brief)).toBe('dark moody atmosphere')
+  })
+})
+
+describe('posterSeekFraction', () => {
+  it('always lands inside the 20-70% window', () => {
+    for (let i = 0; i < 50; i++) {
+      const f = posterSeekFraction(i, `item-${i}`)
+      expect(f).toBeGreaterThanOrEqual(0.2)
+      expect(f).toBeLessThanOrEqual(0.7)
+    }
+  })
+
+  it('is deterministic for the same beat index and seed (no Math.random)', () => {
+    expect(posterSeekFraction(3, 'OneGotFa1963')).toBe(posterSeekFraction(3, 'OneGotFa1963'))
+  })
+
+  it('varies by beat index, so beats grab different frames of the same reel', () => {
+    const fractions = new Set(Array.from({ length: 8 }, (_, i) => posterSeekFraction(i, 'OneGotFa1963')))
+    expect(fractions.size).toBeGreaterThan(1)
+  })
+
+  it('varies by item seed', () => {
+    const fractions = new Set(['reel-a', 'reel-b', 'reel-c', 'reel-d'].map((s) => posterSeekFraction(0, s)))
+    expect(fractions.size).toBeGreaterThan(1)
+  })
+})
+
+describe('isAcceptableStill', () => {
+  it('accepts a normal still', () => {
+    expect(isAcceptableStill({ bytes: 250_000, width: 1280, height: 720 })).toBe(true)
+  })
+
+  it('rejects files under the minimum byte size (thumbnails, truncated downloads)', () => {
+    expect(isAcceptableStill({ bytes: MIN_STILL_BYTES - 1, width: 1280, height: 720 })).toBe(false)
+  })
+
+  it('rejects non-finite sizes', () => {
+    expect(isAcceptableStill({ bytes: Number.NaN, width: 1280, height: 720 })).toBe(false)
+  })
+
+  it('rejects tiny dimensions on either axis', () => {
+    expect(isAcceptableStill({ bytes: 50_000, width: MIN_STILL_DIM - 1, height: 720 })).toBe(false)
+    expect(isAcceptableStill({ bytes: 50_000, width: 1280, height: MIN_STILL_DIM - 1 })).toBe(false)
+  })
+
+  it('treats unknown (null) dimensions as unknown, not a rejection — the ffmpeg decode pass owns corruption', () => {
+    expect(isAcceptableStill({ bytes: 50_000, width: null, height: null })).toBe(true)
   })
 })
 

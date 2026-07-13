@@ -11,6 +11,15 @@
 // the caller (the footage/visuals resolver) just falls through to whatever
 // other sources it has.
 //
+// Junk-still gate: every still (fresh OR cached) must pass validateStillFile
+// — minimum byte size, minimum decoded dimensions, and an actual ffmpeg
+// decode pass — before it's returned. A file whose header parses can still
+// have an undecodable body (the exact failure that crashed a Remotion render
+// and dropped a whole run to the caption-less ffmpeg fallback). Poster frames
+// are grabbed at a deterministic 20–70% offset into the reel (varied by beat
+// index + item id, no Math.random) — never frame 0 / the first seconds, which
+// on archive films are usually title cards, not scenes.
+//
 // License honesty: archive.org's "public domain" framing is per-item, not
 // per-collection — even Prelinger films aren't uniformly PD. We only map to
 // 'public_domain'/'cc0'/'cc_by' when the item's licenseurl/rights/copyright
@@ -25,7 +34,7 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { writeFile } from 'fs/promises'
+import { stat, unlink, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import type { StockClip } from '@prisma/client'
 import type { AssetLicense, VisualAsset } from '../compliance'
@@ -39,8 +48,21 @@ const SEARCH_TIMEOUT_MS = 15_000
 const METADATA_TIMEOUT_MS = 15_000
 const DOWNLOAD_TIMEOUT_MS = 30_000
 const POSTER_TIMEOUT_MS = 45_000
+const VALIDATE_TIMEOUT_MS = 20_000
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024 // 15MB — stills only, never a full video download
 const MAX_SEARCH_RESULTS = 5
+
+/** Minimum byte size for a usable still — anything smaller is a thumbnail or a truncated download. */
+export const MIN_STILL_BYTES = 10 * 1024
+/** Minimum width/height (px) for a usable still — rejects icon-sized junk. */
+export const MIN_STILL_DIM = 200
+
+// Poster frames come from a deterministic 20–70% offset into the reel — the
+// opening seconds of archive films are almost always title cards, not scenes.
+const POSTER_SEEK_MIN_FRACTION = 0.2
+const POSTER_SEEK_MAX_FRACTION = 0.7
+const FALLBACK_SEEK_SEC = 20 // duration unknown → still skip well past the titles
+const RETRY_SEEK_SEC = 5 // last-resort retry offset — never frame 0
 
 const VIDEO_EXT = ['mp4', 'm4v', 'mov', 'mpg', 'mpeg', 'ogv']
 const IMAGE_EXT = ['jpg', 'jpeg', 'png']
@@ -196,19 +218,125 @@ async function ffmpegAvailable(): Promise<boolean> {
   return ffmpegChecked
 }
 
-/** Grabs a single frame straight from the remote URL (ffmpeg can seek a
- *  progressive-served file over HTTP) so we never pull down a whole reel
- *  just to make one still. Skips gracefully if ffmpeg is missing or times out. */
-async function extractPosterFromUrl(url: string, destPath: string): Promise<boolean> {
-  if (!(await ffmpegAvailable())) return false
+/**
+ * Deterministic pseudo-random seek fraction in [POSTER_SEEK_MIN_FRACTION,
+ * POSTER_SEEK_MAX_FRACTION] (20–70%), varied by beat index and item seed so
+ * different beats grab different frames of the same reel across runs — with
+ * no Math.random, so a re-run reproduces the exact same stills. Pure.
+ */
+export function posterSeekFraction(beatIndex: number, seed = ''): number {
+  let h = Math.imul(beatIndex + 1, 2654435761) >>> 0
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(h ^ seed.charCodeAt(i), 16777619) >>> 0
+  }
+  h = (h ^ (h >>> 15)) >>> 0
+  const span = POSTER_SEEK_MAX_FRACTION - POSTER_SEEK_MIN_FRACTION
+  return POSTER_SEEK_MIN_FRACTION + ((h % 1000) / 999) * span
+}
+
+export interface StillStats {
+  bytes: number
+  /** Decoded pixel width, or null when it could not be probed. */
+  width: number | null
+  /** Decoded pixel height, or null when it could not be probed. */
+  height: number | null
+}
+
+/**
+ * Pure accept/reject for a downloaded still's stats: rejects tiny files
+ * (< MIN_STILL_BYTES) and tiny dimensions (< MIN_STILL_DIM px). Unknown (null)
+ * dimensions pass — a failed probe is not proof of junk; the ffmpeg decode
+ * pass in validateStillFile owns corruption detection.
+ */
+export function isAcceptableStill(stats: StillStats): boolean {
+  if (!Number.isFinite(stats.bytes) || stats.bytes < MIN_STILL_BYTES) return false
+  if (stats.width != null && stats.width < MIN_STILL_DIM) return false
+  if (stats.height != null && stats.height < MIN_STILL_DIM) return false
+  return true
+}
+
+async function probeStillDimensions(filePath: string): Promise<{ width: number | null; height: number | null }> {
   try {
-    await exec('ffmpeg', ['-y', '-ss', '2', '-i', url, '-frames:v', '1', '-q:v', '3', destPath], {
-      timeout: POSTER_TIMEOUT_MS,
+    const { stdout } = await exec(
+      'ffprobe',
+      ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', filePath],
+      { timeout: VALIDATE_TIMEOUT_MS }
+    )
+    const [w, h] = stdout.trim().split(',').map((n) => Number(n))
+    return {
+      width: Number.isFinite(w) && w > 0 ? w : null,
+      height: Number.isFinite(h) && h > 0 ? h : null,
+    }
+  } catch {
+    return { width: null, height: null }
+  }
+}
+
+/**
+ * Full junk-still gate: minimum size, minimum decoded dimensions, and an
+ * actual ffmpeg decode pass — a file whose header parses can still have an
+ * undecodable body (the exact failure that crashed a Remotion render).
+ * Fail-closed on fs errors; only the size gate applies when ffmpeg is absent
+ * so keyless/no-ffmpeg machines keep working as before.
+ */
+async function validateStillFile(filePath: string): Promise<boolean> {
+  try {
+    const { size } = await stat(filePath)
+    if (!isAcceptableStill({ bytes: size, width: null, height: null })) return false
+    if (!(await ffmpegAvailable())) return true
+    const dims = await probeStillDimensions(filePath)
+    if (!isAcceptableStill({ bytes: size, width: dims.width, height: dims.height })) return false
+    // Real decode pass — the only reliable corruption check.
+    await exec('ffmpeg', ['-v', 'error', '-i', filePath, '-frames:v', '1', '-f', 'null', '-'], {
+      timeout: VALIDATE_TIMEOUT_MS,
     })
-    return existsSync(destPath)
+    return true
   } catch {
     return false
   }
+}
+
+/** Best-effort duration probe over HTTP so the poster seek can be a fraction
+ *  of the reel; null (unknown) falls back to a fixed post-titles offset. */
+async function probeDurationSec(url: string): Promise<number | null> {
+  try {
+    const { stdout } = await exec(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', url],
+      { timeout: METADATA_TIMEOUT_MS }
+    )
+    const d = Number(stdout.trim())
+    return Number.isFinite(d) && d > 0 ? d : null
+  } catch {
+    return null
+  }
+}
+
+/** Grabs a single frame straight from the remote URL (ffmpeg can seek a
+ *  progressive-served file over HTTP) so we never pull down a whole reel just
+ *  to make one still. Seeks a deterministic 20–70% offset into the reel —
+ *  never frame 0 / the first seconds, which on archive films are usually
+ *  title cards. Skips gracefully if ffmpeg is missing or times out. */
+async function extractPosterFromUrl(url: string, destPath: string, beatIndex = 0, seed = ''): Promise<boolean> {
+  if (!(await ffmpegAvailable())) return false
+  const duration = await probeDurationSec(url)
+  const fraction = posterSeekFraction(beatIndex, seed)
+  const primary =
+    duration != null
+      ? Math.min(Math.max(RETRY_SEEK_SEC, duration * fraction), Math.max(RETRY_SEEK_SEC, duration - 1))
+      : FALLBACK_SEEK_SEC
+  const offsets = primary > RETRY_SEEK_SEC ? [primary, RETRY_SEEK_SEC] : [primary]
+  for (const ss of offsets) {
+    try {
+      await exec('ffmpeg', ['-y', '-ss', ss.toFixed(2), '-i', url, '-frames:v', '1', '-q:v', '3', destPath], {
+        timeout: POSTER_TIMEOUT_MS,
+      })
+      if (existsSync(destPath)) return true
+    } catch {
+      // try the next (earlier) offset — a short reel may not reach the primary seek
+    }
+  }
+  return false
 }
 
 async function downloadImageFile(url: string, destPath: string): Promise<boolean> {
@@ -219,8 +347,24 @@ async function downloadImageFile(url: string, destPath: string): Promise<boolean
     if (len && len > MAX_IMAGE_BYTES) return false
     const buf = Buffer.from(await res.arrayBuffer())
     if (buf.byteLength > MAX_IMAGE_BYTES) return false
-    await writeFile(destPath, buf)
-    return true
+    // archive.org serves stills in formats headless Chromium can't decode
+    // (progressive/CMYK JPEG, TIFF, JP2) — ffmpeg accepts them, so validation
+    // passes but the Remotion render blanks out. Re-encode every still to a
+    // baseline JPEG so what validation approves, Chromium can also draw.
+    const rawPath = `${destPath}.raw`
+    await writeFile(rawPath, buf)
+    try {
+      await exec('ffmpeg', ['-y', '-i', rawPath, '-frames:v', '1', '-pix_fmt', 'yuvj420p', '-q:v', '3', destPath], {
+        timeout: VALIDATE_TIMEOUT_MS,
+      })
+      if (existsSync(destPath)) return true
+      // ffmpeg couldn't transcode (or is missing): keep the raw bytes as-is —
+      // validation downstream still gets its chance to reject them.
+      await writeFile(destPath, buf)
+      return true
+    } finally {
+      await unlink(rawPath).catch(() => {})
+    }
   } catch {
     return false
   }
@@ -251,8 +395,9 @@ function assetFromCache(cached: StockClip): VisualAsset {
 /**
  * Finds and downloads a public-domain/archive.org still for a beat query,
  * caching it in StockClip so a repeat query never re-fetches. Returns null
- * on any miss (no results, network failure, ffmpeg unavailable/failed) —
- * never throws, so the caller can always fall through to another source.
+ * on any miss (no results, network failure, ffmpeg unavailable/failed,
+ * junk/undecodable still) — never throws, so the caller can always fall
+ * through to another source.
  */
 export async function fetchArchiveClipForBeat(
   query: string,
@@ -267,22 +412,28 @@ export async function fetchArchiveClipForBeat(
       const identifier = doc.identifier
       if (!identifier) continue
 
-      // 1. Cache check — reuse a prior download for this identifier if the file is still on disk.
+      // 1. Cache check — reuse a prior download for this identifier if the file
+      //    is still on disk AND still passes the junk-still gate. A stale corrupt
+      //    still (title card grab, truncated download) is purged so the fresh
+      //    path below re-fetches it with the new seek/validation logic.
       const cached = await findCachedClip(SOURCE, identifier)
       if (cached && existsSync(cached.localPath)) {
-        const beatsUsed = mergeBeats(cached, opts.beatIndex)
-        await recordStockClip({
-          source: SOURCE,
-          externalId: identifier,
-          localPath: cached.localPath,
-          width: cached.width,
-          height: cached.height,
-          durationSec: cached.durationSec,
-          license: cached.license,
-          attribution: cached.attribution,
-          beatsUsed,
-        })
-        return { visual: assetFromCache(cached), localPath: cached.localPath }
+        if (await validateStillFile(cached.localPath)) {
+          const beatsUsed = mergeBeats(cached, opts.beatIndex)
+          await recordStockClip({
+            source: SOURCE,
+            externalId: identifier,
+            localPath: cached.localPath,
+            width: cached.width,
+            height: cached.height,
+            durationSec: cached.durationSec,
+            license: cached.license,
+            attribution: cached.attribution,
+            beatsUsed,
+          })
+          return { visual: assetFromCache(cached), localPath: cached.localPath }
+        }
+        await unlink(cached.localPath).catch(() => {})
       }
 
       // 2. Resolve a downloadable file from the item's metadata.
@@ -295,8 +446,17 @@ export async function fetchArchiveClipForBeat(
       const destPath = stockClipPath(SOURCE, identifier, 'jpg')
 
       const url = fileUrl(identifier, file.name)
-      const posterOk = doc.mediatype === 'image' ? await downloadImageFile(url, destPath) : await extractPosterFromUrl(url, destPath)
+      const posterOk =
+        doc.mediatype === 'image'
+          ? await downloadImageFile(url, destPath)
+          : await extractPosterFromUrl(url, destPath, opts.beatIndex ?? 0, identifier)
       if (!posterOk) continue // try the next candidate rather than giving up entirely
+
+      // 3. Junk-still gate — a corrupt/tiny still falls through to the next candidate.
+      if (!(await validateStillFile(destPath))) {
+        await unlink(destPath).catch(() => {})
+        continue
+      }
 
       const license = mapArchiveLicense(doc, meta)
       const attribution = buildAttribution(doc, meta)
@@ -316,7 +476,7 @@ export async function fetchArchiveClipForBeat(
         localPath: destPath,
         license,
         attribution,
-        beatsUsed: mergeBeats(null, opts.beatIndex),
+        beatsUsed: mergeBeats(cached, opts.beatIndex),
       })
 
       return { visual, localPath: destPath }

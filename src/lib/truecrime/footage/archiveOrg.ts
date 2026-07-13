@@ -9,16 +9,24 @@ import { existsSync } from 'fs'
 import { fetchArchiveClipForBeat } from '../archiveFootage'
 import type { Tier } from '../footage'
 
-export const archiveTier: Tier = async ({ query, beatIndex, config }) => {
+export const archiveTier: Tier = async ({ query, archiveQuery, archiveQueries, beatIndex, config }) => {
   try {
-    const result = await fetchArchiveClipForBeat(query, {
-      collections: config.archiveCollections,
-      beatIndex,
-      maxClips: config.archiveMaxClips,
-    })
-    if (!result || !result.localPath || !existsSync(result.localPath)) return null
-
-    return { imagePath: result.localPath, asset: { ...result.visual, beatIndex } }
+    // Walk the broad-to-narrow query candidates (topic+year+cue → topic+year →
+    // topic → era+mood → bare cue). archive.org ANDs every term, so the most
+    // specific query frequently has zero hits while a broader one lands era
+    // newsreels — stop at the first candidate that yields a usable still.
+    const candidates = archiveQueries?.length ? archiveQueries : [archiveQuery ?? query]
+    for (const q of candidates) {
+      const result = await fetchArchiveClipForBeat(q, {
+        collections: config.archiveCollections,
+        beatIndex,
+        maxClips: config.archiveMaxClips,
+      })
+      if (result && result.localPath && existsSync(result.localPath)) {
+        return { imagePath: result.localPath, asset: { ...result.visual, beatIndex } }
+      }
+    }
+    return null
   } catch {
     return null
   }

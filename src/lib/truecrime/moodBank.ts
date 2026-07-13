@@ -72,11 +72,14 @@ export interface MoodClipResult {
 // it lands on the stock/archive tier (which searches CUE_QUERY_MAP's query
 // text) or falls all the way to this local moodbank tier.
 const KEYWORD_CATEGORIES: { category: MoodCategory; keywords: string[] }[] = [
+  // NOTE: 'rain' (and the other nature categories) must stay reachable ONLY via
+  // genuine weather/atmosphere words — finance/urban cues map to the
+  // document-ish and urban categories below, never to botanical b-roll.
   { category: 'rain', keywords: ['rain', 'storm', 'downpour', 'thunder', 'drizzle'] },
   { category: 'foggy-house', keywords: ['fog', 'foggy', 'mist', 'misty', 'haunt', 'eerie house', 'abandoned house'] },
   { category: 'police-lights', keywords: ['police', 'siren', 'patrol', 'squad car', 'cruiser', 'flashing light'] },
-  { category: 'newspaper-macro', keywords: ['newspaper', 'headline', 'newsprint', 'press clipping', 'front page'] },
-  { category: 'night-street', keywords: ['night street', 'city at night', 'downtown', 'urban night', 'streetlight'] },
+  { category: 'newspaper-macro', keywords: ['newspaper', 'headline', 'newsprint', 'press clipping', 'front page', 'stock', 'market', 'money', 'bank', 'financ', 'economy', 'ledger'] },
+  { category: 'night-street', keywords: ['night street', 'city at night', 'downtown', 'urban night', 'streetlight', 'panic', 'crash', 'city', 'crowd', 'factory', 'industry', 'wall street'] },
   { category: 'courtroom', keywords: ['courtroom', 'court room', 'trial', 'judge', 'gavel', 'verdict', 'jury'] },
   { category: 'prison', keywords: ['jail', 'prison', 'cell block', 'inmate', 'penitentiary', 'behind bars'] },
   { category: 'forest', keywords: ['forest', 'woods', 'wooded', 'tree line', 'wilderness trail'] },
@@ -100,6 +103,13 @@ export async function loadMoodBank(): Promise<MoodClipEntry[]> {
     return []
   }
 }
+
+// Nature/botanical atmosphere only ever fits genuine weather/outdoor cues —
+// never pick it as a generic fallback (jungle rain behind a financial-panic
+// beat reads as a mistake). When a cue matches nothing, prefer these neutral
+// categories, in order, before touching anything else in the bank.
+const NATURE_CATEGORIES = new Set<MoodCategory>(['rain', 'forest', 'still-water'])
+const NEUTRAL_FALLBACK_CATEGORIES: MoodCategory[] = ['night-street', 'foggy-house', 'newspaper-macro', 'highway-night']
 
 function mapCategory(cueOrCategory: string): MoodCategory | null {
   const s = cueOrCategory.toLowerCase()
@@ -127,9 +137,11 @@ function toVisualAsset(entry: MoodClipEntry, beatIndex?: number): VisualAsset {
 /**
  * Picks up to `max` mood clips matching a beat's visualCue or an explicit
  * category name. Matches (in order): an exact/keyword category hit, then a
- * direct substring match against any entry's category or tags. Returns []
- * when the bank is empty or nothing matches — callers should treat this as
- * "no generic atmosphere available, keep using the primary footage source".
+ * direct substring match against any entry's category or tags, then the
+ * neutral fallback categories, then any non-nature clip. Candidates are
+ * rotated by `beatIndex` for a deterministic spread. Returns [] only when
+ * the bank itself is empty — callers should treat this as "no generic
+ * atmosphere available, keep using the primary footage source".
  */
 export async function selectMoodClips(
   cueOrCategory: string,
@@ -146,7 +158,23 @@ export async function selectMoodClips(
     ? bank.filter((e) => e.category === category)
     : bank.filter((e) => e.category.toLowerCase().includes(needle) || (e.tags ?? []).some((t) => needle.includes(t.toLowerCase()) || t.toLowerCase().includes(needle)))
 
-  if (matches.length === 0) matches = bank // last resort: any generic atmosphere beats none at all
+  // No thematic hit: fall back to the neutral categories (in preference
+  // order), then to anything non-nature; the whole bank is the true last
+  // resort only when nothing else is populated.
+  if (matches.length === 0) {
+    for (const neutral of NEUTRAL_FALLBACK_CATEGORIES) {
+      matches = bank.filter((e) => e.category === neutral)
+      if (matches.length > 0) break
+    }
+  }
+  if (matches.length === 0) matches = bank.filter((e) => !NATURE_CATEGORIES.has(e.category))
+  if (matches.length === 0) matches = bank
+
+  // Deterministic tie-break: rotate the candidate list by beat index so
+  // consecutive beats sharing a category spread across its clips without
+  // any randomness.
+  const offset = matches.length > 0 ? Math.max(0, beatIndex ?? 0) % matches.length : 0
+  matches = matches.slice(offset).concat(matches.slice(0, offset))
 
   return matches.slice(0, Math.max(0, max)).map((entry) => ({
     path: path.join(MOOD_BANK_CLIPS_DIR, entry.file),
