@@ -1,0 +1,44 @@
+name: Loop — Metrics
+
+# Pure bash + node. No agent, no tokens, ~30 seconds a day.
+# Recomputes the loop's scorecard from GitHub's own record and commits it.
+# Also runs immediately whenever a PR is merged or closed, so the dashboard is never stale.
+
+on:
+  schedule:
+    - cron: "0 11 * * *" # 07:00 America/New_York, before you look at your phone
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Recompute the scorecard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/loop-metrics.mjs
+
+      - name: Commit if it changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add metrics/loop-metrics.json LOOP-DASHBOARD.md
+          git diff --staged --quiet && echo "No change." && exit 0
+          git commit -m "chore(loop): update metrics dashboard [skip ci]"
+          git push

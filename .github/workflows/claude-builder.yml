@@ -1,0 +1,93 @@
+name: Claude — Builder (implements approved issues)
+
+# Runs nightly at 3am ET. Picks the oldest issue YOU labeled `approved` and builds it.
+# Two hard gates mean it costs ~1 minute and does nothing unless you have approved work,
+# so the nightly schedule is cheap.
+# You can also start it by hand: Actions tab -> this workflow -> Run workflow.
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 03:00 America/New_York
+  workflow_dispatch:
+
+concurrency:
+  group: builder-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Cheap pre-flight in plain bash so we never boot an expensive agent for nothing.
+      - name: Check the queue
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          open_claude_prs=$(gh pr list --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("claude/"))] | length')
+          approved=$(gh issue list --state open --label approved --json number --jq 'length')
+          echo "Open claude/ PRs: $open_claude_prs | Approved issues waiting: $approved"
+          if [ "$open_claude_prs" -gt 0 ]; then
+            echo "An agent PR is still open — standing down (one at a time)."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ "$approved" -eq 0 ]; then
+            echo "Nothing approved — standing down. The loop is inert by design."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.go == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --model opus
+            --max-turns 80
+          prompt: |
+            You are the nightly BUILDER for ${{ github.repository }}.
+
+            Read CLAUDE.md and LEARNINGS.md before writing a single line. LEARNINGS.md is the
+            record of mistakes this loop has already made — do not repeat them.
+
+            PICK: take the OLDEST open issue labeled `approved`. Only that one. Never invent
+            your own work; the owner decides what gets built.
+
+            PLAN: restate the issue as an explicit acceptance checklist before coding.
+
+            BUILD (spend tokens here — this is the point):
+            - Use the Task tool to spawn THREE agents in parallel, each proposing a different
+              implementation approach for this issue.
+            - Judge the three against: smallest honest diff, best fit with existing repo style,
+              easiest for a non-technical owner to verify by clicking around.
+            - Implement the winner, grafting in the best ideas from the other two.
+            - Keep the change SMALL. Large changesets are the single best predictor of
+              breakage. If the issue is genuinely big, implement the smallest useful slice and
+              say in the PR what you deliberately left out.
+            - Write or update tests for what you changed.
+
+            VERIFY: run the build and the full test suite. They must pass. If they do not pass
+            after honest effort, do NOT open a PR — comment on the issue explaining exactly what
+            blocked you, in plain English, and stop. A blocked run that says so is a success.
+            A green-looking broken PR is a failure.
+
+            SHIP: open ONE pull request from a `claude/` branch with `Closes #<issue>` in the
+            body. Write the description for a NON-TECHNICAL owner reading on a phone:
+              1. What changed
+              2. Why it matters
+              3. How to check it works — click by click
+              4. What could break
+
+            Never push to main. Never merge your own PR. Never report tests green that you did
+            not watch pass.

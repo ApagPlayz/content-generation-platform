@@ -91,3 +91,8 @@ If you (the user) want the output in this chat, type: `! npm run go`
 Use the Playwright MCP tools (plugin enabled) to drive `http://localhost:3000` and take
 screenshots, or the `/verify` skill. Reference UI screenshots live in the repo root
 (`dashboard-overview.png`, `landing-page.png`, etc.).
+
+## Before you start: read LEARNINGS.md
+`LEARNINGS.md` records mistakes previously made on this repo. Read it first and do not
+repeat them. It is maintained by the weekly retro (see `docs/AUTONOMOUS-LOOP.md`) and only
+changes through a pull request the owner merges.

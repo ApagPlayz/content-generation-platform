@@ -1,0 +1,68 @@
+name: Claude — Auditor (adversarial PR review)
+
+# Every PR is torn apart by an INDEPENDENT agent before the owner ever sees it.
+# This is where tokens are deliberately spent: five parallel reviewers, each with a
+# different lens, then a verification pass that throws out anything unsubstantiated.
+# Goal: the owner should only ever be handed PRs that are actually safe to merge.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# A new push supersedes an in-flight audit of the same PR — don't pay twice.
+concurrency:
+  group: audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --model opus
+            --max-turns 60
+          prompt: |
+            You are the ADVERSARIAL AUDITOR for PR #${{ github.event.pull_request.number }}
+            in ${{ github.repository }}. Your job is to find reasons this PR should NOT be
+            merged. Assume it is subtly broken until you prove otherwise.
+
+            Read LEARNINGS.md first — it lists mistakes this loop has made before. Check for
+            repeats of them specifically.
+
+            Use the Task tool to spawn FIVE reviewers IN PARALLEL, one per lens:
+              1. Correctness  — does it do what the PR claims? Trace the logic. Find the bug.
+              2. Regression   — what existing behavior breaks? Check every caller and import.
+              3. Security     — secrets, injection, authz, unsafe deps, exposed endpoints.
+              4. Tests        — is it really covered? Name the failing case this PR misses.
+              5. Simplicity   — dead code, duplication, over-engineering, style mismatch.
+
+            Then VERIFY each finding yourself before reporting it. Reproduce it in the code.
+            Discard anything you cannot pin to a specific file:line WITH a concrete failure
+            scenario. A false alarm wastes the owner's trust and is worse than a missed nit.
+
+            Run the build and the test suite. Report what you actually observed. NEVER claim
+            green if you did not see green.
+
+            Post ONE review comment on the PR, exactly this shape:
+
+              **Verdict:** SHIP / FIX FIRST / DO NOT MERGE
+              **Plain English:** 3 lines a non-technical owner can act on.
+              **Blocking issues:** numbered; each with file:line and the fix.
+              **Non-blocking:** short list.
+              **Tests:** what you ran and what happened.
+
+            If it is genuinely good, say SHIP and keep it short. Do not manufacture findings
+            to look thorough — an auditor that cries wolf gets ignored, and then it is useless.
