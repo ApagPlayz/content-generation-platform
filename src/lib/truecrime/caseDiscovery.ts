@@ -1,8 +1,11 @@
-// Discover stage. Picks one curated case (rotated by day) and enriches it with
-// real facts from Wikipedia (REST summary) and a Wikidata sanity-check on each
-// subject's living status. Never invents subjects — the operator's curated
-// metadata is the source of truth the compliance gate relies on.
+// Discover stage. Picks one curated case (rotated by day, gated on MEDIA
+// RICHNESS — see pickMediaRichCandidate) and enriches it with real facts from
+// Wikipedia (REST summary) and a Wikidata sanity-check on each subject's
+// living status. Never invents subjects — the operator's curated metadata is
+// the source of truth the compliance gate relies on.
 
+import { countDistinctArchiveItems } from './archiveFootage'
+import { archivePoolQueries } from './footage'
 import type { CaseSubject } from '../compliance'
 import type { CaseBrief, CuratedCase, F10FactoryConfig } from './types'
 
@@ -111,18 +114,89 @@ async function verifyLiving(subjects: CaseSubject[]): Promise<string[]> {
   return warnings
 }
 
-function pickCase(cases: CuratedCase[]): CuratedCase {
-  // Deterministic daily rotation so consecutive runs cover different cases.
-  return cases[new Date().getDate() % cases.length]
+/** Default media-richness floor: a case/topic needs at least this many
+ *  DISTINCT archive.org movie/image hits to be accepted at discovery.
+ *  Owner-tunable per factory via config.minArchiveHits (0 disables). */
+export const DEFAULT_MIN_ARCHIVE_HITS = 8
+
+export interface MediaRichPick<T> {
+  chosen: T
+  /** Distinct archive hits counted for the chosen candidate (capped at the threshold). */
+  hits: number
+  /** False when NO candidate met the floor and we fell back to the day-pick. */
+  passed: boolean
 }
 
-export async function discoverCase(config: F10FactoryConfig): Promise<CaseBrief> {
-  const watchlist = config.caseWatchlist ?? []
-  if (watchlist.length === 0) {
-    throw new Error('F10 factory has no caseWatchlist — add curated cases to the factory config.')
+/**
+ * Media-richness selection (round 6): starting from the daily-rotation index,
+ * walk the watchlist and pick the FIRST candidate with at least `threshold`
+ * distinct archive.org hits — so the factory naturally lands on
+ * well-documented (newsreel-era) stories instead of an 1637/1720/1882 topic
+ * with no usable era footage. threshold ≤ 0 disables the gate (plain
+ * day-pick). FAIL-OPEN: when no candidate passes, the original day-pick is
+ * returned with passed=false — the factory keeps producing, it just can't do
+ * better than its watchlist. Generic + injectable counter so both F10 and F11
+ * discovery share it and tests can fake the archive.
+ */
+export async function pickMediaRichCandidate<T>(
+  candidates: T[],
+  startIndex: number,
+  threshold: number,
+  countHits: (candidate: T) => Promise<number>
+): Promise<MediaRichPick<T>> {
+  const dayPick = candidates[startIndex % candidates.length]
+  if (threshold <= 0) return { chosen: dayPick, hits: 0, passed: true }
+  let dayPickHits = 0
+  for (let i = 0; i < candidates.length; i++) {
+    const cand = candidates[(startIndex + i) % candidates.length]
+    let hits = 0
+    try {
+      hits = await countHits(cand)
+    } catch {
+      hits = 0 // a flaky probe must never dead-end discovery
+    }
+    if (i === 0) dayPickHits = hits
+    if (hits >= threshold) return { chosen: cand, hits, passed: true }
   }
+  return { chosen: dayPick, hits: dayPickHits, passed: false }
+}
 
-  const chosen = pickCase(watchlist)
+/** Default era floor: stories set before this year predate photography and
+ *  newsreels — no real era footage exists for them, whatever a word-overlap
+ *  search returns ("south sea" finds tropical travelogues, not the 1720
+ *  bubble). Owner-tunable per factory via config.minTopicYear (0 disables). */
+export const DEFAULT_MIN_TOPIC_YEAR = 1900
+
+/** Pure era check for an enriched brief's year: unknown years pass (we can't
+ *  judge them — the media-richness count is then the only gate). */
+export function passesEraFloor(year: number | undefined, minYear: number): boolean {
+  if (minYear <= 0 || year == null) return true
+  return year >= minYear
+}
+
+/**
+ * Count an ENRICHED brief's distinct archive.org inventory with the SAME
+ * topic-anchored pool queries the footage stage will later run (the brief's
+ * Wikipedia-extracted year sharpens the search), era-gated first: a story
+ * older than the era floor scores 0 outright — pre-photography topics can
+ * only match on word overlap, never on real era footage.
+ */
+export function briefMediaRichness(
+  brief: CaseBrief,
+  config: F10FactoryConfig,
+  threshold: number
+): Promise<number> {
+  const minYear = config.minTopicYear ?? DEFAULT_MIN_TOPIC_YEAR
+  if (!passesEraFloor(brief.year, minYear)) return Promise.resolve(0)
+  return countDistinctArchiveItems(archivePoolQueries(brief), {
+    collections: config.archiveCollections,
+    need: threshold,
+  })
+}
+
+/** The Wikipedia/Wikidata enrichment for ONE curated case — extracted so the
+ *  media-richness gate can enrich candidates while walking the rotation. */
+async function enrichCase(chosen: CuratedCase): Promise<CaseBrief> {
   const title = chosen.wikipediaTitle ?? (await resolveTitle(chosen.caseName))
   if (!title) {
     throw new Error(`Could not resolve a Wikipedia article for case "${chosen.caseName}".`)
@@ -150,4 +224,40 @@ export async function discoverCase(config: F10FactoryConfig): Promise<CaseBrief>
     angle: chosen.angle,
     livingWarnings,
   }
+}
+
+export async function discoverCase(config: F10FactoryConfig): Promise<CaseBrief> {
+  const watchlist = config.caseWatchlist ?? []
+  if (watchlist.length === 0) {
+    throw new Error('F10 factory has no caseWatchlist — add curated cases to the factory config.')
+  }
+
+  // Daily rotation start, then the media-richness gate (round 6) walks the
+  // watchlist: each candidate is enriched (Wikipedia year + facts) and must
+  // clear the era floor AND the distinct-archive-hits floor; the first that
+  // does wins. Fail-open to the plain day-pick when none do. Enrichments are
+  // cached so the accepted candidate is never fetched twice.
+  const threshold = config.minArchiveHits ?? DEFAULT_MIN_ARCHIVE_HITS
+  const briefs = new Map<CuratedCase, CaseBrief>()
+  const enrich = async (c: CuratedCase) => {
+    const cached = briefs.get(c)
+    if (cached) return cached
+    const brief = await enrichCase(c)
+    briefs.set(c, brief)
+    return brief
+  }
+  const pick = await pickMediaRichCandidate(
+    watchlist,
+    new Date().getDate() % watchlist.length,
+    threshold,
+    async (c) => briefMediaRichness(await enrich(c), config, threshold)
+  )
+  if (!pick.passed) {
+    console.warn(
+      `[discover] no watchlist case met the media-richness gate (minArchiveHits=${threshold}, ` +
+        `minTopicYear=${config.minTopicYear ?? DEFAULT_MIN_TOPIC_YEAR}); falling back to ` +
+        `"${pick.chosen.caseName}" (${pick.hits} hits). Curate better-documented, newsreel-era cases.`
+    )
+  }
+  return enrich(pick.chosen)
 }

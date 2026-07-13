@@ -8,10 +8,11 @@
 // callers can always fall through to their existing footage source — this is
 // a LATE rung of the footage ladder, not a required one.
 import { existsSync } from 'fs'
-import { readFile } from 'fs/promises'
+import { readFile, unlink } from 'fs/promises'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
+import { ensureLegibleStill } from './archiveFootage'
 import type { AssetLicense, VisualAsset } from '../compliance'
 
 const exec = promisify(execFile)
@@ -111,6 +112,15 @@ export async function loadMoodBank(): Promise<MoodClipEntry[]> {
 const NATURE_CATEGORIES = new Set<MoodCategory>(['rain', 'forest', 'still-water'])
 const NEUTRAL_FALLBACK_CATEGORIES: MoodCategory[] = ['night-street', 'foggy-house', 'newspaper-macro', 'highway-night']
 
+/** Mood categories whose clips show unmistakably MODERN subjects (present-day
+ *  police cars/lightbars, neon cityscapes, motorway traffic). A pre-1950
+ *  history story must never fall back onto these — a modern Škoda behind an
+ *  1882 oil-trust beat reads as a mistake (round-4 frame evidence). */
+export const ANACHRONISTIC_MOOD_CATEGORIES: MoodCategory[] = ['police-lights', 'night-street', 'highway-night']
+
+/** Stories set before this year exclude ANACHRONISTIC_MOOD_CATEGORIES. */
+export const VINTAGE_CUTOFF_YEAR = 1950
+
 function mapCategory(cueOrCategory: string): MoodCategory | null {
   const s = cueOrCategory.toLowerCase()
   for (const { category, keywords } of KEYWORD_CATEGORIES) {
@@ -135,45 +145,90 @@ function toVisualAsset(entry: MoodClipEntry, beatIndex?: number): VisualAsset {
 }
 
 /**
- * Picks up to `max` mood clips matching a beat's visualCue or an explicit
- * category name. Matches (in order): an exact/keyword category hit, then a
- * direct substring match against any entry's category or tags, then the
- * neutral fallback categories, then any non-nature clip. Candidates are
- * rotated by `beatIndex` for a deterministic spread. Returns [] only when
- * the bank itself is empty — callers should treat this as "no generic
- * atmosphere available, keep using the primary footage source".
+ * Pure candidate matcher over an in-memory bank (exported for tests). Matches
+ * (in order): an exact/keyword category hit, then a direct substring match
+ * against any entry's category or tags, then the neutral fallback categories,
+ * then any non-nature clip, then the whole bank. `excludeCategories` (e.g.
+ * ANACHRONISTIC_MOOD_CATEGORIES for a pre-1950 story) is applied FIRST, so an
+ * excluded category can never come back through a fallback; when exclusion
+ * empties the bank the result is [] — the tier misses and the placeholder
+ * floor (Wikimedia-era imagery) takes the beat instead of a modern clip.
  */
-export async function selectMoodClips(
+export function pickMoodCandidates(
+  bank: MoodClipEntry[],
   cueOrCategory: string,
-  max = 2,
-  beatIndex?: number
-): Promise<MoodClipResult[]> {
-  const bank = await loadMoodBank()
-  if (bank.length === 0) return []
+  excludeCategories: MoodCategory[] = []
+): MoodClipEntry[] {
+  const excluded = new Set(excludeCategories)
+  const eligible = bank.filter((e) => !excluded.has(e.category))
+  if (eligible.length === 0) return []
 
   const category = mapCategory(cueOrCategory)
   const needle = cueOrCategory.toLowerCase()
 
-  let matches = category
-    ? bank.filter((e) => e.category === category)
-    : bank.filter((e) => e.category.toLowerCase().includes(needle) || (e.tags ?? []).some((t) => needle.includes(t.toLowerCase()) || t.toLowerCase().includes(needle)))
+  let matches =
+    category && !excluded.has(category)
+      ? eligible.filter((e) => e.category === category)
+      : eligible.filter((e) => e.category.toLowerCase().includes(needle) || (e.tags ?? []).some((t) => needle.includes(t.toLowerCase()) || t.toLowerCase().includes(needle)))
 
   // No thematic hit: fall back to the neutral categories (in preference
-  // order), then to anything non-nature; the whole bank is the true last
-  // resort only when nothing else is populated.
+  // order), then to anything non-nature; the whole eligible bank is the true
+  // last resort only when nothing else is populated.
   if (matches.length === 0) {
     for (const neutral of NEUTRAL_FALLBACK_CATEGORIES) {
-      matches = bank.filter((e) => e.category === neutral)
+      matches = eligible.filter((e) => e.category === neutral)
       if (matches.length > 0) break
     }
   }
-  if (matches.length === 0) matches = bank.filter((e) => !NATURE_CATEGORIES.has(e.category))
-  if (matches.length === 0) matches = bank
+  if (matches.length === 0) matches = eligible.filter((e) => !NATURE_CATEGORIES.has(e.category))
+  if (matches.length === 0) matches = eligible
+  return matches
+}
+
+/**
+ * Pure least-used pick over mood candidates (exported for the tier + tests):
+ * the clip with the LOWEST per-video use count wins, earliest candidate on
+ * ties — so no clip repeats within one video while an unused eligible clip
+ * exists, mirroring the archive pool's pickNextIdentifier. Null on empty.
+ */
+export function pickLeastUsedClip(
+  candidates: MoodClipResult[],
+  useCounts: ReadonlyMap<string, number>
+): MoodClipResult | null {
+  let best: MoodClipResult | null = null
+  let bestCount = Infinity
+  for (const c of candidates) {
+    const count = useCounts.get(c.path) ?? 0
+    if (count < bestCount) {
+      best = c
+      bestCount = count
+    }
+  }
+  return best
+}
+
+/**
+ * Picks up to `max` mood clips matching a beat's visualCue or an explicit
+ * category name (see pickMoodCandidates for the matching ladder). Candidates
+ * are rotated by `beatIndex` for a deterministic spread. Returns [] when the
+ * bank is empty or `excludeCategories` filters everything out — callers
+ * should treat this as "no suitable atmosphere available, keep using the
+ * primary footage source / placeholder floor".
+ */
+export async function selectMoodClips(
+  cueOrCategory: string,
+  max = 2,
+  beatIndex?: number,
+  excludeCategories: MoodCategory[] = []
+): Promise<MoodClipResult[]> {
+  const bank = await loadMoodBank()
+  let matches = pickMoodCandidates(bank, cueOrCategory, excludeCategories)
+  if (matches.length === 0) return []
 
   // Deterministic tie-break: rotate the candidate list by beat index so
   // consecutive beats sharing a category spread across its clips without
   // any randomness.
-  const offset = matches.length > 0 ? Math.max(0, beatIndex ?? 0) % matches.length : 0
+  const offset = Math.max(0, beatIndex ?? 0) % matches.length
   matches = matches.slice(offset).concat(matches.slice(0, offset))
 
   return matches.slice(0, Math.max(0, max)).map((entry) => ({
@@ -181,6 +236,24 @@ export async function selectMoodClips(
     asset: toVisualAsset(entry, beatIndex),
     durationSec: entry.durationSec,
   }))
+}
+
+/** Clamp a desired seek to the clip's actual duration (probed locally, cheap)
+ *  so a wide variation window never seeks past a short clip's end. Falls back
+ *  to the old conservative 3.7s cap when the probe fails. */
+async function clampSeekToClip(seekSec: number, clipPath: string): Promise<number> {
+  try {
+    const { stdout } = await exec(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', clipPath],
+      { timeout: 10_000 }
+    )
+    const dur = Number(stdout.trim())
+    if (Number.isFinite(dur) && dur > 1) return Math.min(seekSec, Math.max(0.5, dur - 0.5))
+  } catch {
+    /* fall through to the conservative cap */
+  }
+  return Math.min(seekSec, 3.7)
 }
 
 /**
@@ -201,30 +274,53 @@ export async function selectMoodClips(
  *
  * `variationIndex` (e.g. the beat index or timeline slice index) nudges the
  * seek point forward a few seconds so the SAME clip reused across multiple
- * beats doesn't produce an identical still every time. It's wrapped and
- * capped low enough to stay inside even the bank's shortest known clips.
+ * beats doesn't produce an identical still every time. Round-4 fix: the old
+ * `% 5` wrap made beats 0 and 5 grab the byte-identical frame — the window is
+ * now 13 steps (covers every (beat, slot) pair of a realistic beat count) and
+ * the seek is clamped to the clip's probed duration instead of a guessed cap,
+ * so short clips stay safe without collapsing the variation.
  */
 export async function extractMoodStill(
   clipPath: string,
   outPath: string,
   variationIndex = 0
 ): Promise<string | null> {
-  const seekSec = (0.5 + (Math.max(0, variationIndex) % 5) * 0.8).toFixed(2)
-  try {
-    await exec(
-      'ffmpeg',
-      [
-        '-y',
-        '-ss', seekSec,
-        '-i', clipPath,
-        '-frames:v', '1',
-        '-vf', 'hqdn3d=4:3:6:4,scale=1620:2880:force_original_aspect_ratio=increase:flags=lanczos,crop=1620:2880',
-        outPath,
-      ],
-      { timeout: 30_000 }
-    )
-    return existsSync(outPath) ? outPath : null
-  } catch {
-    return null
+  // Round-5: mood stills run the SAME luma gate as every other still that can
+  // reach imagePaths (a near-black frame of a night clip rendered as a black
+  // beat). Each candidate seek is extracted, gated via ensureLegibleStill
+  // (hard-reject near-black, gamma-brighten dark-but-recoverable), and a
+  // rejected frame retries a different timestamp of the same clip before the
+  // clip is given up on.
+  // 13-step window: (beatIndex*2 + slot) for 6 beats × 2 slots spans 0..11,
+  // so every (beat, slot) pair lands on a distinct seek before wrapping; the
+  // duration clamp below keeps even the longest seek inside short clips.
+  const idx = Math.max(0, variationIndex)
+  const rawSeeks = [idx, idx + 4, idx + 8].map((v) => 0.5 + (v % 13) * 0.8)
+  const seeks: number[] = []
+  for (const raw of rawSeeks) {
+    const clamped = await clampSeekToClip(raw, clipPath)
+    if (!seeks.some((s) => Math.abs(s - clamped) < 0.05)) seeks.push(clamped)
   }
+  for (const seek of seeks) {
+    try {
+      await exec(
+        'ffmpeg',
+        [
+          '-y',
+          '-ss', seek.toFixed(2),
+          '-i', clipPath,
+          '-frames:v', '1',
+          '-vf', 'hqdn3d=4:3:6:4,scale=1620:2880:force_original_aspect_ratio=increase:flags=lanczos,crop=1620:2880',
+          outPath,
+        ],
+        { timeout: 30_000 }
+      )
+      if (!existsSync(outPath)) continue
+      if (await ensureLegibleStill(outPath)) return outPath
+      await unlink(outPath).catch(() => {}) // near-black frame → try another timestamp
+    } catch {
+      /* extraction failed at this seek — try the next one */
+    }
+  }
+  return null
 }

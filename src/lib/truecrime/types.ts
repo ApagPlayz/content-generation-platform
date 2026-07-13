@@ -132,6 +132,20 @@ export interface F10FactoryConfig {
   archiveMaxClips?: number
   /** archive.org collections to search (e.g. ['prelinger']). */
   archiveCollections?: string[]
+  /** Media-richness floor at DISCOVERY (round 6): minimum distinct archive.org
+   *  movie/image hits a case/topic must have before it is accepted; poorer
+   *  candidates are skipped for the next watchlist entry (an 1637/1720/1882
+   *  story with no era footage makes a bad video no matter what the pipeline
+   *  does downstream). Default 8 (DEFAULT_MIN_ARCHIVE_HITS in caseDiscovery);
+   *  set 0 to disable the gate. */
+  minArchiveHits?: number
+  /** Era floor at DISCOVERY (round 6): a story whose Wikipedia-extracted year
+   *  is BEFORE this is skipped — pre-1900 topics predate photography/newsreels
+   *  and cannot be illustrated with real era footage no matter how many
+   *  word-overlap search hits they get. Default 1900 (DEFAULT_MIN_TOPIC_YEAR);
+   *  set 0 to disable. Stories with no detectable year pass this check and are
+   *  judged on media richness alone. */
+  minTopicYear?: number
 
   /** AI image model id (e.g. 'gpt-image-1'). */
   aiImageModel?: string

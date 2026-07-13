@@ -34,7 +34,7 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { stat, unlink, writeFile } from 'fs/promises'
+import { rename, stat, unlink, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import type { StockClip } from '@prisma/client'
 import type { AssetLicense, VisualAsset } from '../compliance'
@@ -56,6 +56,43 @@ const MAX_SEARCH_RESULTS = 5
 export const MIN_STILL_BYTES = 10 * 1024
 /** Minimum width/height (px) for a usable still — rejects icon-sized junk. */
 export const MIN_STILL_DIM = 200
+/** HARD reject floor for a still's average luma (signalstats YAVG, 0–255):
+ *  below this the frame is essentially a black slate (fade, leader, unexposed
+ *  film) that no amount of correction saves. Frames between this and
+ *  BRIGHTEN_LUMA_BELOW are kept and gamma-BRIGHTENED instead of rejected — a
+ *  slightly dark era reel beats an off-topic fallback clip (round-4 evidence:
+ *  healthy prelinger frames measure YAVG 54–134, so most stills touch neither
+ *  bound). */
+export const MIN_STILL_LUMA = 14
+/** Stills measuring in [MIN_STILL_LUMA, BRIGHTEN_LUMA_BELOW) get a gamma lift
+ *  toward BRIGHTEN_LUMA_TARGET rather than a rejection. Round-5 calibration
+ *  against the TrueCrime composition's caption-legibility gradient (measured
+ *  on a real dark still, ffmpeg-replicating the exact CSS gradient): a
+ *  YAVG-34 frame drops to 24.6 on screen (bottom third near-black), while the
+ *  same frame lifted to YAVG≈70 reads at ~51 post-overlay — clearly legible.
+ *  Hence brighten below 40, aim for 70. */
+export const BRIGHTEN_LUMA_BELOW = 40
+/** Average-luma target the gamma lift aims for (phone-legible post-overlay). */
+export const BRIGHTEN_LUMA_TARGET = 70
+
+/** Flat-card junk gate (round 5): a frame whose pixels are overwhelmingly one
+ *  saturated color is a slate/rating card ("PREVIEW — ALL AUDIENCES" on solid
+ *  green), not a scene. Fraction of downscaled pixels that must share the
+ *  dominant quantized color, and the minimum RGB spread (saturation proxy) of
+ *  that color for the frame to count as a card. B/w and sepia era footage has
+ *  near-zero spread, so it can never trip this gate. */
+export const FLAT_CARD_DOMINANT_FRACTION = 0.55
+export const FLAT_CARD_MIN_SATURATION = 60
+
+/** Curated era-appropriate archive.org collections the per-video pool RELAXES
+ *  to when the configured collections yield fewer distinct items than beats.
+ *  Deliberately NOT an unscoped search — round-3 verification showed dropping
+ *  the collection clause entirely pulls modern junk (a present-day police car,
+ *  a music album) into a historical story. All four verified non-empty for
+ *  mediatype movies/image: prelinger (ephemeral films), universal_newsreels
+ *  (1929-67 newsreels), FedFlix (US gov films), flickrcommons (historical
+ *  library/museum photographs — covers pre-film eras). */
+export const RELAXED_ARCHIVE_COLLECTIONS = ['prelinger', 'universal_newsreels', 'FedFlix', 'flickrcommons']
 
 // Poster frames come from a deterministic 20–70% offset into the reel — the
 // opening seconds of archive films are almost always title cards, not scenes.
@@ -84,7 +121,7 @@ export interface ArchiveFootageResult {
   localPath: string
 }
 
-interface ArchiveDoc {
+export interface ArchiveDoc {
   identifier?: string
   title?: string
   mediatype?: string
@@ -94,10 +131,12 @@ interface ArchiveDoc {
   collection?: string | string[]
 }
 
-interface ArchiveFile {
+export interface ArchiveFile {
   name: string
   format?: string
   size?: string
+  /** Duration as reported by archive.org — seconds ("571.32") or "M:SS" / "H:MM:SS". */
+  length?: string
 }
 
 interface ArchiveMetadata {
@@ -124,7 +163,9 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response | nul
   }
 }
 
-async function archiveSearch(query: string, collections: string[], maxResults: number): Promise<ArchiveDoc[]> {
+/** archive.org Advanced Search, scoped to movies/images (+ optional collection
+ *  clause). Exported as the ArchivePoolDeps.search default and probe/test seam. */
+export async function archiveSearch(query: string, collections: string[], maxResults: number): Promise<ArchiveDoc[]> {
   const qParts = [`(${query})`, 'mediatype:(movies OR image)']
   const collClause = collections.map((c) => c.trim()).filter(Boolean)
   if (collClause.length) qParts.push(`collection:(${collClause.join(' OR ')})`)
@@ -160,14 +201,39 @@ function extOf(name: string): string {
   return m ? m[1].toLowerCase() : ''
 }
 
-/** Picks the smallest suitable file of the right kind — we only need a still,
- *  never the whole reel, so smaller candidates are strictly preferable. */
-function pickBestFile(meta: ArchiveMetadata, mediatype: string | undefined): ArchiveFile | null {
+/** Parse an archive.org file `length` — plain seconds ("571.32") or clock
+ *  notation ("9:31", "1:02:07") — to seconds; 0 when absent/unparseable.
+ *  Exported for tests. */
+export function parseFileLengthSec(length: string | undefined): number {
+  const s = (length ?? '').trim()
+  if (!s) return 0
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s)
+  if (/^\d+(:\d{1,2})+$/.test(s)) {
+    return s.split(':').reduce((acc, part) => acc * 60 + Number(part), 0)
+  }
+  return 0
+}
+
+/** Picks the best suitable file of the right kind. For VIDEO items, prefer
+ *  the LONGEST file (by reported length, then larger size): items often carry
+ *  a trailer/preview derivative alongside the main reel, and the old
+ *  smallest-first pick landed poster grabs inside the preview — the source of
+ *  a rendered MPAA rating card (round 5). The poster grab HTTP-seeks a single
+ *  frame, so a longer/larger file costs nothing extra. Images keep the
+ *  smallest-first pick — we only need one decodable still. */
+export function pickBestFile(meta: ArchiveMetadata, mediatype: string | undefined): ArchiveFile | null {
   const files = meta.files ?? []
   const wantVideo = mediatype !== 'image'
   const allowed = wantVideo ? VIDEO_EXT : IMAGE_EXT
   const candidates = files.filter((f) => allowed.includes(extOf(f.name)) && !/_thumb|__ia_thumb/i.test(f.name))
   if (!candidates.length) return null
+  if (wantVideo) {
+    return candidates.sort(
+      (a, b) =>
+        parseFileLengthSec(b.length) - parseFileLengthSec(a.length) ||
+        (Number(b.size) || 0) - (Number(a.size) || 0)
+    )[0]
+  }
   return candidates.sort((a, b) => (Number(a.size) || Infinity) - (Number(b.size) || Infinity))[0]
 }
 
@@ -255,6 +321,144 @@ export function isAcceptableStill(stats: StillStats): boolean {
   return true
 }
 
+/**
+ * Pure accept/reject for a still's measured average luma against the HARD
+ * floor. `null` (probe failed / ffmpeg absent) passes — a failed measurement
+ * is not proof of a black frame, same fail-open stance as the dimension probe
+ * above. Frames that pass here but sit under BRIGHTEN_LUMA_BELOW are
+ * brightened downstream, not rejected.
+ */
+export function isBrightEnoughStill(yavg: number | null): boolean {
+  if (yavg == null) return true
+  return Number.isFinite(yavg) && yavg >= MIN_STILL_LUMA
+}
+
+/** Pure three-way luma policy: hard-reject near-black, gamma-brighten the
+ *  dark-but-recoverable band, pass everything else (null = unmeasurable = ok). */
+export function stillLumaVerdict(yavg: number | null): 'reject' | 'brighten' | 'ok' {
+  if (yavg == null) return 'ok'
+  if (!Number.isFinite(yavg) || yavg < MIN_STILL_LUMA) return 'reject'
+  if (yavg < BRIGHTEN_LUMA_BELOW) return 'brighten'
+  return 'ok'
+}
+
+/**
+ * Pure gamma factor lifting a frame with average luma `yavg` toward
+ * BRIGHTEN_LUMA_TARGET (ffmpeg eq: out = in^(1/gamma), so >1 brightens).
+ * Solves (y/255)^(1/g) = target/255 for g, clamped to [1, 2.2] so a
+ * borderline frame is lifted gently and a very dark one never turns to
+ * washed-out grey noise.
+ */
+export function brightenGamma(yavg: number): number {
+  if (!Number.isFinite(yavg) || yavg <= 0) return 1
+  const g = Math.log(yavg / 255) / Math.log(BRIGHTEN_LUMA_TARGET / 255)
+  return Math.min(2.2, Math.max(1, g))
+}
+
+/**
+ * The shared luma gate for EVERY still that can reach imagePaths, whatever
+ * tier produced it (archive poster, downloaded image, mood-bank frame):
+ * measures once, hard-rejects near-black (returns false), gamma-brightens the
+ * dark-but-recoverable band IN PLACE (eq=gamma → baseline-JPEG re-encode,
+ * same yuvj420p contract as downloadImageFile so Chromium can always draw the
+ * result), passes everything else. Brightening is best-effort — a failed lift
+ * leaves the original file, which already cleared the hard floor. Exported so
+ * the mood-bank/stock still extraction runs the SAME pipeline (round 5).
+ */
+export async function ensureLegibleStill(filePath: string): Promise<boolean> {
+  const yavg = await stillLumaYAvg(filePath)
+  const verdict = stillLumaVerdict(yavg)
+  if (verdict === 'reject') return false
+  if (verdict !== 'brighten' || yavg == null) return true
+  const tmpPath = `${filePath}.bright.jpg`
+  try {
+    await exec(
+      'ffmpeg',
+      ['-y', '-i', filePath, '-frames:v', '1', '-vf', `eq=gamma=${brightenGamma(yavg).toFixed(3)}`, '-pix_fmt', 'yuvj420p', '-q:v', '3', tmpPath],
+      { timeout: VALIDATE_TIMEOUT_MS }
+    )
+    if (existsSync(tmpPath)) await rename(tmpPath, filePath)
+  } catch {
+    /* keep the un-brightened original — it already passed the hard floor */
+  } finally {
+    await unlink(tmpPath).catch(() => {})
+  }
+  return true
+}
+
+/**
+ * Pure flat-card detector over raw rgb24 pixels (any small downscale, e.g.
+ * 32×32): quantizes each channel to 8 levels, finds the dominant color bin,
+ * and flags the frame when that single bin covers ≥ FLAT_CARD_DOMINANT_FRACTION
+ * of pixels AND its average color is saturated (max−min channel spread ≥
+ * FLAT_CARD_MIN_SATURATION). That is the signature of a slate/rating card —
+ * one solid saturated background with a little text — and never of b/w or
+ * sepia era footage (spread ≈ 0) or a real color scene (no single narrow bin
+ * dominates). Malformed buffers return false (fail-open, like every probe).
+ */
+export function isFlatColorCard(rgb: Buffer | Uint8Array): boolean {
+  const pixels = Math.floor(rgb.length / 3)
+  if (pixels < 16) return false
+  const counts = new Map<number, { n: number; r: number; g: number; b: number }>()
+  for (let i = 0; i < pixels * 3; i += 3) {
+    const r = rgb[i]
+    const g = rgb[i + 1]
+    const b = rgb[i + 2]
+    const key = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5)
+    const bin = counts.get(key)
+    if (bin) {
+      bin.n++
+      bin.r += r
+      bin.g += g
+      bin.b += b
+    } else {
+      counts.set(key, { n: 1, r, g, b })
+    }
+  }
+  let dominant: { n: number; r: number; g: number; b: number } | null = null
+  for (const bin of counts.values()) if (!dominant || bin.n > dominant.n) dominant = bin
+  if (!dominant || dominant.n / pixels < FLAT_CARD_DOMINANT_FRACTION) return false
+  const avg = [dominant.r / dominant.n, dominant.g / dominant.n, dominant.b / dominant.n]
+  const spread = Math.max(...avg) - Math.min(...avg)
+  return spread >= FLAT_CARD_MIN_SATURATION
+}
+
+/** Downscale a still to 32×32 raw RGB and run the pure flat-card detector.
+ *  False (not a card) on any probe failure — fail-open like every probe. */
+async function stillIsFlatCard(filePath: string): Promise<boolean> {
+  if (!(await ffmpegAvailable())) return false
+  try {
+    const { stdout } = await exec(
+      'ffmpeg',
+      ['-v', 'error', '-i', filePath, '-frames:v', '1', '-vf', 'scale=32:32', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+      { timeout: VALIDATE_TIMEOUT_MS, encoding: 'buffer', maxBuffer: 1024 * 1024 }
+    )
+    return isFlatColorCard(stdout as unknown as Buffer)
+  } catch {
+    return false
+  }
+}
+
+/** Measure a still's average luma (signalstats YAVG, 0–255) with one cheap
+ *  single-frame ffmpeg pass; null when it can't be measured. Exported for the
+ *  mood-bank gate and tests. */
+export async function stillLumaYAvg(filePath: string): Promise<number | null> {
+  if (!(await ffmpegAvailable())) return null
+  try {
+    const { stdout } = await exec(
+      'ffmpeg',
+      ['-v', 'error', '-i', filePath, '-vf', 'signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-'],
+      { timeout: VALIDATE_TIMEOUT_MS }
+    )
+    const m = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(stdout)
+    if (!m) return null
+    const v = Number(m[1])
+    return Number.isFinite(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
 async function probeStillDimensions(filePath: string): Promise<{ width: number | null; height: number | null }> {
   try {
     const { stdout } = await exec(
@@ -273,9 +477,10 @@ async function probeStillDimensions(filePath: string): Promise<{ width: number |
 }
 
 /**
- * Full junk-still gate: minimum size, minimum decoded dimensions, and an
- * actual ffmpeg decode pass — a file whose header parses can still have an
- * undecodable body (the exact failure that crashed a Remotion render).
+ * Full junk-still gate: minimum size, minimum decoded dimensions, an actual
+ * ffmpeg decode pass — a file whose header parses can still have an
+ * undecodable body (the exact failure that crashed a Remotion render) — and
+ * a brightness floor (near-black slates read as junk, see MIN_STILL_LUMA).
  * Fail-closed on fs errors; only the size gate applies when ffmpeg is absent
  * so keyless/no-ffmpeg machines keep working as before.
  */
@@ -290,7 +495,11 @@ async function validateStillFile(filePath: string): Promise<boolean> {
     await exec('ffmpeg', ['-v', 'error', '-i', filePath, '-frames:v', '1', '-f', 'null', '-'], {
       timeout: VALIDATE_TIMEOUT_MS,
     })
-    return true
+    // Brightness floor — also purges stale near-black stills from the cache
+    // path so they get re-fetched with the luma-aware poster extraction.
+    if (!isBrightEnoughStill(await stillLumaYAvg(filePath))) return false
+    // Flat-card gate — a bright solid-color slate/rating card is junk too.
+    return !(await stillIsFlatCard(filePath))
   } catch {
     return false
   }
@@ -312,28 +521,44 @@ async function probeDurationSec(url: string): Promise<number | null> {
   }
 }
 
+/** Alternate seek fraction for the luma retry: shift the primary fraction by
+ *  a quarter of the reel, folded back into the 20–70% window, so a fade/black
+ *  section at the primary offset lands somewhere genuinely different. Pure. */
+export function alternateSeekFraction(fraction: number): number {
+  const shifted = fraction + 0.25
+  return shifted > POSTER_SEEK_MAX_FRACTION ? fraction - 0.25 : shifted
+}
+
 /** Grabs a single frame straight from the remote URL (ffmpeg can seek a
  *  progressive-served file over HTTP) so we never pull down a whole reel just
  *  to make one still. Seeks a deterministic 20–70% offset into the reel —
  *  never frame 0 / the first seconds, which on archive films are usually
- *  title cards. Skips gracefully if ffmpeg is missing or times out. */
+ *  title cards. Each grabbed frame is luma-checked; a near-black frame (fade,
+ *  leader) retries the next offset before the item is given up on. Skips
+ *  gracefully if ffmpeg is missing or times out. */
 async function extractPosterFromUrl(url: string, destPath: string, beatIndex = 0, seed = ''): Promise<boolean> {
   if (!(await ffmpegAvailable())) return false
   const duration = await probeDurationSec(url)
   const fraction = posterSeekFraction(beatIndex, seed)
-  const primary =
+  const clampSeek = (sec: number) =>
+    duration != null ? Math.min(Math.max(RETRY_SEEK_SEC, sec), Math.max(RETRY_SEEK_SEC, duration - 1)) : sec
+  const candidates =
     duration != null
-      ? Math.min(Math.max(RETRY_SEEK_SEC, duration * fraction), Math.max(RETRY_SEEK_SEC, duration - 1))
-      : FALLBACK_SEEK_SEC
-  const offsets = primary > RETRY_SEEK_SEC ? [primary, RETRY_SEEK_SEC] : [primary]
+      ? [clampSeek(duration * fraction), clampSeek(duration * alternateSeekFraction(fraction)), RETRY_SEEK_SEC]
+      : [FALLBACK_SEEK_SEC, FALLBACK_SEEK_SEC * 2, RETRY_SEEK_SEC]
+  const offsets = candidates.filter((ss, i) => candidates.indexOf(ss) === i)
   for (const ss of offsets) {
     try {
       await exec('ffmpeg', ['-y', '-ss', ss.toFixed(2), '-i', url, '-frames:v', '1', '-q:v', '3', destPath], {
         timeout: POSTER_TIMEOUT_MS,
       })
-      if (existsSync(destPath)) return true
+      if (!existsSync(destPath)) continue
+      // Near-black frame OR a flat slate/rating card → discard and try the
+      // next timestamp of the SAME reel.
+      if (isBrightEnoughStill(await stillLumaYAvg(destPath)) && !(await stillIsFlatCard(destPath))) return true
+      await unlink(destPath).catch(() => {})
     } catch {
-      // try the next (earlier) offset — a short reel may not reach the primary seek
+      // try the next offset — a short reel may not reach this seek
     }
   }
   return false
@@ -381,15 +606,109 @@ function normalizeLicense(raw: string | null): AssetLicense {
   return (known as string[]).includes(raw ?? '') ? (raw as AssetLicense) : 'unknown'
 }
 
-function assetFromCache(cached: StockClip): VisualAsset {
+function assetFromCache(cached: StockClip, identifier: string): VisualAsset {
   return {
     kind: 'image',
-    source: `https://archive.org/details/${cached.externalId}`,
+    source: `https://archive.org/details/${identifier}`,
     license: normalizeLicense(cached.license),
     depictsRealPerson: true,
     aiGenerated: false,
     licenseRef: cached.attribution ?? undefined,
   }
+}
+
+/**
+ * Resolve ONE archive.org doc to a validated local still: cache check (with
+ * junk purge + refetch), metadata → best file, download/poster-grab, junk gate,
+ * StockClip bookkeeping. `variant` namespaces the cache entry (e.g. 'beat3')
+ * so a REUSED reel yields a different poster frame per beat instead of the
+ * identical cached image; image items ignore it (same picture either way).
+ * Returns null on any miss — never throws.
+ */
+export async function resolveDocStill(
+  doc: ArchiveDoc,
+  opts: ArchiveFootageOptions,
+  variant?: string
+): Promise<ArchiveFootageResult | null> {
+  const identifier = doc.identifier
+  if (!identifier) return null
+  const cacheId = variant && doc.mediatype !== 'image' ? `${identifier}__${variant}` : identifier
+
+  // 1. Cache check — reuse a prior download for this identifier if the file
+  //    is still on disk AND still passes the junk-still gate. A stale corrupt
+  //    still (title card grab, truncated download, near-black frame) is purged
+  //    so the fresh path below re-fetches it with the new seek/validation logic.
+  const cached = await findCachedClip(SOURCE, cacheId)
+  if (cached && existsSync(cached.localPath)) {
+    if (await validateStillFile(cached.localPath)) {
+      // Heal a legacy dark-but-recoverable cached still in place (validate
+      // already enforced the hard floor, so the return value is moot here).
+      await ensureLegibleStill(cached.localPath)
+      const beatsUsed = mergeBeats(cached, opts.beatIndex)
+      await recordStockClip({
+        source: SOURCE,
+        externalId: cacheId,
+        localPath: cached.localPath,
+        width: cached.width,
+        height: cached.height,
+        durationSec: cached.durationSec,
+        license: cached.license,
+        attribution: cached.attribution,
+        beatsUsed,
+      })
+      return { visual: { ...assetFromCache(cached, identifier), beatIndex: opts.beatIndex }, localPath: cached.localPath }
+    }
+    await unlink(cached.localPath).catch(() => {})
+  }
+
+  // 2. Resolve a downloadable file from the item's metadata.
+  const meta = await fetchItemMetadata(identifier)
+  if (!meta) return null
+  const file = pickBestFile(meta, doc.mediatype)
+  if (!file) return null
+
+  await ensureStockDir(SOURCE)
+  const destPath = stockClipPath(SOURCE, cacheId, 'jpg')
+
+  const url = fileUrl(identifier, file.name)
+  const posterOk =
+    doc.mediatype === 'image'
+      ? await downloadImageFile(url, destPath)
+      : await extractPosterFromUrl(url, destPath, opts.beatIndex ?? 0, identifier)
+  if (!posterOk) return null
+
+  // 3. Junk-still gate — a corrupt/tiny/near-black still is a miss.
+  if (!(await validateStillFile(destPath))) {
+    await unlink(destPath).catch(() => {})
+    return null
+  }
+  // Dark-but-recoverable (YAVG in [MIN_STILL_LUMA, BRIGHTEN_LUMA_BELOW)) gets
+  // a gamma lift instead of a rejection — tasteful era footage over fallbacks.
+  // (validateStillFile above already enforced the hard floor.)
+  await ensureLegibleStill(destPath)
+
+  const license = mapArchiveLicense(doc, meta)
+  const attribution = buildAttribution(doc, meta)
+  const visual: VisualAsset = {
+    kind: 'image',
+    source: `https://archive.org/details/${identifier}`,
+    license,
+    depictsRealPerson: opts.depictsRealPerson ?? true,
+    aiGenerated: false,
+    licenseRef: attribution,
+    beatIndex: opts.beatIndex,
+  }
+
+  await recordStockClip({
+    source: SOURCE,
+    externalId: cacheId,
+    localPath: destPath,
+    license,
+    attribution,
+    beatsUsed: mergeBeats(cached, opts.beatIndex),
+  })
+
+  return { visual, localPath: destPath }
 }
 
 /**
@@ -409,81 +728,170 @@ export async function fetchArchiveClipForBeat(
     const docs = (await archiveSearch(query, collections, maxClips)).slice(0, maxClips)
 
     for (const doc of docs) {
-      const identifier = doc.identifier
-      if (!identifier) continue
-
-      // 1. Cache check — reuse a prior download for this identifier if the file
-      //    is still on disk AND still passes the junk-still gate. A stale corrupt
-      //    still (title card grab, truncated download) is purged so the fresh
-      //    path below re-fetches it with the new seek/validation logic.
-      const cached = await findCachedClip(SOURCE, identifier)
-      if (cached && existsSync(cached.localPath)) {
-        if (await validateStillFile(cached.localPath)) {
-          const beatsUsed = mergeBeats(cached, opts.beatIndex)
-          await recordStockClip({
-            source: SOURCE,
-            externalId: identifier,
-            localPath: cached.localPath,
-            width: cached.width,
-            height: cached.height,
-            durationSec: cached.durationSec,
-            license: cached.license,
-            attribution: cached.attribution,
-            beatsUsed,
-          })
-          return { visual: assetFromCache(cached), localPath: cached.localPath }
-        }
-        await unlink(cached.localPath).catch(() => {})
-      }
-
-      // 2. Resolve a downloadable file from the item's metadata.
-      const meta = await fetchItemMetadata(identifier)
-      if (!meta) continue
-      const file = pickBestFile(meta, doc.mediatype)
-      if (!file) continue
-
-      await ensureStockDir(SOURCE)
-      const destPath = stockClipPath(SOURCE, identifier, 'jpg')
-
-      const url = fileUrl(identifier, file.name)
-      const posterOk =
-        doc.mediatype === 'image'
-          ? await downloadImageFile(url, destPath)
-          : await extractPosterFromUrl(url, destPath, opts.beatIndex ?? 0, identifier)
-      if (!posterOk) continue // try the next candidate rather than giving up entirely
-
-      // 3. Junk-still gate — a corrupt/tiny still falls through to the next candidate.
-      if (!(await validateStillFile(destPath))) {
-        await unlink(destPath).catch(() => {})
-        continue
-      }
-
-      const license = mapArchiveLicense(doc, meta)
-      const attribution = buildAttribution(doc, meta)
-      const visual: VisualAsset = {
-        kind: 'image',
-        source: `https://archive.org/details/${identifier}`,
-        license,
-        depictsRealPerson: opts.depictsRealPerson ?? true,
-        aiGenerated: false,
-        licenseRef: attribution,
-        beatIndex: opts.beatIndex,
-      }
-
-      await recordStockClip({
-        source: SOURCE,
-        externalId: identifier,
-        localPath: destPath,
-        license,
-        attribution,
-        beatsUsed: mergeBeats(cached, opts.beatIndex),
-      })
-
-      return { visual, localPath: destPath }
+      const result = await resolveDocStill(doc, opts)
+      if (result) return result
     }
 
     return null
   } catch {
     return null
+  }
+}
+
+/**
+ * Pure pick for the per-video pool: the identifier with the LOWEST use count,
+ * earliest in `ordered` on ties. Because every identifier starts at 0, no
+ * identifier is ever reused until every distinct one has been used once; after
+ * exhaustion the picks round-robin. Null only when `ordered` is empty.
+ */
+export function pickNextIdentifier(
+  ordered: string[],
+  useCounts: ReadonlyMap<string, number>
+): string | null {
+  let best: string | null = null
+  let bestCount = Infinity
+  for (const id of ordered) {
+    const count = useCounts.get(id) ?? 0
+    if (count < bestCount) {
+      best = id
+      bestCount = count
+    }
+  }
+  return best
+}
+
+/** Injectable seams for ArchiveStillPool so its distribution/relaxation logic
+ *  is unit-testable without the network. Production uses the real helpers. */
+export interface ArchivePoolDeps {
+  search: (query: string, collections: string[], maxResults: number) => Promise<ArchiveDoc[]>
+  resolve: (doc: ArchiveDoc, opts: ArchiveFootageOptions, variant?: string) => Promise<ArchiveFootageResult | null>
+}
+
+export interface ArchivePoolOptions {
+  /** archive.org collections to search first. Default ['prelinger']. */
+  collections?: string[]
+  /** Image SLOTS this pool must serve for the video (beats × images per beat)
+   *  — drives search breadth (3× over-fetch) and the relaxation trigger. */
+  beatCount: number
+  /** Floor on search rows (mirrors archiveMaxClips). Default MAX_SEARCH_RESULTS. */
+  maxClips?: number
+  /** Passed through to each resolved asset. */
+  depictsRealPerson?: boolean
+}
+
+/**
+ * Shared broad-to-narrow gather over the query candidates: one pass against
+ * the given collections, then (when still short of `need`) the SAME queries
+ * against the curated RELAXED_ARCHIVE_COLLECTIONS — never unscoped. Dedupes
+ * by identifier, stops as soon as `need` distinct items are found. Used by
+ * ArchiveStillPool and by the discovery media-richness gate so both count
+ * "usable inventory" identically.
+ */
+export async function gatherArchiveDocs(
+  queries: string[],
+  opts: { collections?: string[]; need: number; rows: number },
+  search: ArchivePoolDeps['search'] = archiveSearch
+): Promise<ArchiveDoc[]> {
+  const collections = opts.collections?.length ? opts.collections : ['prelinger']
+  const seen = new Set<string>()
+  const docs: ArchiveDoc[] = []
+  const gather = async (colls: string[]) => {
+    for (const q of queries) {
+      if (docs.length >= opts.need) return
+      for (const doc of await search(q, colls, opts.rows)) {
+        if (!doc.identifier || seen.has(doc.identifier)) continue
+        seen.add(doc.identifier)
+        docs.push(doc)
+      }
+    }
+  }
+  await gather(collections)
+  if (docs.length < opts.need) await gather(RELAXED_ARCHIVE_COLLECTIONS)
+  return docs
+}
+
+/**
+ * Discovery media-richness probe (round 6): how many DISTINCT archive.org
+ * movie/image items exist for a topic's pool queries, counted with exactly
+ * the machinery the footage stage will later use, capped at `need` (early
+ * stop — we only care whether the floor is met, not the true total).
+ */
+export async function countDistinctArchiveItems(
+  queries: string[],
+  opts: { collections?: string[]; need: number },
+  search: ArchivePoolDeps['search'] = archiveSearch
+): Promise<number> {
+  if (!queries.length || opts.need <= 0) return 0
+  const docs = await gatherArchiveDocs(queries, { ...opts, rows: Math.max(opts.need, MAX_SEARCH_RESULTS) }, search)
+  return Math.min(docs.length, opts.need)
+}
+
+/**
+ * Per-video archive.org still pool (rounds 3-6). Searches ONCE per video —
+ * walking the topic-anchored query candidates and accumulating distinct
+ * identifiers via gatherArchiveDocs — then hands each slot a DISTINCT item,
+ * so one reel can never paper multiple slots. When the collection-scoped
+ * search finds fewer distinct items than slots, the SAME topic/year queries
+ * (never looser ones) are re-run against the curated
+ * RELAXED_ARCHIVE_COLLECTIONS — not an unscoped search, which pulls modern
+ * junk into historical stories. Scoped hits sit ahead of relaxed hits, so
+ * unused scoped items are picked before unused relaxed ones. Identifiers are
+ * used AT MOST ONCE per video (round 6): once the pool is exhausted it
+ * returns null and the beat keeps fewer, longer-held images instead of a
+ * repeated scene. Items that fail to resolve are marked dead and never
+ * retried. Never throws; every miss degrades to null.
+ */
+export class ArchiveStillPool {
+  private docs: ArchiveDoc[] | null = null
+  private readonly used = new Set<string>()
+  private readonly dead = new Set<string>()
+
+  constructor(
+    private readonly queries: string[],
+    private readonly opts: ArchivePoolOptions,
+    private readonly deps: ArchivePoolDeps = { search: archiveSearch, resolve: resolveDocStill }
+  ) {}
+
+  /** One search pass per video, lazily on first acquire. Over-fetches 3× the
+   *  needed slots (round 6) so junk/unreachable items don't force shortfalls. */
+  private async ensureDocs(): Promise<ArchiveDoc[]> {
+    if (this.docs) return this.docs
+    const maxClips = this.opts.maxClips && this.opts.maxClips > 0 ? this.opts.maxClips : MAX_SEARCH_RESULTS
+    const rows = Math.max(maxClips, this.opts.beatCount * 3)
+    this.docs = await gatherArchiveDocs(
+      this.queries,
+      { collections: this.opts.collections, need: this.opts.beatCount, rows },
+      this.deps.search
+    )
+    return this.docs
+  }
+
+  /**
+   * Resolve a still for one slot. DISTINCT-ONLY (round 6): every identifier is
+   * used at most once per video — when the pool runs out of unused items this
+   * returns null and the beat simply keeps fewer images with longer holds,
+   * which reads far better than a repeated scene ("scenes repeating" owner
+   * feedback). The old exhaustion behavior (beat-variant repeats) is gone.
+   */
+  async acquireStill(beatIndex: number): Promise<ArchiveFootageResult | null> {
+    try {
+      const docs = await this.ensureDocs()
+      for (;;) {
+        const fresh = docs
+          .map((d) => d.identifier)
+          .filter((id): id is string => !!id && !this.dead.has(id) && !this.used.has(id))
+        const id = pickNextIdentifier(fresh, new Map())
+        if (id == null) return null // pool exhausted — fewer images beat repeats
+        const doc = docs.find((d) => d.identifier === id) as ArchiveDoc
+        const result = await this.deps.resolve(doc, { beatIndex, depictsRealPerson: this.opts.depictsRealPerson })
+        if (result) {
+          this.used.add(id)
+          return result
+        }
+        this.dead.add(id) // junk/unreachable item — stop retrying it for later beats
+      }
+    } catch {
+      return null
+    }
   }
 }
