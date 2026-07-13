@@ -2,23 +2,23 @@
 
 *Auto-generated 2026-07-13. Do not edit by hand.*
 
-**No data yet.** Nothing has been built. Approve a proposal to start the loop.
+**Healthy.** Most of what the agents build is good enough to keep.
 
 ## Is the work any good?
 
 | | |
 |---|---|
-| Pull requests merged | 0 |
+| Pull requests merged | 1 |
 | Pull requests rejected | 0 |
-| **Merge rate** | **—** |
+| **Merge rate** | **100%** |
 | Waiting on you right now | 0 |
 
 ## Is it outrunning you?
 
 | | |
 |---|---|
-| Typical days to merge | — |
-| Typical PR size (lines) | — |
+| Typical days to merge | 0.1 |
+| Typical PR size (lines) | 637 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
