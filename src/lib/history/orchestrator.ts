@@ -19,6 +19,13 @@ import { generateCaptions } from '../truecrime/captions'
 import { assembleVideo } from '../truecrime/assemble'
 import { maybeAutoPublish } from '../tools/publish'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from '../retry'
+import {
+  isEmptyRender,
+  isSilentVoiceover,
+  resolveFinalStatus,
+  EMPTY_RENDER_ERROR,
+  SILENT_VOICEOVER_REASON,
+} from '../pipeline/finalize'
 import type { F11Context, F11FactoryConfig, F11Stage } from './types'
 
 /**
@@ -225,6 +232,10 @@ export async function executeHistoryRun(
         ctx.captions!,
         { beats: ctx.script?.beats, beatFootage: ctx.beatFootage }
       )
+      // Fail loud: an empty render must never be marked done or published.
+      // Throwing lets stage() retry, then the run is marked failed with a
+      // visible reason — mirroring the sports pipeline (tools/assemble.ts).
+      if (isEmptyRender(ctx.render)) throw new Error(EMPTY_RENDER_ERROR)
       await prisma.video.update({
         where: { id: ctx.videoId },
         data: {
@@ -241,16 +252,33 @@ export async function executeHistoryRun(
 
     await finalizeCost(ctx.videoId)
 
-    const finalStatus =
-      ctx.complianceDecision === 'route_to_review'
-        ? 'review'
-        : agent.autonomy === 'auto'
-          ? 'approved'
-          : 'review'
+    // A silent-stub voiceover (all voice providers failed) is a soft failure:
+    // keep the video but hold it for review and never auto-publish a silent clip.
+    const silentVoiceover = isSilentVoiceover(ctx.tts?.provider)
+    if (silentVoiceover) {
+      await prisma.job.create({
+        data: {
+          videoId: ctx.videoId,
+          stage: 'voiceover',
+          status: 'failed',
+          attempts: 1,
+          error: SILENT_VOICEOVER_REASON,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+        },
+      })
+    }
+
+    const finalStatus = resolveFinalStatus({
+      complianceDecision: ctx.complianceDecision,
+      autonomy: agent.autonomy,
+      silentVoiceover,
+    })
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
 
-    // Auto-publish only a clean compliance 'pass' for auto agents (a
-    // 'route_to_review' decision already forced finalStatus to 'review').
+    // Auto-publish only a clean compliance 'pass' with real audio for auto
+    // agents (a 'route_to_review' decision or a silent voiceover already forced
+    // finalStatus to 'review').
     if (finalStatus === 'approved') await maybeAutoPublish(ctx.videoId, agent.autonomy)
 
     await prisma.agentRun.update({
