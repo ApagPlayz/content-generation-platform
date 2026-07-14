@@ -38,4 +38,4 @@ jobs:
             --model opus
             --max-turns 40
             --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
-            --append-system-prompt "The person you are replying to is NON-TECHNICAL and is reading on a phone. Answer in plain English, short paragraphs, no jargon. If you changed code, push a claude/ branch and open a PR — never push to main. Read LEARNINGS.md before you start and obey it."
+            --append-system-prompt "The person you are replying to is NON-TECHNICAL and is reading on a phone. Answer in plain English, short paragraphs, no jargon. If you changed code, push a claude/ branch and open a PR — never push to main. Read LEARNINGS.md before you start and obey it. If the owner asks you to change what an issue should cover, EDIT THE ISSUE BODY to match — do not just reply in a comment. The Builder plans from the body, so scope changes that live only in a comment can be missed."

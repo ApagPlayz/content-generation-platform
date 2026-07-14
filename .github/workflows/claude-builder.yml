@@ -1,7 +1,13 @@
 name: Claude — Builder (implements work, keeps your queue full)
 
-# Runs every 30 minutes. Opens ONE pull request per run, and only if your review queue
-# has room.
+# Runs the moment you label an issue `approved`, and every 30 minutes as a backstop.
+# Opens ONE pull request per run, and only if your review queue has room.
+#
+# WHY THE `labeled` TRIGGER: GitHub's cron is best-effort and silently drops runs under
+# load — this */30 schedule really fired at 14:02, 15:59, 16:51, 17:24, 18:42 on
+# 2026-07-14. The owner approved three issues and watched nothing happen for an hour,
+# because the Builder simply never woke up. Now approving from the phone starts a build
+# within a minute, and the schedule is only a safety net.
 #
 # THE QUEUE RULE:
 #   - Daytime (7am–11pm ET): at most 3 agent PRs may be open and waiting on you at once.
@@ -12,12 +18,15 @@ name: Claude — Builder (implements work, keeps your queue full)
 #   - An issue you labeled `approved` always jumps the queue and gets built first.
 #   - Otherwise it picks the strongest open `proposal` on its own. You do not have to
 #     approve anything for the loop to keep moving.
+#   - It NEVER picks an issue that already has an open `claude/` PR against it.
 #
 # A cheap bash gate runs first, so a run with no room and no work costs ~15 seconds.
 
 on:
+  issues:
+    types: [labeled]
   schedule:
-    - cron: "*/30 * * * *" # every 30 minutes
+    - cron: "*/30 * * * *" # backstop only — GitHub drops these regularly
   workflow_dispatch:
 
 concurrency:
@@ -26,6 +35,8 @@ concurrency:
 
 jobs:
   build:
+    # On a label event, only wake up for `approved` — not for every label anyone adds.
+    if: github.event_name != 'issues' || github.event.label.name == 'approved'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -56,9 +67,23 @@ jobs:
 
           open_prs=$(gh pr list --state open --json headRefName \
             --jq '[.[] | select(.headRefName | startswith("claude/"))] | length')
+
+          # Issues that an OPEN agent PR already claims (via "Closes #N" in its body).
+          # Without this the Builder rebuilds an issue it is already building: on
+          # 2026-07-14 two runs both picked issue #15, both spent ~14 minutes, and
+          # produced two PRs for one feature. Telling the agent "I've started this" in
+          # an issue comment is NOT protection — the next run never reads it. This is.
+          claimed=$(gh pr list --state open --json headRefName,body \
+            --jq '[.[] | select(.headRefName | startswith("claude/"))
+                       | (.body // "") | scan("(?i)closes #([0-9]+)") | .[0]]
+                  | unique | join(", ")')
+          [ -z "$claimed" ] && claimed="(none)"
+
           approved=$(gh issue list --state open --label approved --json number --jq 'length')
           proposals=$(gh issue list --state open --label proposal --json number --jq 'length')
           echo "Agent PRs awaiting you: $open_prs / $cap | approved: $approved | proposals: $proposals"
+          echo "Already claimed by an open PR: $claimed"
+          echo "claimed=$claimed" >> "$GITHUB_OUTPUT"
 
           if [ "$open_prs" -ge "$cap" ]; then
             echo "Your review queue is full — standing down. Merge or close one to free a slot."
@@ -105,17 +130,39 @@ jobs:
             that.
             ────────────────────────────────────────────────────────────────────────
 
-            PICK — in this strict order:
+            ────────────────────────────────────────────────────────────────────────
+            NEVER BUILD AN ISSUE THAT IS ALREADY BEING BUILT
+
+            These issues already have an OPEN pull request against them:
+                ${{ steps.gate.outputs.claimed }}
+
+            They are OFF LIMITS. Do not pick them. Do not "improve" them.
+
+            This happened for real on 2026-07-14: two Builder runs both picked issue #15, both
+            spent fourteen minutes, and produced two pull requests for one feature. The owner
+            had to throw one away. Commenting "I've started this" on the issue is NOT enough
+            protection, because the next run does not read it — this list is the protection.
+            ────────────────────────────────────────────────────────────────────────
+
+            PICK — in this strict order, skipping anything in the off-limits list above:
             1. The OLDEST open issue labeled `approved`. The owner asked for it; it always wins.
             2. If none are approved, choose the SINGLE strongest open issue labeled `proposal` —
                judge by value to the product against effort and risk, and prefer small. You are
                trusted to choose. Do not ask, do not build more than one.
             3. If neither exists, stop without opening a PR.
 
-            Comment on the issue you picked saying you have started, so a later run does not
-            pick it up too.
+            READ THE WHOLE CONVERSATION, NOT JUST THE ISSUE BODY:
+            run `gh issue view <n> --comments`. The owner often clarifies, narrows, or changes
+            his mind in the comments — "only do the YouTube part", "skip the migration", "keep
+            it small". **His comments OVERRIDE the original issue body.** Building the body while
+            ignoring a comment that contradicts it means building the wrong thing. If a comment
+            genuinely conflicts with the body and you cannot tell which he means, build the
+            SMALLER interpretation and say so in the PR.
 
-            PLAN: restate the issue as an explicit acceptance checklist before coding.
+            Comment on the issue you picked saying you have started, so a human watching knows.
+
+            PLAN: restate the issue — as amended by the comments — as an explicit acceptance
+            checklist before coding.
 
             BUILD (spend tokens here — this is the point):
             - Spawn THREE agents with the Task tool, in ONE message, each with
