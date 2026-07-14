@@ -27,9 +27,9 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Proposals filed | 0 |
+| Proposals filed | 8 |
 | Proposals you approved | 0 |
-| **Approval rate** | **—** |
+| **Approval rate** | **0%** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
 it is written up in the weekly retro issue.
