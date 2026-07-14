@@ -1,8 +1,14 @@
 import { createReadStream, existsSync } from 'fs'
 import { google } from 'googleapis'
 import { prisma } from '../prisma'
-import { autoPublishEnabled } from '../settings'
+import { autoPublishEnabled, tiktokAutoPublishEnabled } from '../settings'
 import { authedClient, connection, PLATFORM } from '../youtube'
+import {
+  connection as tiktokConnection,
+  directPost,
+  PLATFORM as TIKTOK_PLATFORM,
+  tiktokPermalink,
+} from '../tiktok'
 
 /**
  * Publish tool (PRD §8.1 / Phase 2). Uploads a rendered Short to YouTube via
@@ -174,6 +180,89 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
   }
 }
 
+// TikTok publishes to the profile directly (no daily quota wall like YouTube's).
+// A fresh, un-audited TikTok app can only post privately — SELF_ONLY — until
+// TikTok approves it for public posting, so that's the safe default.
+const TIKTOK_DEFAULT_PRIVACY = 'SELF_ONLY'
+
+/**
+ * Publish a rendered Short to TikTok via the Content Posting API. Same shape and
+ * guarantees as publishToYouTube: idempotent per (video, platform) — a video
+ * already live on TikTok is returned as-is rather than re-uploaded.
+ */
+export async function publishToTikTok(videoId: string): Promise<PublishResult> {
+  const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } })
+
+  // Idempotency: don't re-upload a video that already has a live TikTok post.
+  const existing = await prisma.post.findUnique({
+    where: { videoId_platform: { videoId, platform: TIKTOK_PLATFORM } },
+  })
+  if (existing?.status === 'published' && existing.platformPostId) {
+    return {
+      postId: existing.id,
+      platformPostId: existing.platformPostId,
+      permalink: existing.permalink || tiktokPermalink('', existing.platformPostId),
+      alreadyPublished: true,
+    }
+  }
+
+  if (!video.localPath || !existsSync(video.localPath)) {
+    throw new Error('Rendered MP4 not found for this video — render it before publishing.')
+  }
+
+  const conn = await tiktokConnection()
+  if (!conn) throw new Error('TikTok is not connected. Connect it in Settings first.')
+
+  const privacy = await setting('tiktok_privacy', TIKTOK_DEFAULT_PRIVACY)
+  const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
+  const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
+    .filter(Boolean)
+    .join(' ')
+
+  // Mark intent before the network call so a crash mid-upload is visible.
+  const post = await prisma.post.upsert({
+    where: { videoId_platform: { videoId, platform: TIKTOK_PLATFORM } },
+    update: { status: 'publishing', error: null },
+    create: { videoId, platform: TIKTOK_PLATFORM, status: 'publishing' },
+  })
+
+  try {
+    const { publishId, postId } = await directPost({
+      filePath: video.localPath,
+      caption,
+      privacy,
+    })
+    const platformPostId = postId || publishId
+    const permalink = tiktokPermalink(conn.accountHandle, postId)
+
+    const updated = await prisma.post.update({
+      where: { id: post.id },
+      data: {
+        platformPostId,
+        permalink,
+        status: 'published',
+        publishedAt: new Date(),
+        error: null,
+      },
+    })
+
+    await prisma.video.update({ where: { id: videoId }, data: { status: 'published' } })
+
+    await prisma.costLedger.create({
+      data: { videoId, service: 'tiktok_publish', units: 1, unitCost: 0, total: 0 },
+    })
+
+    return { postId: updated.id, platformPostId, permalink, alreadyPublished: false }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { status: 'failed', error: message },
+    })
+    throw e
+  }
+}
+
 export type AutoPublishOutcome =
   | { published: true; permalink: string }
   | { published: false; reason: string }
@@ -198,61 +287,115 @@ export function isAutoPublishFailure(reason: string): boolean {
  * the dashboard can surface it in plain language. Never clobbers a real
  * published post, and never throws — this bookkeeping must not fail a good run.
  */
-async function recordAutoPublishFailure(videoId: string, reason: string): Promise<void> {
+async function recordAutoPublishFailure(
+  videoId: string,
+  platform: string,
+  reason: string
+): Promise<void> {
   try {
     const existing = await prisma.post.findUnique({
-      where: { videoId_platform: { videoId, platform: PLATFORM } },
+      where: { videoId_platform: { videoId, platform } },
     })
     if (existing?.status === 'published') return
     await prisma.post.upsert({
-      where: { videoId_platform: { videoId, platform: PLATFORM } },
+      where: { videoId_platform: { videoId, platform } },
       update: { status: 'failed', error: reason },
-      create: { videoId, platform: PLATFORM, status: 'failed', error: reason },
+      create: { videoId, platform, status: 'failed', error: reason },
     })
   } catch {
     // A logging hiccup must never fail an otherwise-good run.
   }
 }
 
-async function computeAutoPublish(
-  videoId: string,
-  autonomy: string
+/**
+ * One publishing destination. Each platform is independent: its own on/off
+ * switch, its own connection, and its own publish call. The registry is what
+ * makes auto-publish multi-platform (issue #19) — adding Instagram later is a
+ * third entry, nothing else changes.
+ */
+interface PlatformAdapter {
+  platform: string
+  /** Human name used in "<label> not connected" messages. */
+  label: string
+  /** The operator's per-platform auto-publish toggle. */
+  isAutoEnabled: () => Promise<boolean>
+  isConnected: () => Promise<boolean>
+  /** Optional pre-flight gate (e.g. YouTube's daily quota); reason or null. */
+  preflight?: () => Promise<string | null>
+  publish: (videoId: string) => Promise<{ permalink: string }>
+}
+
+const PLATFORM_ADAPTERS: PlatformAdapter[] = [
+  {
+    platform: PLATFORM,
+    label: 'YouTube',
+    isAutoEnabled: autoPublishEnabled,
+    isConnected: async () => !!(await connection()),
+    preflight: async () => {
+      const { remaining, cap } = await quotaStatus()
+      return remaining <= 0 ? `daily upload quota reached (${cap}/day)` : null
+    },
+    publish: async (videoId) => ({ permalink: (await publishToYouTube(videoId)).permalink }),
+  },
+  {
+    platform: TIKTOK_PLATFORM,
+    label: 'TikTok',
+    isAutoEnabled: tiktokAutoPublishEnabled,
+    isConnected: async () => !!(await tiktokConnection()),
+    publish: async (videoId) => ({ permalink: (await publishToTikTok(videoId)).permalink }),
+  },
+]
+
+// Decide one platform's outcome. Order matters: the "switched off" check comes
+// first so a platform the owner hasn't opted into is a silent skip (DISABLED,
+// not recorded) — never a red "didn't post" on the dashboard.
+async function computeAdapter(
+  a: PlatformAdapter,
+  videoId: string
 ): Promise<AutoPublishOutcome> {
-  if (autonomy !== 'auto') return { published: false, reason: AUTO_PUBLISH_REVIEW_GATED }
-  if (!(await autoPublishEnabled()))
-    return { published: false, reason: AUTO_PUBLISH_DISABLED }
-  if (!(await connection())) return { published: false, reason: 'YouTube not connected' }
-
-  const { remaining, cap } = await quotaStatus()
-  if (remaining <= 0)
-    return { published: false, reason: `daily upload quota reached (${cap}/day)` }
-
+  if (!(await a.isAutoEnabled())) return { published: false, reason: AUTO_PUBLISH_DISABLED }
+  if (!(await a.isConnected())) return { published: false, reason: `${a.label} not connected` }
+  const pre = a.preflight ? await a.preflight() : null
+  if (pre) return { published: false, reason: pre }
   try {
-    const r = await publishToYouTube(videoId)
-    return { published: true, permalink: r.permalink }
+    return { published: true, permalink: (await a.publish(videoId)).permalink }
   } catch (e) {
     return { published: false, reason: e instanceof Error ? e.message : String(e) }
   }
 }
 
+async function runAdapter(a: PlatformAdapter, videoId: string): Promise<AutoPublishOutcome> {
+  const outcome = await computeAdapter(a, videoId)
+  if (!outcome.published && isAutoPublishFailure(outcome.reason)) {
+    await recordAutoPublishFailure(videoId, a.platform, outcome.reason)
+  }
+  return outcome
+}
+
 /**
  * Auto-publish hook for autonomy=auto agents. Called by the orchestrators after
- * a video is approved. It is deliberately NON-FATAL: any reason it can't publish
- * (feature off, YouTube not connected, daily quota spent, upload error) leaves
- * the video 'approved' for a later manual publish and returns a reason rather
- * than throwing — a publish hiccup must never fail an otherwise-good run.
+ * a video is approved. It is deliberately NON-FATAL: any reason a platform can't
+ * publish (feature off, not connected, daily quota spent, upload error) leaves
+ * the video 'approved' for a later manual publish rather than throwing — a
+ * publish hiccup must never fail an otherwise-good run.
  *
- * Genuine failures (not the expected opt-out states) are also persisted as a
- * failed youtube Post so the dashboard can tell the owner WHY a video didn't
- * post, instead of leaving it silently in 'approved'.
+ * Every connected + switched-on platform is attempted independently, so one
+ * generated video can land on YouTube AND TikTok from a single run. Genuine
+ * failures (not the expected opt-out states) are persisted as a failed Post on
+ * that platform so the dashboard can tell the owner WHY a video didn't post.
  */
 export async function maybeAutoPublish(
   videoId: string,
   autonomy: string
 ): Promise<AutoPublishOutcome> {
-  const outcome = await computeAutoPublish(videoId, autonomy)
-  if (!outcome.published && isAutoPublishFailure(outcome.reason)) {
-    await recordAutoPublishFailure(videoId, outcome.reason)
+  // Review mode blocks every platform — nothing auto-posts until a human approves.
+  if (autonomy !== 'auto') return { published: false, reason: AUTO_PUBLISH_REVIEW_GATED }
+
+  const outcomes: AutoPublishOutcome[] = []
+  for (const a of PLATFORM_ADAPTERS) {
+    outcomes.push(await runAdapter(a, videoId))
   }
-  return outcome
+  // Report a real success if any platform posted; otherwise fall back to the
+  // first (YouTube) outcome so existing callers keep the same result shape.
+  return outcomes.find((o) => o.published) ?? outcomes[0]
 }

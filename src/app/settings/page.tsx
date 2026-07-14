@@ -15,6 +15,9 @@ interface SettingsMap {
   youtube_privacy?: string
   youtube_daily_quota_cap?: string
   auto_publish_enabled?: string
+  tiktok_client_key?: string
+  tiktok_client_secret?: string
+  tiktok_auto_publish_enabled?: string
 }
 
 const PROVIDERS_TTS = ['kokoro', 'elevenlabs', 'openai-tts', 'coqui-local', 'edge-tts']
@@ -22,7 +25,7 @@ const PROVIDERS_IMAGE = ['dall-e-3', 'flux', 'stable-diffusion-local']
 const MODEL_TIERS = ['haiku', 'sonnet', 'opus']
 const YOUTUBE_PRIVACY = ['private', 'unlisted', 'public']
 
-interface YouTubeStatus {
+interface PlatformStatus {
   connected: boolean
   handle?: string
 }
@@ -33,13 +36,19 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
-  const [yt, setYt] = useState<YouTubeStatus>({ connected: false })
+  const [yt, setYt] = useState<PlatformStatus>({ connected: false })
   const [quota, setQuota] = useState<{ used: number; cap: number; remaining: number } | null>(null)
   const [ytNotice, setYtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const [tt, setTt] = useState<PlatformStatus>({ connected: false })
+  const [ttNotice, setTtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   function refreshYouTube() {
     fetch('/api/auth/youtube').then((r) => r.json()).then(setYt)
     fetch('/api/youtube/quota').then((r) => r.json()).then(setQuota).catch(() => {})
+  }
+
+  function refreshTikTok() {
+    fetch('/api/auth/tiktok').then((r) => r.json()).then(setTt).catch(() => {})
   }
 
   useEffect(() => {
@@ -48,6 +57,7 @@ export default function Settings() {
       .then((data: SettingsMap) => setSettings(data))
       .finally(() => setLoading(false))
     refreshYouTube()
+    refreshTikTok()
 
     // Surface the OAuth redirect result, then clean the URL.
     const params = new URLSearchParams(window.location.search)
@@ -55,7 +65,11 @@ export default function Settings() {
     const error = params.get('youtube_error')
     if (connected) setYtNotice({ kind: 'ok', text: `Connected as ${connected}` })
     if (error) setYtNotice({ kind: 'err', text: error })
-    if (connected || error) {
+    const ttConnected = params.get('tiktok_connected')
+    const ttError = params.get('tiktok_error')
+    if (ttConnected) setTtNotice({ kind: 'ok', text: `Connected as ${ttConnected}` })
+    if (ttError) setTtNotice({ kind: 'err', text: ttError })
+    if (connected || error || ttConnected || ttError) {
       window.history.replaceState({}, '', '/settings')
     }
   }, [])
@@ -64,6 +78,12 @@ export default function Settings() {
     await fetch('/api/auth/youtube', { method: 'DELETE' })
     setYtNotice(null)
     refreshYouTube()
+  }
+
+  async function disconnectTikTok() {
+    await fetch('/api/auth/tiktok', { method: 'DELETE' })
+    setTtNotice(null)
+    refreshTikTok()
   }
 
   function set(key: keyof SettingsMap, value: string) {
@@ -423,27 +443,128 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* IG / TikTok — later phases */}
-          {[
-            { label: 'Instagram Reels', note: 'Requires Business account + Meta App Review' },
-            { label: 'TikTok', note: 'Requires posting-scope approval + audit for public posts' },
-          ].map((platform) => (
-            <div
-              key={platform.label}
-              className="flex items-center justify-between p-4 rounded-lg border border-gray-200 bg-gray-50"
-            >
+          {/* TikTok */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+            <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-900">{platform.label}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{platform.note}</p>
+                <p className="text-sm font-medium text-gray-900">TikTok</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Content Posting API · highest revenue-per-view target
+                </p>
               </div>
-              <button
-                className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-400 cursor-not-allowed"
-                disabled
-              >
-                Coming soon
-              </button>
+              {tt.connected ? (
+                <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">
+                  <Check className="w-3.5 h-3.5" /> {tt.handle}
+                </span>
+              ) : (
+                <span className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">
+                  Not connected
+                </span>
+              )}
             </div>
-          ))}
+
+            {ttNotice && (
+              <p
+                className={`text-xs px-3 py-2 rounded-lg ${
+                  ttNotice.kind === 'ok'
+                    ? 'bg-green-50 text-green-700'
+                    : 'bg-red-50 text-red-700'
+                }`}
+              >
+                {ttNotice.text}
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Client Key
+                </label>
+                <input
+                  value={settings.tiktok_client_key ?? ''}
+                  onChange={(e) => set('tiktok_client_key', e.target.value)}
+                  placeholder="aw…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Client Secret
+                </label>
+                <input
+                  type="password"
+                  value={settings.tiktok_client_secret ?? ''}
+                  onChange={(e) => set('tiktok_client_secret', e.target.value)}
+                  placeholder="…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              Create an app in the TikTok Developer Portal (Content Posting API enabled), with
+              redirect URI{' '}
+              <code className="text-gray-500">http://localhost:3000/api/auth/tiktok/callback</code>.
+              A new app can only post <strong>privately</strong> until TikTok approves it for
+              public posting. Save before connecting.
+            </p>
+
+            <label className="flex items-start gap-3 pt-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={(settings.tiktok_auto_publish_enabled ?? 'false') === 'true'}
+                onChange={(e) =>
+                  set('tiktok_auto_publish_enabled', e.target.checked ? 'true' : 'false')
+                }
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+              />
+              <span className="text-sm text-gray-700">
+                Auto-publish to TikTok
+                <span className="block text-xs text-gray-400 mt-0.5">
+                  When on, agents set to <strong>auto</strong> also post approved videos to
+                  TikTok. Independent of the YouTube switch — off by default.
+                </span>
+              </span>
+            </label>
+
+            <div className="flex items-center justify-end pt-1">
+              <div className="flex items-center gap-2">
+                {tt.connected && (
+                  <button
+                    onClick={disconnectTikTok}
+                    className="px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                )}
+                <button
+                  onClick={async () => {
+                    await save()
+                    window.location.href = '/api/auth/tiktok/start'
+                  }}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50"
+                >
+                  {tt.connected ? 'Reconnect' : 'Save & Connect'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Instagram Reels — a later phase */}
+          <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200 bg-gray-50">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Instagram Reels</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Requires Business account + Meta App Review
+              </p>
+            </div>
+            <button
+              className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-400 cursor-not-allowed"
+              disabled
+            >
+              Coming soon
+            </button>
+          </div>
         </section>
 
       </div>
