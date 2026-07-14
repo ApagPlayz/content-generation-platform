@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { executeRun } from './run'
+import { recoverStuckRuns } from './recovery'
 
 /**
  * Scheduler core. The app runs in-process with no background daemon, so the
@@ -73,6 +74,24 @@ export function computeNextRun(s: ScheduleTiming, from: Date = new Date()): Date
 export async function runDueSchedules(
   now: Date = new Date()
 ): Promise<{ ran: string[]; errors: { scheduleId: string; error: string }[] }> {
+  // Before scheduling anything, heal runs/videos/jobs orphaned by a crash or
+  // restart (the in-process pipeline leaves them stuck 'running'/'rendering'
+  // forever otherwise). This tick is driven on startup and every 60s by the
+  // in-process auto-tick, plus the external /api/scheduler/tick route and the
+  // dashboard "Run due now" button — so recovery happens everywhere ticks do.
+  // A recovery failure must never block real scheduling, so it's swallowed.
+  try {
+    const healed = await recoverStuckRuns(now)
+    if (healed.runs || healed.videos || healed.jobs) {
+      console.log(
+        `[recovery] reset ${healed.runs} run(s), ${healed.videos} video(s), ` +
+          `${healed.jobs} job(s) left stuck by a crash or restart`
+      )
+    }
+  } catch (e) {
+    console.warn('[recovery] sweep failed:', e instanceof Error ? e.message : e)
+  }
+
   const due = await prisma.schedule.findMany({
     where: {
       enabled: true,
