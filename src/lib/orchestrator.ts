@@ -189,8 +189,10 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     })
 
     // A hard block never ships; any copyright risk routes to human review; only
-    // a clean 'pass' is eligible for an auto agent's auto-publish.
-    const decision = ctx.copyright?.decision ?? 'pass'
+    // a clean 'pass' is eligible for an auto agent's auto-publish. If the gate
+    // verdict is somehow missing, fail closed to review — never auto-publish an
+    // unchecked clip (this is the whole point of issue #21).
+    const decision = ctx.copyright?.decision ?? 'route_to_review'
     const finalStatus =
       decision === 'block'
         ? 'rejected'

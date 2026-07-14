@@ -59,6 +59,26 @@ describe('evaluateCopyrightRisk', () => {
     expect(v.riskReasons.join(' ')).toMatch(/raw re-upload/i)
   })
 
+  it('passes at exactly 3 of 4 transform signals (checklist boundary)', () => {
+    // Reframed + commentary + graphics, but a longer excerpt fails "kept short":
+    // 3/4 with the 9:16 reframe present is our "clearly transformed" threshold.
+    const v = evaluateCopyrightRisk({ ...CLEAN, durationSec: 45 })
+    expect(v.checklist.keptShort).toBe(false)
+    expect(v.checklistScore).toBe(3)
+    expect(v.checklistPassed).toBe(true)
+    expect(v.decision).toBe('pass')
+  })
+
+  it('fails the checklist when not reframed, even with 3 other signals', () => {
+    // The 9:16 reframe is required — a horizontal re-upload can never "pass"
+    // the transformation checklist no matter how many other edits it has.
+    const v = evaluateCopyrightRisk({ ...CLEAN, reframedVertical: false })
+    expect(v.checklist.reframedVertical).toBe(false)
+    expect(v.checklistScore).toBe(3)
+    expect(v.checklistPassed).toBe(false)
+    expect(v.decision).toBe('route_to_review')
+  })
+
   it('flags a rights-aggressive league even when fully transformed', () => {
     const v = evaluateCopyrightRisk({ ...CLEAN, league: 'nfl', leagueTolerance: 'flag' })
     expect(v.decision).toBe('route_to_review')
@@ -91,5 +111,17 @@ describe('evaluateCopyrightRisk', () => {
     const v = evaluateCopyrightRisk({ ...CLEAN, licenseRef: undefined })
     expect(v.decision).toBe('route_to_review')
     expect(v.licenseFlags.length).toBeGreaterThan(0)
+  })
+
+  it('carries the exact fields the Review inbox reads (report → UI contract)', () => {
+    // gateSportsCopyright persists JSON.stringify(verdict); the inbox
+    // (src/app/page.tsx sportsCopyrightFromReport) reads these keys by name.
+    // Renaming any of them silently drops the copyright chips from the card,
+    // so pin the contract here.
+    const v = evaluateCopyrightRisk(CLEAN)
+    expect(v).toHaveProperty('riskLevel')
+    expect(v).toHaveProperty('checklistScore')
+    expect(v).toHaveProperty('checklistPassed')
+    expect(Array.isArray(v.riskReasons)).toBe(true)
   })
 })
