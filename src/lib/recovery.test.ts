@@ -8,6 +8,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_STUCK_TIMEOUT_MS,
+  RECOVERABLE_JOB_STATUSES,
+  RECOVERABLE_VIDEO_STATUSES,
   resolveTimeoutMs,
   stuckCutoff,
 } from './recovery'
@@ -52,5 +54,34 @@ describe('stuckCutoff', () => {
     const cutoff = stuckCutoff(now, DEFAULT_STUCK_TIMEOUT_MS)
     const exactlyAtTimeout = new Date(now.getTime() - DEFAULT_STUCK_TIMEOUT_MS)
     expect(exactlyAtTimeout < cutoff).toBe(false)
+  })
+})
+
+// The recovery sweep keys off these status lists. Issue #30: the original sweep
+// only healed videos at 'rendering' and jobs at 'running', so a crash at any
+// earlier stage left the video stuck on 'queued' (its status for most of the
+// pipeline) and a job orphaned mid-backoff stuck on 'retrying' — both spinning
+// forever. These assertions lock in the widened coverage without a database; if
+// someone narrows a list back, they go red. (They assert *which* statuses count
+// as orphaned; they do not exercise the Prisma query itself, matching this
+// file's no-database convention.)
+describe('recoverable status lists', () => {
+  it('sweeps videos still in the early "queued" stage, not just "rendering"', () => {
+    expect(RECOVERABLE_VIDEO_STATUSES).toContain('queued')
+    expect(RECOVERABLE_VIDEO_STATUSES).toContain('rendering')
+  })
+
+  it('sweeps jobs stuck mid-backoff on "retrying", not just "running"', () => {
+    expect(RECOVERABLE_JOB_STATUSES).toContain('running')
+    expect(RECOVERABLE_JOB_STATUSES).toContain('retrying')
+  })
+
+  it('never lists a terminal status, so finished work is never re-failed', () => {
+    for (const terminal of ['approved', 'review', 'rejected', 'failed', 'published']) {
+      expect(RECOVERABLE_VIDEO_STATUSES).not.toContain(terminal)
+    }
+    for (const terminal of ['completed', 'failed']) {
+      expect(RECOVERABLE_JOB_STATUSES).not.toContain(terminal)
+    }
   })
 })
