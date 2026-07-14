@@ -39,6 +39,8 @@ interface InboxCardProps {
   id: string
   title: string | null
   scriptText: string | null
+  hookScore?: number | null
+  hookStyle?: string | null
   factoryType: string
   factoryName: string
   costEstimate: number | null
@@ -57,6 +59,8 @@ export function InboxCard({
   id,
   title,
   scriptText,
+  hookScore,
+  hookStyle,
   factoryType,
   factoryName,
   costEstimate,
@@ -178,6 +182,24 @@ export function InboxCard({
       <h3 className="font-semibold text-gray-900 mb-2">
         {title ?? 'Untitled Video'}
       </h3>
+
+      {hookScore != null && (
+        <div className="mb-2">
+          <span
+            title="Predicted strength of the opening line (the first thing viewers see). Higher = more likely to stop the scroll."
+            className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              hookScore >= 70
+                ? 'bg-green-100 text-green-700'
+                : hookScore >= 45
+                  ? 'bg-yellow-100 text-yellow-800'
+                  : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            Hook strength {Math.round(hookScore)}/100
+            {hookStyle ? ` · ${hookStyle}` : ''}
+          </span>
+        </div>
+      )}
 
       {scriptText && (
         <p className="text-sm text-gray-500 line-clamp-3 mb-4 leading-relaxed">

@@ -30,6 +30,11 @@ export interface MomentResult {
 export interface ScriptResult {
   title: string
   hook: string
+  /** Predicted strength (0-100) of the chosen opening line — see hookScore.ts. */
+  hookScore?: number
+  /** Angle of the winning hook, e.g. "bold number" — groundwork for learning
+   *  which hook styles actually win once retention data exists (issue #18). */
+  hookStyle?: string
   description: string
   hashtags: string[]
   /** Short original analytical/commentary lines burned as timed overlays by the

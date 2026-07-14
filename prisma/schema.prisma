@@ -100,6 +100,8 @@ model Video {
   description   String?
   hashtags      String?
   scriptText    String?
+  hookScore     Float?
+  hookStyle     String?
   sourceRef     String?
   localPath     String?
   thumbnailPath String?
