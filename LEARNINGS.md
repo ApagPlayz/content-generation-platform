@@ -18,6 +18,12 @@ nothing is added here without the owner merging it.
   `permissions: issues: write` is NOT enough — it grants GitHub-side rights, not tool-side ones.
   Without `--allowedTools` in `claude_args`, every `gh issue create` was silently denied
   (`permission_denials_count: 20` in the run log, which is the ONLY place it surfaces).
-  Fix: every agent workflow must pass e.g. `--allowedTools "Bash(gh:*),Bash(git:*)"`.
   Rule: after any agent run, verify the *outcome* on GitHub (issue/PR/comment exists) —
   never trust the green tick, and always check `permission_denials_count` when output is missing.
+- *2026-07-13* — **`--allowedTools` REPLACES the default toolset; it does not extend it.** The first
+  attempt at the fix above passed only `--allowedTools "Bash(gh:*),Bash(git:*)"`. That granted Bash
+  and silently revoked `Read`/`Grep`/`Task`/`WebSearch` — denials went UP (20 → 22) and the run
+  collapsed from 46 turns to 21. An allowlist must name EVERY tool the agent needs, not just the
+  new one. Also: `Bash(gh:*)`-style prefix patterns do NOT match commands containing `$(...)`,
+  heredocs or pipes — and `gh issue create --body "$(cat <<EOF...)"` is exactly what these agents
+  write. In an ephemeral CI container on a private repo, plain `Bash` is the right call.
