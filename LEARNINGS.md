@@ -40,3 +40,9 @@ nothing is added here without the owner merging it.
   correctly detected "0 proposals before → 0 after" and emitted `::warning`, which left the run
   GREEN. The owner saw a passing loop that had produced nothing for a day. Verification steps must
   `exit 1`. A red run is information; a green run that did nothing is a lie.
+- *2026-07-14* — **An unassigned issue never reaches the owner.** Scout filed 7 correct proposals and
+  the owner still saw nothing: GitHub's Inbox only notifies you about things you authored, are
+  assigned to, are subscribed to, or are @mentioned in. Issues opened by `app/claude` with no
+  assignee match none of those, so they are invisible unless he manually opens the Issues tab.
+  Producing the artifact is not the same as delivering it. Scout must pass `--assignee <owner>`;
+  Builder must pass `--assignee <owner> --reviewer <owner>`.

@@ -99,8 +99,11 @@ jobs:
                - Codebase: what is fragile, untested, or half-finished in our own code.
                - Revenue: what would plausibly make this product money or save it money.
                Do not proceed to step 5 until you are holding all four reports.
-            5. File each proposal with `gh issue create --label proposal`. THIS IS THE STEP THAT
-               MATTERS — everything above is worthless without it. Each issue must have:
+            5. File each proposal with
+               `gh issue create --label proposal --assignee ${{ github.repository_owner }}`.
+               THIS IS THE STEP THAT MATTERS — everything above is worthless without it.
+               The `--assignee` is not optional: without it the issue never reaches the owner's
+               GitHub inbox and he will never see it. Each issue must have:
                - A plain-English title a non-technical owner instantly understands
                - What to build, and why it matters to the product's success
                - Evidence: links, quotes, or a specific file that proves the problem is real
