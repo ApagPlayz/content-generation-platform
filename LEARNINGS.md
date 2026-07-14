@@ -53,3 +53,18 @@ nothing is added here without the owner merging it.
   single one — the two halves of the loop could not see each other. Fix: `allowed_bots: "claude"`
   on the auditor step. Scope it to `claude`, never `*`, or any bot's PR (Dependabot, etc.) burns
   a five-agent audit.
+- *2026-07-14* — **GitHub cron is best-effort and silently drops runs.** The Builder's `*/30`
+  schedule actually fired at 14:02, 15:59, 16:51, 17:24, 18:42 — a two-hour gap in the middle. The
+  owner approved three issues from his phone and watched nothing happen, because the Builder never
+  woke up. Never rely on a schedule alone for anything a human is waiting on: trigger on the event
+  (`issues: types: [labeled]`) and keep the cron only as a backstop.
+- *2026-07-14* — **The Builder rebuilt an issue that was already being built.** Two runs both picked
+  #15, both spent ~14 minutes, and opened two PRs (#28, #29) for one feature; one had to be thrown
+  away. The prompt said "comment on the issue so a later run doesn't pick it up too" — but nothing
+  *reads* that comment. A prompt-level convention is not a lock. The gate must compute which issues
+  already have an open `claude/` PR (`Closes #N` in the PR body) and hand the agent an explicit
+  off-limits list.
+- *2026-07-14* — **Agents read the issue BODY, not the thread.** `gh issue view` omits comments unless
+  you pass `--comments`, so an owner's clarification ("only do the YouTube part") is invisible and the
+  original scope gets built. Every agent that acts on an issue must read the comments, and the owner's
+  comments override the body. When the owner asks @claude to change scope, @claude must edit the body.
