@@ -179,11 +179,42 @@ export type AutoPublishOutcome =
   | { published: false; reason: string }
 
 /**
+ * Records a would-have-posted-but-couldn't outcome as a failed `publish` Job so
+ * the reason is never silent (issue #15). Mirrors the silent-voiceover soft-fail
+ * pattern in the orchestrators: the Queue tab renders `job.error`, and the
+ * dashboard turns it into plain language via plainPublishNote. Its own failure
+ * is swallowed — recording the note must never break an otherwise-good run.
+ */
+async function recordPublishSkip(videoId: string, reason: string): Promise<void> {
+  try {
+    await prisma.job.create({
+      data: {
+        videoId,
+        stage: 'publish',
+        status: 'failed',
+        attempts: 1,
+        error: reason,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+      },
+    })
+  } catch {
+    // best-effort: a bookkeeping write must not fail the run
+  }
+}
+
+/**
  * Auto-publish hook for autonomy=auto agents. Called by the orchestrators after
  * a video is approved. It is deliberately NON-FATAL: any reason it can't publish
  * (feature off, YouTube not connected, daily quota spent, upload error) leaves
  * the video 'approved' for a later manual publish and returns a reason rather
  * than throwing — a publish hiccup must never fail an otherwise-good run.
+ *
+ * The actionable reasons (not connected, quota spent, upload error) are also
+ * persisted as a failed `publish` Job so the owner sees WHY a post didn't happen
+ * instead of a video silently stuck on 'approved' (issue #15). The two expected,
+ * owner-chosen skips — a review-gated agent and auto-publish turned off in
+ * Settings — record nothing, since neither is a failure worth flagging.
  */
 export async function maybeAutoPublish(
   videoId: string,
@@ -192,16 +223,26 @@ export async function maybeAutoPublish(
   if (autonomy !== 'auto') return { published: false, reason: 'agent is review-gated' }
   if (!(await autoPublishEnabled()))
     return { published: false, reason: 'auto-publish disabled in Settings' }
-  if (!(await connection())) return { published: false, reason: 'YouTube not connected' }
+
+  if (!(await connection())) {
+    const reason = 'YouTube not connected'
+    await recordPublishSkip(videoId, reason)
+    return { published: false, reason }
+  }
 
   const { remaining, cap } = await quotaStatus()
-  if (remaining <= 0)
-    return { published: false, reason: `daily upload quota reached (${cap}/day)` }
+  if (remaining <= 0) {
+    const reason = `daily upload quota reached (${cap}/day)`
+    await recordPublishSkip(videoId, reason)
+    return { published: false, reason }
+  }
 
   try {
     const r = await publishToYouTube(videoId)
     return { published: true, permalink: r.permalink }
   } catch (e) {
-    return { published: false, reason: e instanceof Error ? e.message : String(e) }
+    const reason = e instanceof Error ? e.message : String(e)
+    await recordPublishSkip(videoId, reason)
+    return { published: false, reason }
   }
 }

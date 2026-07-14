@@ -7,6 +7,7 @@ import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
 import { ScheduleCalendar } from '@/components/schedule-calendar'
 import { WinnersView } from '@/components/winners-view'
+import { plainPublishNote } from '@/lib/tools/publishReason'
 
 const TYPE_META: Record<string, { color: string }> = {
   F1: { color: 'bg-orange-100 text-orange-700' },
@@ -94,7 +95,16 @@ async function OverviewTab() {
       prisma.video.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
-        include: { factory: { select: { name: true, type: true } } },
+        include: {
+          factory: { select: { name: true, type: true } },
+          // The reason an auto agent couldn't post (issue #15) — surfaced as a
+          // plain-language note below any video still stuck on 'approved'.
+          jobs: {
+            where: { stage: 'publish', status: 'failed' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
       }),
       quotaStatus(),
     ])
@@ -156,31 +166,40 @@ async function OverviewTab() {
                 label: video.status,
                 color: 'bg-gray-100 text-gray-600',
               }
+              // A failed auto-publish only matters while the video is still
+              // stuck (once it actually posts it flips to 'published'), so the
+              // note self-clears — no stale warning to clean up (issue #15).
+              const publishNote =
+                video.status !== 'published' && video.jobs.length > 0
+                  ? plainPublishNote(video.jobs[0].error)
+                  : null
               return (
-                <div
-                  key={video.id}
-                  className="flex items-center justify-between px-5 py-3"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${tm.color}`}
-                    >
-                      {video.factory.type}
-                    </span>
-                    <span className="text-sm text-gray-900 truncate">
-                      {video.title ?? 'Untitled Video'}
-                    </span>
+                <div key={video.id} className="px-5 py-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${tm.color}`}
+                      >
+                        {video.factory.type}
+                      </span>
+                      <span className="text-sm text-gray-900 truncate">
+                        {video.title ?? 'Untitled Video'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 ml-4">
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${sm.color}`}
+                      >
+                        {sm.label}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(video.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0 ml-4">
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${sm.color}`}
-                    >
-                      {sm.label}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {new Date(video.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
+                  {publishNote && (
+                    <p className="mt-1.5 text-xs text-red-600">⚠ {publishNote}</p>
+                  )}
                 </div>
               )
             })}
