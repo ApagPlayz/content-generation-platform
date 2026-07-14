@@ -86,6 +86,25 @@ jobs:
             Read CLAUDE.md and LEARNINGS.md before writing a single line. LEARNINGS.md is the
             record of mistakes this loop has already made — do not repeat them.
 
+            ────────────────────────────────────────────────────────────────────────
+            HOW THIS RUN WORKS — READ THIS FIRST, IT IS NOT OPTIONAL
+
+            You are running inside a one-shot CI job. **There is no second turn.** The moment you
+            stop producing tool calls, this container is destroyed. Nothing resumes you.
+
+            - When you spawn subagents with the Task tool, you MUST pass `run_in_background: false`
+              so you BLOCK and receive their reports. A backgrounded subagent is killed the moment
+              you stop, and its work is thrown away.
+            - NEVER end your turn saying you will "wait for" anything or "report back". There is no
+              later. That sentence means you failed.
+            - Your job is done when `gh pr create` has actually run and returned a URL — not when
+              you have decided what to build.
+
+            A previous Scout run dispatched four background researchers, announced it would wait
+            for them, ended its turn, and produced nothing while the run went green. Do not repeat
+            that.
+            ────────────────────────────────────────────────────────────────────────
+
             PICK — in this strict order:
             1. The OLDEST open issue labeled `approved`. The owner asked for it; it always wins.
             2. If none are approved, choose the SINGLE strongest open issue labeled `proposal` —
@@ -99,8 +118,9 @@ jobs:
             PLAN: restate the issue as an explicit acceptance checklist before coding.
 
             BUILD (spend tokens here — this is the point):
-            - Use the Task tool to spawn THREE agents in parallel, each proposing a different
-              implementation approach for this issue.
+            - Spawn THREE agents with the Task tool, in ONE message, each with
+              `run_in_background: false` so you block until all three return. Each proposes a
+              different implementation approach for this issue.
             - Judge the three against: smallest honest diff, best fit with existing repo style,
               easiest for a non-technical owner to verify by clicking around.
             - Implement the winner, grafting in the best ideas from the other two.

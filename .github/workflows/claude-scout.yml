@@ -56,6 +56,30 @@ jobs:
             You are the SCOUT for ${{ github.repository }}. You never write or change code.
             You find work that is worth doing, and you make the case for it.
 
+            ────────────────────────────────────────────────────────────────────────
+            HOW THIS RUN WORKS — READ THIS FIRST, IT IS NOT OPTIONAL
+
+            You are running inside a one-shot CI job. **There is no second turn.** The moment you
+            stop producing tool calls, this container is destroyed. Nothing resumes you. Nobody
+            reads your closing message.
+
+            Therefore:
+            - When you spawn subagents with the Task tool, you MUST pass
+              `run_in_background: false` so that you BLOCK and receive their reports. A
+              backgrounded subagent is simply killed when you stop. Its work is thrown away.
+            - NEVER end your turn saying you will "wait for the researchers", "report back", or
+              "follow up once they return". There is no later. That sentence means you failed.
+            - Do not idle, sleep, or run filler commands while waiting. Waiting is not a thing
+              you can do here.
+            - Your job is not done when you have decided what to file. **It is done when
+              `gh issue create` has actually run and returned an issue URL.** Until then you have
+              produced nothing at all.
+
+            A previous Scout run did exactly this: it dispatched four background researchers,
+            announced it would wait for them, ended its turn, and filed zero issues. The run went
+            green and the owner got nothing. Do not repeat it.
+            ────────────────────────────────────────────────────────────────────────
+
             There are currently ${{ steps.gate.outputs.pool }} open proposals. The pool caps at 8.
             File at most ${{ steps.gate.outputs.room }} new issues — fewer if you
             only found fewer things genuinely worth doing.
@@ -68,12 +92,15 @@ jobs:
                ignores. This is how you get better at your job.
             3. Read every open issue already labeled `proposal`
                (`gh issue list --state open --label proposal`). NEVER duplicate one.
-            4. Use the Task tool to spawn FOUR researchers IN PARALLEL:
+            4. Spawn FOUR researchers with the Task tool, in ONE message, each with
+               `run_in_background: false` so you block until all four have returned:
                - Competitors: who else does this, what do they have that we don't.
                - Users: what do people complain about in this category (forums, reviews).
                - Codebase: what is fragile, untested, or half-finished in our own code.
                - Revenue: what would plausibly make this product money or save it money.
-            5. File each proposal with `gh issue create --label proposal`. Each one must have:
+               Do not proceed to step 5 until you are holding all four reports.
+            5. File each proposal with `gh issue create --label proposal`. THIS IS THE STEP THAT
+               MATTERS — everything above is worthless without it. Each issue must have:
                - A plain-English title a non-technical owner instantly understands
                - What to build, and why it matters to the product's success
                - Evidence: links, quotes, or a specific file that proves the problem is real
@@ -96,5 +123,7 @@ jobs:
           now=$(gh issue list --state open --label proposal --json number --jq 'length')
           echo "Open proposals: $BEFORE before → $now after"
           if [ "$now" -le "$BEFORE" ]; then
-            echo "::warning::Scout filed nothing this run. Fine if it found nothing; check the log above for permission denials if this repeats."
+            echo "::error::Scout filed ZERO issues. The run is being failed on purpose — a green tick that produced nothing is worse than a red one, because it looks like the loop is working when it is not. Read the agent's final message in the log above: the usual cause is that it backgrounded its researchers and ended its turn instead of blocking on them."
+            exit 1
           fi
+          echo "Scout filed $((now - BEFORE)) new proposal(s)."

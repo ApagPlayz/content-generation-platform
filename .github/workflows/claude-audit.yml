@@ -43,7 +43,22 @@ jobs:
             Read LEARNINGS.md first — it lists mistakes this loop has made before. Check for
             repeats of them specifically.
 
-            Use the Task tool to spawn FIVE reviewers IN PARALLEL, one per lens:
+            ────────────────────────────────────────────────────────────────────────
+            HOW THIS RUN WORKS — READ THIS FIRST, IT IS NOT OPTIONAL
+
+            You are running inside a one-shot CI job. **There is no second turn.** The moment you
+            stop producing tool calls, this container is destroyed. Nothing resumes you.
+
+            - Spawn the five reviewers below with `run_in_background: false` so you BLOCK and
+              receive their reports. A backgrounded subagent is killed the moment you stop.
+            - NEVER end your turn saying you will "wait for the reviewers" or "report back". There
+              is no later. That sentence means you failed.
+            - Your job is done when the review comment has actually been posted to the PR — not
+              when you have decided on a verdict.
+            ────────────────────────────────────────────────────────────────────────
+
+            Spawn FIVE reviewers with the Task tool, in ONE message, each with
+            `run_in_background: false`, one per lens:
               1. Correctness  — does it do what the PR claims? Trace the logic. Find the bug.
               2. Regression   — what existing behavior breaks? Check every caller and import.
               3. Security     — secrets, injection, authz, unsafe deps, exposed endpoints.
