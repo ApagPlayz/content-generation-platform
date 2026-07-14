@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
-import { quotaStatus } from '@/lib/tools/publish'
+import { quotaStatus, describeAutoPublishFailure } from '@/lib/tools/publish'
 import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
@@ -94,7 +94,17 @@ async function OverviewTab() {
       prisma.video.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
-        include: { factory: { select: { name: true, type: true } } },
+        include: {
+          factory: { select: { name: true, type: true } },
+          // A 'failed' YouTube Post means an auto-agent couldn't publish this
+          // video (not connected / quota / rejected). Surface why, in plain
+          // language, so it never silently sits in 'approved'.
+          posts: {
+            where: { platform: 'youtube', status: 'failed' },
+            select: { error: true },
+            take: 1,
+          },
+        },
       }),
       quotaStatus(),
     ])
@@ -156,31 +166,41 @@ async function OverviewTab() {
                 label: video.status,
                 color: 'bg-gray-100 text-gray-600',
               }
+              const notPosted = video.posts[0]
               return (
-                <div
-                  key={video.id}
-                  className="flex items-center justify-between px-5 py-3"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${tm.color}`}
-                    >
-                      {video.factory.type}
-                    </span>
-                    <span className="text-sm text-gray-900 truncate">
-                      {video.title ?? 'Untitled Video'}
-                    </span>
+                <div key={video.id} className="px-5 py-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${tm.color}`}
+                      >
+                        {video.factory.type}
+                      </span>
+                      <span className="text-sm text-gray-900 truncate">
+                        {video.title ?? 'Untitled Video'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 ml-4">
+                      {notPosted && (
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-600">
+                          Not posted
+                        </span>
+                      )}
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${sm.color}`}
+                      >
+                        {sm.label}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(video.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0 ml-4">
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${sm.color}`}
-                    >
-                      {sm.label}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {new Date(video.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
+                  {notPosted && (
+                    <p className="mt-1.5 text-xs text-red-600">
+                      {describeAutoPublishFailure(notPosted.error)}
+                    </p>
+                  )}
                 </div>
               )
             })}

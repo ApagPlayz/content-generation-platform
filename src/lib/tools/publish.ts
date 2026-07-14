@@ -179,11 +179,43 @@ export type AutoPublishOutcome =
   | { published: false; reason: string }
 
 /**
+ * Persist a non-fatal auto-publish block as a 'failed' Post so the reason shows
+ * up in the dashboard instead of the video silently sitting in 'approved'. This
+ * covers the pre-upload blockers (no connection, quota spent) that never reach
+ * publishToYouTube — which records its own 'failed' Post on an upload error.
+ * Upsert (not create) because a manual retry may later overwrite this row.
+ */
+async function recordAutoPublishBlock(videoId: string, reason: string): Promise<void> {
+  await prisma.post.upsert({
+    where: { videoId_platform: { videoId, platform: PLATFORM } },
+    update: { status: 'failed', error: reason },
+    create: { videoId, platform: PLATFORM, status: 'failed', error: reason },
+  })
+}
+
+/**
+ * Turn a raw auto-publish `reason` (or a stored Post.error) into a plain-language
+ * line for the owner, who is non-technical. Pure + exported so the dashboard and
+ * its tests can share one source of truth.
+ */
+export function describeAutoPublishFailure(reason: string | null | undefined): string {
+  const r = (reason ?? '').toLowerCase()
+  if (r.includes('not connected'))
+    return 'Not posted — YouTube isn’t connected. Connect it in Settings to publish.'
+  if (r.includes('quota') || r.includes('daily') || r.includes('limit'))
+    return 'Not posted — YouTube’s daily upload limit was reached. It’ll retry on the next run.'
+  if (reason && reason.trim())
+    return `Not posted — YouTube rejected the upload: ${reason.trim()}`
+  return 'Not posted — the upload didn’t go through.'
+}
+
+/**
  * Auto-publish hook for autonomy=auto agents. Called by the orchestrators after
  * a video is approved. It is deliberately NON-FATAL: any reason it can't publish
  * (feature off, YouTube not connected, daily quota spent, upload error) leaves
  * the video 'approved' for a later manual publish and returns a reason rather
- * than throwing — a publish hiccup must never fail an otherwise-good run.
+ * than throwing — a publish hiccup must never fail an otherwise-good run. Every
+ * genuine blocker is recorded as a 'failed' Post so the reason is never silent.
  */
 export async function maybeAutoPublish(
   videoId: string,
@@ -192,16 +224,25 @@ export async function maybeAutoPublish(
   if (autonomy !== 'auto') return { published: false, reason: 'agent is review-gated' }
   if (!(await autoPublishEnabled()))
     return { published: false, reason: 'auto-publish disabled in Settings' }
-  if (!(await connection())) return { published: false, reason: 'YouTube not connected' }
+
+  if (!(await connection())) {
+    const reason = 'YouTube not connected'
+    await recordAutoPublishBlock(videoId, reason)
+    return { published: false, reason }
+  }
 
   const { remaining, cap } = await quotaStatus()
-  if (remaining <= 0)
-    return { published: false, reason: `daily upload quota reached (${cap}/day)` }
+  if (remaining <= 0) {
+    const reason = `daily upload quota reached (${cap}/day)`
+    await recordAutoPublishBlock(videoId, reason)
+    return { published: false, reason }
+  }
 
   try {
     const r = await publishToYouTube(videoId)
     return { published: true, permalink: r.permalink }
   } catch (e) {
+    // publishToYouTube already recorded a 'failed' Post with this error.
     return { published: false, reason: e instanceof Error ? e.message : String(e) }
   }
 }
