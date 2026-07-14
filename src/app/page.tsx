@@ -94,7 +94,14 @@ async function OverviewTab() {
       prisma.video.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
-        include: { factory: { select: { name: true, type: true } } },
+        include: {
+          factory: { select: { name: true, type: true } },
+          posts: {
+            where: { platform: 'youtube', status: 'failed' },
+            select: { error: true },
+            take: 1,
+          },
+        },
       }),
       quotaStatus(),
     ])
@@ -167,9 +174,16 @@ async function OverviewTab() {
                     >
                       {video.factory.type}
                     </span>
-                    <span className="text-sm text-gray-900 truncate">
-                      {video.title ?? 'Untitled Video'}
-                    </span>
+                    <div className="min-w-0">
+                      <span className="block text-sm text-gray-900 truncate">
+                        {video.title ?? 'Untitled Video'}
+                      </span>
+                      {video.posts[0]?.error && (
+                        <span className="block text-xs text-red-500 truncate">
+                          Not posted: {video.posts[0].error}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0 ml-4">
                     <span

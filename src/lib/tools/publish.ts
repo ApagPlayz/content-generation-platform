@@ -178,20 +178,49 @@ export type AutoPublishOutcome =
   | { published: true; permalink: string }
   | { published: false; reason: string }
 
+// Expected, non-error skip states — the operator chose these on purpose, so they
+// must NOT be recorded or painted as failures (that would flag every auto video
+// red whenever auto-publish is simply switched off).
+export const AUTO_PUBLISH_REVIEW_GATED = 'agent is review-gated'
+export const AUTO_PUBLISH_DISABLED = 'auto-publish disabled in Settings'
+
 /**
- * Auto-publish hook for autonomy=auto agents. Called by the orchestrators after
- * a video is approved. It is deliberately NON-FATAL: any reason it can't publish
- * (feature off, YouTube not connected, daily quota spent, upload error) leaves
- * the video 'approved' for a later manual publish and returns a reason rather
- * than throwing — a publish hiccup must never fail an otherwise-good run.
+ * True when a "didn't publish" reason is a genuine, actionable problem worth
+ * recording and showing the owner (YouTube not connected, quota reached, upload
+ * rejected) — as opposed to an expected opt-out state.
  */
-export async function maybeAutoPublish(
+export function isAutoPublishFailure(reason: string): boolean {
+  return reason !== AUTO_PUBLISH_REVIEW_GATED && reason !== AUTO_PUBLISH_DISABLED
+}
+
+/**
+ * Record a genuine "wanted to publish but couldn't" as a failed youtube Post so
+ * the dashboard can surface it in plain language. Never clobbers a real
+ * published post, and never throws — this bookkeeping must not fail a good run.
+ */
+async function recordAutoPublishFailure(videoId: string, reason: string): Promise<void> {
+  try {
+    const existing = await prisma.post.findUnique({
+      where: { videoId_platform: { videoId, platform: PLATFORM } },
+    })
+    if (existing?.status === 'published') return
+    await prisma.post.upsert({
+      where: { videoId_platform: { videoId, platform: PLATFORM } },
+      update: { status: 'failed', error: reason },
+      create: { videoId, platform: PLATFORM, status: 'failed', error: reason },
+    })
+  } catch {
+    // A logging hiccup must never fail an otherwise-good run.
+  }
+}
+
+async function computeAutoPublish(
   videoId: string,
   autonomy: string
 ): Promise<AutoPublishOutcome> {
-  if (autonomy !== 'auto') return { published: false, reason: 'agent is review-gated' }
+  if (autonomy !== 'auto') return { published: false, reason: AUTO_PUBLISH_REVIEW_GATED }
   if (!(await autoPublishEnabled()))
-    return { published: false, reason: 'auto-publish disabled in Settings' }
+    return { published: false, reason: AUTO_PUBLISH_DISABLED }
   if (!(await connection())) return { published: false, reason: 'YouTube not connected' }
 
   const { remaining, cap } = await quotaStatus()
@@ -204,4 +233,26 @@ export async function maybeAutoPublish(
   } catch (e) {
     return { published: false, reason: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/**
+ * Auto-publish hook for autonomy=auto agents. Called by the orchestrators after
+ * a video is approved. It is deliberately NON-FATAL: any reason it can't publish
+ * (feature off, YouTube not connected, daily quota spent, upload error) leaves
+ * the video 'approved' for a later manual publish and returns a reason rather
+ * than throwing — a publish hiccup must never fail an otherwise-good run.
+ *
+ * Genuine failures (not the expected opt-out states) are also persisted as a
+ * failed youtube Post so the dashboard can tell the owner WHY a video didn't
+ * post, instead of leaving it silently in 'approved'.
+ */
+export async function maybeAutoPublish(
+  videoId: string,
+  autonomy: string
+): Promise<AutoPublishOutcome> {
+  const outcome = await computeAutoPublish(videoId, autonomy)
+  if (!outcome.published && isAutoPublishFailure(outcome.reason)) {
+    await recordAutoPublishFailure(videoId, outcome.reason)
+  }
+  return outcome
 }
