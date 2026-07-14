@@ -119,3 +119,13 @@ export async function autoPublishEnabled(): Promise<boolean> {
   const v = (await getSetting('auto_publish_enabled', 'false')).toLowerCase()
   return v === 'true' || v === '1' || v === 'on'
 }
+
+/**
+ * Same opt-in for TikTok (issue #19). Kept as its own setting so connecting
+ * TikTok never changes what YouTube does, and vice-versa — each platform is
+ * switched on independently and stays off by default.
+ */
+export async function tiktokAutoPublishEnabled(): Promise<boolean> {
+  const v = (await getSetting('tiktok_auto_publish_enabled', 'false')).toLowerCase()
+  return v === 'true' || v === '1' || v === 'on'
+}
