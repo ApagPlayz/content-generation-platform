@@ -435,6 +435,8 @@ async function InboxTab() {
                 id={video.id}
                 title={video.title}
                 scriptText={video.scriptText}
+                hookScore={video.hookScore}
+                hookStyle={video.hookStyle}
                 factoryType={video.factory.type}
                 factoryName={video.factory.name}
                 costEstimate={video.costEstimate}

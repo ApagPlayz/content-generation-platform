@@ -94,6 +94,8 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
           description: ctx.script.description,
           hashtags: JSON.stringify(ctx.script.hashtags),
           scriptText: ctx.script.hook,
+          hookScore: ctx.script.hookScore ?? null,
+          hookStyle: ctx.script.hookStyle ?? null,
         },
       })
     })
