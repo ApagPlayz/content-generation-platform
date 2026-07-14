@@ -40,6 +40,8 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
           fi
           echo "pool=$pool" >> "$GITHUB_OUTPUT"
+          # Actions expressions have no arithmetic — do the subtraction here.
+          echo "room=$((8 - pool))" >> "$GITHUB_OUTPUT"
 
       - if: steps.gate.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
@@ -55,7 +57,7 @@ jobs:
             You find work that is worth doing, and you make the case for it.
 
             There are currently ${{ steps.gate.outputs.pool }} open proposals. The pool caps at 8.
-            File at most ${{ 8 - fromJSON(steps.gate.outputs.pool) }} new issues — fewer if you
+            File at most ${{ steps.gate.outputs.room }} new issues — fewer if you
             only found fewer things genuinely worth doing.
 
             1. Read the codebase and CLAUDE.md to understand what this product actually is and
@@ -89,9 +91,10 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEFORE: ${{ steps.gate.outputs.pool }}
         run: |
           now=$(gh issue list --state open --label proposal --json number --jq 'length')
-          echo "Open proposals: ${{ steps.gate.outputs.pool }} before → $now after"
-          if [ "$now" -le "${{ steps.gate.outputs.pool }}" ]; then
+          echo "Open proposals: $BEFORE before → $now after"
+          if [ "$now" -le "$BEFORE" ]; then
             echo "::warning::Scout filed nothing this run. Fine if it found nothing; check the log above for permission denials if this repeats."
           fi
