@@ -134,8 +134,11 @@ jobs:
             blocked you, in plain English, and stop. A blocked run that says so is a success.
             A green-looking broken PR is a failure.
 
-            SHIP: open ONE pull request from a `claude/` branch with `Closes #<issue>` in the
-            body. Write the description for a NON-TECHNICAL owner reading on a phone:
+            SHIP: open ONE pull request from a `claude/` branch, with
+            `--assignee ${{ github.repository_owner }} --reviewer ${{ github.repository_owner }}`
+            and `Closes #<issue>` in the body. The assignee and reviewer flags are NOT optional:
+            without them the PR never reaches the owner's GitHub inbox and he will never know it
+            exists. Write the description for a NON-TECHNICAL owner reading on a phone:
               1. What changed
               2. Why it matters
               3. How to check it works — click by click
