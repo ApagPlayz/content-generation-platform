@@ -46,3 +46,10 @@ nothing is added here without the owner merging it.
   assignee match none of those, so they are invisible unless he manually opens the Issues tab.
   Producing the artifact is not the same as delivering it. Scout must pass `--assignee <owner>`;
   Builder must pass `--assignee <owner> --reviewer <owner>`.
+- *2026-07-14* — **The Auditor refused to review the Builder's PRs — bot-loop guard.**
+  `claude-code-action` aborts before turn 1 when the triggering actor is a Bot:
+  `Workflow initiated by non-human actor: claude (type: Bot). Add bot to allowed_bots list.`
+  Every Builder PR is authored by the `claude` bot, so the Auditor would never have reviewed a
+  single one — the two halves of the loop could not see each other. Fix: `allowed_bots: "claude"`
+  on the auditor step. Scope it to `claude`, never `*`, or any bot's PR (Dependabot, etc.) burns
+  a five-agent audit.

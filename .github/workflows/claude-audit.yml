@@ -31,6 +31,11 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The Builder's PRs are authored by the `claude` bot. Without this, the action's
+          # bot-loop guard refuses to run and the Auditor never reviews a single agent PR —
+          # which is the entire point of the Auditor. Scoped to `claude`, not `*`.
+          allowed_bots: "claude"
+          show_full_output: true
           claude_args: |
             --model opus
             --max-turns 60
