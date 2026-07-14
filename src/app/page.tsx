@@ -389,6 +389,29 @@ function footageSummaryFromMeta(meta: string | null): string | null {
   }
 }
 
+// Pull the sports (F9) copyright verdict out of the stored report JSON so the
+// inbox can render risk + transformation-checklist chips. Null for non-F9 rows.
+function sportsCopyrightFromReport(reportJson: string | null): {
+  copyrightRisk: 'low' | 'medium' | 'high'
+  checklistScore: number
+  transformationPassed: boolean
+  riskReasons: string[]
+} | null {
+  if (!reportJson) return null
+  try {
+    const parsed = JSON.parse(reportJson)
+    if (parsed?.kind !== 'sports_copyright') return null
+    return {
+      copyrightRisk: parsed.riskLevel,
+      checklistScore: parsed.checklistScore,
+      transformationPassed: parsed.checklistPassed,
+      riskReasons: Array.isArray(parsed.riskReasons) ? parsed.riskReasons : [],
+    }
+  } catch {
+    return null
+  }
+}
+
 async function InboxTab() {
   const pending = await prisma.video.findMany({
     where: { status: 'review' },
@@ -456,6 +479,7 @@ async function InboxTab() {
                         corroboratedPct: report.corroboratedPct,
                         defamationFlags: report.defamationFlags,
                         variationOk: report.variationOk,
+                        ...(sportsCopyrightFromReport(report.report) ?? {}),
                       }
                     : null
                 }

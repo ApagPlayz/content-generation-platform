@@ -75,6 +75,8 @@ export interface ToolContext {
   script?: ScriptResult
   transform?: TransformResult
   assembled?: AssembleResult
+  /** Copyright-risk gate decision (set by the `copyright` stage). */
+  copyright?: import('./copyrightGate').SportsCopyrightVerdict
 }
 
 export const PIPELINE_STAGES = [
@@ -84,6 +86,7 @@ export const PIPELINE_STAGES = [
   'script',
   'transform',
   'assemble',
+  'copyright',
 ] as const
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number]

@@ -25,6 +25,20 @@ const DECISION_META: Record<string, { label: string; color: string }> = {
   block:           { label: 'Blocked by fact-check', color: 'bg-red-100 text-red-700' },
 }
 
+// Sports (F9) copyright gate uses its own wording — this is about copyright
+// strike risk, not fact-checking (issue #21).
+const SPORTS_DECISION_META: Record<string, { label: string; color: string }> = {
+  pass:            { label: 'Copyright checks passed', color: 'bg-green-100 text-green-700' },
+  route_to_review: { label: 'Copyright review needed', color: 'bg-yellow-100 text-yellow-800' },
+  block:           { label: 'Blocked — copyright risk', color: 'bg-red-100 text-red-700' },
+}
+
+const RISK_COLOR: Record<string, string> = {
+  low:    'bg-green-50 text-green-700',
+  medium: 'bg-yellow-50 text-yellow-700',
+  high:   'bg-red-50 text-red-700',
+}
+
 // Per-check rollups persisted on the ComplianceReport row (see prisma schema).
 interface ComplianceSummary {
   decision: string
@@ -33,6 +47,11 @@ interface ComplianceSummary {
   corroboratedPct: number
   defamationFlags: number
   variationOk: boolean
+  // Sports (F9) copyright verdict — present only for F9 reports.
+  copyrightRisk?: 'low' | 'medium' | 'high'
+  checklistScore?: number
+  transformationPassed?: boolean
+  riskReasons?: string[]
 }
 
 interface InboxCardProps {
@@ -84,30 +103,56 @@ export function InboxCard({
   // chip and compliance-gate chips instead of the sports moment/source line.
   const showsCase = factoryType === 'F10' || factoryType === 'F11'
 
+  // Sports (F9) surfaces the copyright verdict; other factories the fact-check gate.
+  const isSportsCopyright = factoryType === 'F9' && compliance?.copyrightRisk != null
+
   // Plain-language chips explaining WHY this video is sitting in review.
   const reviewChips: { label: string; color: string }[] = []
   if (compliance) {
-    const dm = DECISION_META[compliance.decision] ?? {
-      label: compliance.decision,
-      color: 'bg-gray-100 text-gray-600',
-    }
-    reviewChips.push(dm)
-    const pct = Math.round(compliance.corroboratedPct * 100)
-    reviewChips.push({
-      label: `${pct}% of key facts verified`,
-      color: pct === 100 ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700',
-    })
-    if (compliance.defamationFlags > 0) {
+    if (isSportsCopyright) {
+      const dm = SPORTS_DECISION_META[compliance.decision] ?? {
+        label: compliance.decision,
+        color: 'bg-gray-100 text-gray-600',
+      }
+      reviewChips.push(dm)
       reviewChips.push({
-        label: `${compliance.defamationFlags} risky wording flag${compliance.defamationFlags === 1 ? '' : 's'}`,
-        color: 'bg-red-50 text-red-700',
+        label: `Copyright risk: ${compliance.copyrightRisk![0].toUpperCase()}${compliance.copyrightRisk!.slice(1)}`,
+        color: RISK_COLOR[compliance.copyrightRisk!] ?? 'bg-gray-100 text-gray-600',
       })
-    }
-    if (!compliance.caseSelectionOk) {
-      reviewChips.push({ label: 'Case choice needs a second look', color: 'bg-yellow-50 text-yellow-700' })
-    }
-    if (!compliance.variationOk) {
-      reviewChips.push({ label: 'Too similar to recent videos', color: 'bg-yellow-50 text-yellow-700' })
+      reviewChips.push(
+        compliance.transformationPassed
+          ? { label: 'Transformation checklist passed', color: 'bg-green-50 text-green-700' }
+          : { label: 'Not clearly transformed', color: 'bg-red-50 text-red-700' }
+      )
+      if (compliance.checklistScore != null) {
+        reviewChips.push({
+          label: `${compliance.checklistScore}/4 transform steps`,
+          color: 'bg-gray-100 text-gray-600',
+        })
+      }
+    } else {
+      const dm = DECISION_META[compliance.decision] ?? {
+        label: compliance.decision,
+        color: 'bg-gray-100 text-gray-600',
+      }
+      reviewChips.push(dm)
+      const pct = Math.round(compliance.corroboratedPct * 100)
+      reviewChips.push({
+        label: `${pct}% of key facts verified`,
+        color: pct === 100 ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700',
+      })
+      if (compliance.defamationFlags > 0) {
+        reviewChips.push({
+          label: `${compliance.defamationFlags} risky wording flag${compliance.defamationFlags === 1 ? '' : 's'}`,
+          color: 'bg-red-50 text-red-700',
+        })
+      }
+      if (!compliance.caseSelectionOk) {
+        reviewChips.push({ label: 'Case choice needs a second look', color: 'bg-yellow-50 text-yellow-700' })
+      }
+      if (!compliance.variationOk) {
+        reviewChips.push({ label: 'Too similar to recent videos', color: 'bg-yellow-50 text-yellow-700' })
+      }
     }
   }
 
