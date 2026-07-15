@@ -1,0 +1,250 @@
+name: Claude — Demo (captures PROOF the feature works)
+
+# After the Builder opens a PR, this produces EVIDENCE the change actually works, so the
+# owner can approve from his phone/dashboard without cloning anything. It boots the app,
+# drives the affected pages with a real browser, and records screenshots + video into an
+# `evidence/` folder, then uploads that folder as an artifact the dashboard reads.
+#
+# THE ARTIFACT NAMING CONTRACT (kept in docs/DASHBOARD-CONTRACT.md — do not change here
+# without changing it there): the artifact is named EXACTLY  demo-evidence-pr-<PR_NUMBER>.
+# The dashboard looks it up by that name. Deviating breaks the dashboard silently.
+#
+# If the feature is backend-only and there is nothing to see in a browser, the agent
+# captures proof another way (test output, before/after CLI, DB state) into the same
+# evidence/manifest.json shape — it never fails silently with no evidence.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to (re)capture evidence for"
+        required: true
+
+# A new push supersedes an in-flight capture of the same PR — don't pay twice.
+concurrency:
+  group: demo-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    # Only bother for agent PRs (the ones the dashboard is built around).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.pull_request.head.ref, 'claude/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    env:
+      # SQLite lives in a throwaway file for this run — schema.prisma reads env("DATABASE_URL").
+      DATABASE_URL: "file:./ci-demo.db"
+    steps:
+      # 1. Work out which PR we're on and get onto its branch. Works for both the
+      #    pull_request trigger and a manual workflow_dispatch re-run.
+      - name: Resolve PR number
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            pr="${{ github.event.inputs.pr_number }}"
+          else
+            pr="${{ github.event.pull_request.number }}"
+          fi
+          echo "PR under test: #$pr"
+          echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check out the PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ steps.meta.outputs.pr_number }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # 2. Install everything. Deps + Prisma client + a browser for Playwright.
+      #    Best-effort on the browser install (some months it's flaky); the agent
+      #    copes if the browser is missing by falling back to non-visual proof.
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Set up the database (Prisma / SQLite)
+        run: |
+          npm run prisma:generate
+          npm run prisma:push
+
+      - name: Install Playwright + a headless browser
+        id: pw
+        run: |
+          npm install -D playwright >/dev/null 2>&1 || true
+          if npx playwright install --with-deps chromium; then
+            echo "browser=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Playwright browser install failed — the agent will fall back to non-visual proof."
+            echo "browser=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 3. Build and boot the app in the background. Best-effort: if it won't come up
+      #    headlessly we don't fail — we tell the agent, and it captures proof another way.
+      - name: Build and start the app
+        id: app
+        run: |
+          set +e
+          echo "Building…"
+          npm run build > build.log 2>&1
+          if [ $? -ne 0 ]; then
+            echo "::warning::next build failed — see build.log. Agent will note this instead of pretending it works."
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Starting the server on :3000…"
+          nohup npm run start > server.log 2>&1 &
+          echo $! > server.pid
+          up=false
+          for _ in $(seq 1 40); do
+            if curl -fsS -m 2 http://localhost:3000 >/dev/null 2>&1; then up=true; break; fi
+            sleep 2
+          done
+          if [ "$up" = "true" ]; then
+            echo "App is up on http://localhost:3000"
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::App did not answer on :3000 within 80s — see server.log. Agent will fall back to non-visual proof."
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 4. The agent decides WHICH pages the diff touches, drives the browser to capture
+      #    them, and writes evidence/ + evidence/manifest.json.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude"
+          show_full_output: true
+          claude_args: |
+            --model opus
+            --max-turns 60
+            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
+          prompt: |
+            You are the DEMO agent for PR #${{ steps.meta.outputs.pr_number }} in
+            ${{ github.repository }}. Your one job: produce PROOF this PR's feature actually
+            works, so a non-technical owner can approve it from his phone without running
+            anything himself.
+
+            Read CLAUDE.md and LEARNINGS.md first — LEARNINGS.md is the record of mistakes this
+            loop has already made.
+
+            ────────────────────────────────────────────────────────────────────────
+            HOW THIS RUN WORKS — READ THIS FIRST, IT IS NOT OPTIONAL
+
+            You are running inside a one-shot CI job. **There is no second turn.** The moment you
+            stop producing tool calls, this container is destroyed. Nothing resumes you.
+
+            - When you spawn subagents with the Task tool, you MUST pass `run_in_background: false`
+              so you BLOCK and receive their reports. A backgrounded subagent is killed the moment
+              you stop.
+            - NEVER end your turn saying you will "wait" or "report back". There is no later.
+            - Your job is done ONLY when the `evidence/` folder + `evidence/manifest.json` exist on
+              disk AND the "📸 Demo evidence" comment has been posted to the PR. A run that decides
+              what to capture but writes no files has produced nothing.
+            ────────────────────────────────────────────────────────────────────────
+
+            ENVIRONMENT FACTS you have been handed (do not re-derive them):
+            - The app server is ${{ steps.app.outputs.up == 'true' && 'UP at http://localhost:3000' || 'NOT running (it would not boot headlessly this run)' }}.
+            - A headless Chromium for Playwright is ${{ steps.pw.outputs.browser == 'ok' && 'installed and ready' || 'NOT available' }}.
+            - Playwright is installed as an npm package (`require("playwright")`).
+            - If a build or start failed, `build.log` / `server.log` in the repo root explain why —
+              read them and quote the relevant line rather than guessing.
+
+            STEP 1 — FIGURE OUT WHAT CHANGED AND WHAT TO SHOW.
+            Run `gh pr diff ${{ steps.meta.outputs.pr_number }}` and read the PR body
+            (`gh pr view ${{ steps.meta.outputs.pr_number }}`). Decide which user-facing routes the
+            diff affects. The app's pages live under `src/app` (e.g. `/`, `/factories`, `/agents`,
+            `/settings`); API routes live under `src/app/api`. Map the changed files to the specific
+            URLs a person would visit to SEE this feature. If the change is purely backend (an API
+            route, a lib function, a script) with no visible page, plan to prove it another way
+            (see STEP 3).
+
+            STEP 2 — CAPTURE VISUAL PROOF (when the app is up and a browser is available).
+            Write a small Playwright script (Node, `require("playwright")`) that:
+            - launches chromium headless,
+            - creates a context with video recording on
+              (`recordVideo: { dir: "evidence/video" }`),
+            - visits each affected route on http://localhost:3000,
+            - waits for the meaningful content to render, then screenshots the full page to
+              `evidence/NN-<short-name>.png` (zero-padded ordering: 01, 02, …),
+            - exercises the actual new behavior where you can (click the new button, submit the
+              new form, toggle the new setting) so the video shows it WORKING, not just a static
+              page,
+            - closes the context so the video file is flushed, and rename/move the produced
+              `.webm` into `evidence/video/NN-<short-name>.webm`.
+            Run it with `node`. If it throws, read the error, fix the script, retry. Capture the
+            BEFORE/AFTER contrast if the PR changes an existing screen.
+
+            STEP 3 — IF THERE IS NOTHING TO SEE IN A BROWSER (backend-only, or the app/browser is
+            unavailable), capture proof another way into the SAME evidence folder:
+            - run the relevant tests and save output to `evidence/NN-tests.txt` (type "log"),
+            - show before/after CLI or API output (`curl` an API route if the server is up) into
+              `evidence/NN-<name>.txt` (type "log"),
+            - dump the relevant DB state via a small Prisma/node script into a `.txt` (type "log").
+            The point is the owner ends up with real evidence, never an empty folder.
+
+            STEP 4 — WRITE `evidence/manifest.json` in EXACTLY this shape (this is a contract the
+            dashboard parses — keys and types matter):
+              {
+                "pr": ${{ steps.meta.outputs.pr_number }},
+                "captured_at": "<ISO 8601 UTC timestamp>",
+                "items": [
+                  { "file": "01-dashboard.png", "type": "screenshot",
+                    "caption": "New budget-cap banner shown on the dashboard" },
+                  { "file": "video/01-dashboard.webm", "type": "video",
+                    "caption": "Owner sets a cap and the banner updates live" }
+                ]
+              }
+            `type` is one of: "screenshot", "video", "log", "audio", "other". `file` is the path
+            RELATIVE TO the evidence/ folder. Every file you put in evidence/ must have a manifest
+            item, and every manifest item must point to a file that exists. Captions are written
+            FOR THE OWNER — plain English, say what he is looking at and why it proves the feature
+            works.
+
+            STEP 5 — POST THE PR COMMENT. Use
+            `gh pr comment ${{ steps.meta.outputs.pr_number }} --body "..."`. Title it exactly
+            "📸 Demo evidence". Then, in plain English for a non-technical owner on a phone:
+            - one line saying whether the feature visibly works,
+            - a bulleted list of each evidence item: its caption (and note screenshot/video/log),
+            - the sentence: "Full screenshots and video are in the artifact
+              `demo-evidence-pr-${{ steps.meta.outputs.pr_number }}` attached to this run."
+            - if you could NOT capture normally (app wouldn't boot, backend-only), say so plainly
+              and say what you captured instead — never pretend.
+
+            Do not change product code. Do not merge anything. The `evidence/` folder is your
+            entire output; guard it with your life.
+
+      # 5. Upload the evidence. THE NAME IS A CONTRACT — the dashboard reads exactly this.
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-evidence-pr-${{ steps.meta.outputs.pr_number }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # 6. A green tick does not mean evidence was produced. Prove the folder exists.
+      - name: Verify evidence was actually captured
+        if: always()
+        run: |
+          if [ ! -f evidence/manifest.json ]; then
+            echo "::error::No evidence/manifest.json was produced. The Demo agent must always write a manifest — even backend-only PRs get non-visual proof. Read the agent's final message above; the usual cause is it decided what to capture but never wrote the files."
+            exit 1
+          fi
+          echo "Evidence manifest present:"
+          cat evidence/manifest.json

@@ -1,0 +1,47 @@
+name: Repo — Tests (plain CI, no agent)
+
+# Ordinary continuous integration: install, lint, test, build. No Claude agent, no tokens.
+# Runs on every PR and can be kicked off by hand (the dashboard dispatches this to check a
+# branch is green). Only uses scripts that actually exist in package.json.
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+concurrency:
+  group: repo-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      # schema.prisma reads env("DATABASE_URL"); a throwaway SQLite file is enough for CI.
+      DATABASE_URL: "file:./ci.db"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Prisma client + database
+        run: |
+          npm run prisma:generate
+          npm run prisma:push
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
