@@ -1,0 +1,106 @@
+name: Claude — Redraft (rewrites a proposal from your feedback)
+
+# Runs the moment you label a proposal `redraft` — normally from the dashboard, where
+# you send an idea back with a note saying what you want changed. The agent reads your
+# feedback, REWRITES the issue into a better proposal, tells you what it changed, then
+# drops it back into your approval queue (removes `redraft`, restores `proposal`).
+#
+# It NEVER writes product code. It only reshapes the idea until it is worth approving.
+#
+# THE FLOW (kept in docs/DASHBOARD-CONTRACT.md so the dashboard and repo stay in sync):
+#   dashboard adds label `redraft` + posts your comment  →  this runs  →  issue body is
+#   rewritten, a summary comment is posted, label flips back to `proposal`  →  it reappears
+#   in your normal approve/redraft queue.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to redraft (for manual re-runs)"
+        required: true
+
+concurrency:
+  group: redraft-${{ github.event.issue.number || github.event.inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  redraft:
+    # On a label event, only wake up for `redraft` — not for every label anyone adds.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'redraft'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: |
+            --model opus
+            --max-turns 40
+            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
+          prompt: |
+            You are the REDRAFTER for ${{ github.repository }}. You take a proposal the owner
+            sent back and rewrite it into a stronger one that honors his feedback. You never
+            write or change product code — you only reshape the idea.
+
+            The issue to redraft is #${{ github.event.issue.number || github.event.inputs.issue_number }}.
+
+            Read CLAUDE.md and LEARNINGS.md before you start. LEARNINGS.md is the record of
+            mistakes this loop has already made — do not repeat them.
+
+            ────────────────────────────────────────────────────────────────────────
+            HOW THIS RUN WORKS — READ THIS FIRST, IT IS NOT OPTIONAL
+
+            You are running inside a one-shot CI job. **There is no second turn.** The moment you
+            stop producing tool calls, this container is destroyed. Nothing resumes you.
+
+            - When you spawn subagents with the Task tool, you MUST pass `run_in_background: false`
+              so you BLOCK and receive their reports. A backgrounded subagent is killed the moment
+              you stop, and its work is thrown away.
+            - NEVER end your turn saying you will "wait" or "report back". There is no later.
+            - Your job is NOT done when you have decided on the new wording. It is done when the
+              issue body has actually been edited, the summary comment has been posted, and the
+              labels have been flipped (`redraft` removed, `proposal` present). Until all of that
+              has run, you have produced nothing.
+            ────────────────────────────────────────────────────────────────────────
+
+            DO THIS, IN ORDER:
+
+            1. READ THE WHOLE CONVERSATION — not just the body:
+               `gh issue view ${{ github.event.issue.number || github.event.inputs.issue_number }} --comments`
+               The owner's LATEST comment is the feedback that matters most. He is telling you
+               what was wrong with this proposal and what he wants instead. Later comments
+               override earlier ones. If he was vague ("make it smaller", "focus on YouTube"),
+               apply the spirit of it — do not ask him, he is not watching.
+
+            2. REWRITE THE ISSUE BODY IN PLACE with `gh issue edit <n> --body "..."`.
+               The rewrite must be a genuinely better proposal that honors his feedback, keeping
+               the house shape a good proposal has:
+               - A plain-English title a non-technical owner instantly understands (update it with
+                 `--title` if the scope changed).
+               - What to build, and why it matters to the product's success.
+               - Evidence: a link, quote, or specific file that proves the problem is real.
+               - Effort estimate: S / M / L.
+               - A one-line "how we'd know it worked".
+               Do NOT lose the good parts of the original. Improve it; do not replace it wholesale
+               unless his feedback demands it.
+
+            3. POST A SHORT COMMENT (`gh issue comment <n>`) — 3-5 lines, plain English — saying
+               what you changed and why, so the owner can see you understood his note. Address him
+               directly, no jargon; he reads this on his phone.
+
+            4. FLIP THE LABELS so it re-enters the approval queue:
+               `gh issue edit <n> --remove-label redraft --add-label proposal`
+               If `proposal` is already present that is fine — the point is `redraft` is gone and
+               `proposal` is on. This is what puts it back in front of the owner to approve.
+
+            A redraft that improves the wording but forgets to flip the labels is a failure: the
+            idea silently drops out of the queue and the owner never sees it again.

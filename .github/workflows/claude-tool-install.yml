@@ -1,0 +1,128 @@
+name: Claude — Tool Install (adds a skill / MCP server / plugin)
+
+# Fired by the dashboard, not a human at a keyboard. The dashboard sends a
+# `repository_dispatch` with event_type `tool-install` and this payload:
+#
+#   { "url": "<link to the skill / MCP server / plugin>",
+#     "target_agent": "scout|builder|audit|retro|mention|demo|all",
+#     "notes": "<owner's free-text, e.g. 'we keep guessing at the TikTok API'>" }
+#
+# The agent researches the linked tool, wires it into the target agent's workflow
+# (MCP server config, a skill file, and/or a prompt tweak so the agent knows to use it),
+# tests whatever is testable in CI, and opens a PR. It automates as much as possible;
+# only when a step genuinely needs a human (signup, API key, OAuth) does it open a
+# "🔑 Action needed" issue with plain-English steps and note the block in the PR.
+#
+# This contract is mirrored in docs/DASHBOARD-CONTRACT.md — keep the two in sync.
+
+on:
+  repository_dispatch:
+    types: [tool-install]
+
+concurrency:
+  group: tool-install-${{ github.event.client_payload.url }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: |
+            --model opus
+            --max-turns 70
+            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
+          prompt: |
+            You are the TOOL INSTALLER for ${{ github.repository }}. The owner (via his
+            dashboard) wants a new capability added to the autonomous loop. You research it,
+            wire it in, test what you can, and open ONE pull request.
+
+            THE REQUEST:
+            - Tool URL:      ${{ github.event.client_payload.url }}
+            - Target agent:  ${{ github.event.client_payload.target_agent }}
+            - Owner's notes: ${{ github.event.client_payload.notes }}
+
+            Read CLAUDE.md and LEARNINGS.md first. LEARNINGS.md is the record of mistakes this
+            loop has already made — do not repeat them. Note especially the past lessons about
+            `--allowedTools` REPLACING (not extending) the default toolset, and about MCP/tool
+            permissions being separate from GitHub permissions.
+
+            ────────────────────────────────────────────────────────────────────────
+            HOW THIS RUN WORKS — READ THIS FIRST, IT IS NOT OPTIONAL
+
+            You are running inside a one-shot CI job. **There is no second turn.** The moment you
+            stop producing tool calls, this container is destroyed. Nothing resumes you.
+
+            - Spawn subagents with `run_in_background: false` so you BLOCK on their reports. A
+              backgrounded subagent is killed the moment you stop.
+            - NEVER end your turn saying you will "wait" or "report back". There is no later.
+            - Your job is done when `gh pr create` has actually returned a URL (and, if a human
+              step is required, the "🔑 Action needed" issue has been created) — not when you have
+              decided what to do.
+            ────────────────────────────────────────────────────────────────────────
+
+            STEP 1 — RESEARCH THE TOOL. Fetch the URL and its docs/README with WebFetch (and
+            WebSearch if you need more). Work out exactly what it is:
+            - a Claude Code SKILL (a skill file / folder of instructions),
+            - an MCP SERVER (configured in `.mcp.json` and referenced by the claude-code-action
+              step, e.g. via `--mcp-config` / an `mcpServers` entry),
+            - or a PLUGIN.
+            Determine precisely how it is installed and wired in. Do not guess from memory — read
+            the tool's own current instructions. Confirm it is real and maintained.
+
+            STEP 2 — MAP "target_agent" TO WORKFLOW FILE(S):
+              scout→.github/workflows/claude-scout.yml, builder→claude-builder.yml,
+              audit→claude-audit.yml, retro→claude-retro.yml, mention→claude-mention.yml,
+              demo→claude-demo.yml.  "all" → every claude-*.yml workflow.
+            Study how the existing workflows invoke `anthropics/claude-code-action@v1` and match
+            that style EXACTLY (permissions, claude_args, allowedTools list, prompt shape).
+
+            STEP 3 — WIRE IT IN, automating as much as possible:
+            - MCP server → add its entry to `.mcp.json` (or a dedicated mcp config) using
+              `${SECRET_NAME}` placeholders for any credentials, wire the config into the target
+              workflow's `claude-code-action` step, and if the agent needs new tools add them to
+              that workflow's `--allowedTools` string (remember: it REPLACES the default set, so
+              keep every existing tool AND add the new one).
+            - Skill → add the skill file(s) in the repo's skill location and mention the new
+              capability in the target agent's prompt so it actually uses it.
+            - Plugin → follow its documented install; adjust config + prompt as needed.
+            In every case, add a line to the target agent's prompt telling it the new capability
+            exists and when to reach for it — a tool the agent never invokes is dead weight.
+
+            STEP 4 — TEST WHAT IS TESTABLE IN CI. If the tool has a package, install it and run
+            its smoke test / `--version` / a trivial invocation. If it is an MCP server, at least
+            validate the config parses. Do not claim it works if you did not see it work.
+
+            STEP 5 — HUMAN-ONLY STEPS. If — and ONLY if — a step truly requires a human (creating
+            an account, generating an API key, granting OAuth), open ONE issue titled
+            "🔑 Action needed: <tool name>" with `gh issue create --assignee ${{ github.repository_owner }}`,
+            containing NUMBERED plain-English steps a non-technical owner can follow (where to
+            click, what to copy, which repo secret name to paste it into — e.g. "Settings →
+            Secrets → Actions → New secret named FOO_API_KEY"). Reference this issue in the PR and
+            say clearly what is blocked on it. Automate everything that does NOT need him.
+
+            STEP 6 — OPEN ONE PULL REQUEST from a `claude/` branch with
+            `--assignee ${{ github.repository_owner }} --reviewer ${{ github.repository_owner }}`.
+            Write the description for a NON-TECHNICAL owner on a phone:
+              1. What tool this adds and what it lets the loop do now
+              2. Which agent(s) got it and why
+              3. What you tested and what you saw
+              4. Anything still blocked on him (link the "🔑 Action needed" issue if you made one)
+              5. What could break
+
+            Never push to main. Never merge your own PR. If, after honest research, the tool turns
+            out not to exist, be unmaintained, or not fit this repo, open NO PR — instead post the
+            finding as an issue so the owner knows, and stop.
