@@ -101,6 +101,14 @@ async function OverviewTab() {
             select: { error: true },
             take: 1,
           },
+          // Surface why a run failed (e.g. a budget-cap stop) right here on the
+          // landing screen, so the owner doesn't have to open the Queue tab.
+          jobs: {
+            where: { status: 'failed' },
+            select: { error: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
       }),
       quotaStatus(),
@@ -181,6 +189,11 @@ async function OverviewTab() {
                       {video.posts[0]?.error && (
                         <span className="block text-xs text-red-500 truncate">
                           Not posted: {video.posts[0].error}
+                        </span>
+                      )}
+                      {!video.posts[0]?.error && video.jobs[0]?.error && (
+                        <span className="block text-xs text-red-500 truncate">
+                          {video.jobs[0].error}
                         </span>
                       )}
                     </div>

@@ -69,6 +69,8 @@ export interface ToolContext {
   runId: string
   factoryConfig: Record<string, unknown>
   playbook: string
+  /** Per-run cost cap (USD) from Agent.budget; null/undefined means no cap. */
+  budget?: number | null
   source?: SourceResult
   ingest?: IngestResult
   moment?: MomentResult

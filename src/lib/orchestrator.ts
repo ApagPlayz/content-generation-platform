@@ -7,6 +7,7 @@ import { runTransform } from './tools/transform'
 import { runAssemble } from './tools/assemble'
 import { maybeAutoPublish } from './tools/publish'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
+import { enforceStageBudget } from './pipeline/budget'
 import type { ToolContext } from './tools/types'
 
 /**
@@ -41,6 +42,7 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     runId: run.id,
     factoryConfig: JSON.parse(agent.factory.config || '{}'),
     playbook: agent.playbook,
+    budget: agent.budget,
   }
 
   try {
@@ -175,6 +177,8 @@ async function stage(ctx: ToolContext, name: string, fn: () => Promise<void>) {
   const job = await prisma.job.create({
     data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 0, startedAt: new Date() },
   })
+  // Stop before spending more once this run has hit its budget cap (issue #26).
+  await enforceStageBudget(ctx.videoId, ctx.budget, job.id)
   let lastErr: unknown
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt++) {
     await prisma.job.update({ where: { id: job.id }, data: { attempts: attempt, status: 'running' } })

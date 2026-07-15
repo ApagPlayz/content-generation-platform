@@ -69,6 +69,8 @@ export interface F11Context {
   runId: string
   config: F11FactoryConfig
   playbook: string
+  /** Per-run cost cap (USD) from Agent.budget; null/undefined means no cap. */
+  budget?: number | null
   brief?: TopicBrief
   script?: F11Script
   visuals?: import('../compliance').VisualAsset[]
