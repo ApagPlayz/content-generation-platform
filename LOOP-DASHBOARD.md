@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-14. Do not edit by hand.*
+*Auto-generated 2026-07-15. Do not edit by hand.*
 
 **Healthy.** Most of what the agents build is good enough to keep.
 
@@ -8,10 +8,10 @@
 
 | | |
 |---|---|
-| Pull requests merged | 6 (+5) |
-| Pull requests rejected | 1 (+1) |
-| **Merge rate** | **86%** |
-| Waiting on you right now | 0 |
+| Pull requests merged | 7 (+1) |
+| Pull requests rejected | 1 |
+| **Merge rate** | **88%** |
+| Waiting on you right now | 5 |
 
 ## Is it outrunning you?
 
@@ -27,7 +27,7 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Proposals filed | 8 |
+| Proposals filed | 10 |
 | Proposals you approved | 0 |
 | **Approval rate** | **0%** |
 
