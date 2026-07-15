@@ -39,9 +39,38 @@ async function setting(key: string, fallback: string): Promise<string> {
   return row?.value || fallback
 }
 
-function startOfTodayUTC(): Date {
-  const now = new Date()
+/**
+ * UTC midnight of the day containing `now` — the lower bound for "published
+ * today" in the quota count. Pure + injectable (takes `now`) so the day-boundary
+ * math, where a timezone slip would silently over- or under-count uploads, is
+ * unit-tested. See publish.test.ts.
+ */
+export function startOfDayUTC(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+}
+
+/**
+ * Uploads still allowed today: the daily cap minus what's already been posted,
+ * clamped so it never reports negative headroom (an over-cap day reads as 0, not
+ * a negative that would wrongly re-enable posting). Pure + exported so the
+ * quota-wall arithmetic is unit-tested independent of the DB count query.
+ */
+export function remainingQuota(used: number, cap: number): number {
+  return Math.max(0, cap - used)
+}
+
+/**
+ * Idempotency decision shared by every platform's publish path: a prior Post
+ * only counts as "already live" when it actually reached 'published' AND carries
+ * the platform's id. A 'publishing'/'failed' row — or a 'published' row with no
+ * id — must NOT block a (re)upload. A type guard so the caller can safely read
+ * `platformPostId` as a string. Pure + exported so this "never double-post"
+ * guarantee is unit-tested.
+ */
+export function isAlreadyPublished<
+  T extends { status: string; platformPostId: string | null },
+>(existing: T | null | undefined): existing is T & { platformPostId: string } {
+  return existing?.status === 'published' && !!existing.platformPostId
 }
 
 /** Uploads published today vs the configured daily cap (the ~6/day quota wall). */
@@ -55,10 +84,10 @@ export async function quotaStatus(): Promise<{
     where: {
       platform: PLATFORM,
       status: 'published',
-      publishedAt: { gte: startOfTodayUTC() },
+      publishedAt: { gte: startOfDayUTC(new Date()) },
     },
   })
-  return { used, cap, remaining: Math.max(0, cap - used) }
+  return { used, cap, remaining: remainingQuota(used, cap) }
 }
 
 export interface PublishResult {
@@ -78,7 +107,7 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
   const existing = await prisma.post.findUnique({
     where: { videoId_platform: { videoId, platform: PLATFORM } },
   })
-  if (existing?.status === 'published' && existing.platformPostId) {
+  if (isAlreadyPublished(existing)) {
     return {
       postId: existing.id,
       platformPostId: existing.platformPostId,
@@ -197,7 +226,7 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
   const existing = await prisma.post.findUnique({
     where: { videoId_platform: { videoId, platform: TIKTOK_PLATFORM } },
   })
-  if (existing?.status === 'published' && existing.platformPostId) {
+  if (isAlreadyPublished(existing)) {
     return {
       postId: existing.id,
       platformPostId: existing.platformPostId,
