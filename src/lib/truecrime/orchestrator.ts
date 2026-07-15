@@ -83,6 +83,8 @@ export async function executeTrueCrimeRun(
           description: ctx.script.description,
           hashtags: JSON.stringify(ctx.script.hashtags),
           scriptText: ctx.script.narration,
+          hookScore: ctx.script.hookScore ?? null,
+          hookStyle: ctx.script.hookStyle ?? null,
         },
       })
       // Persist the beat-structured plan (hook + beats) so the footage and

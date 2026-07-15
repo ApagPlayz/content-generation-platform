@@ -62,6 +62,12 @@ export interface F10Script extends TrueCrimeScript {
   hashtags: string[]
   hook?: HookCandidate
   beats?: ScriptBeat[]
+  /** Predicted strength (0-100) of the chosen opening hook — see
+   *  src/lib/tools/hookScore.ts. Parity with the sports factory so the Review
+   *  Inbox shows the colour-coded "Hook strength" badge here too. */
+  hookScore?: number
+  /** Angle of the winning hook, e.g. "curiosity gap". */
+  hookStyle?: string
 }
 
 export const F10_STAGES = [

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { scoreHook, pickBestHook } from './hookScore'
+import { scoreHook, pickBestHook, scoreHookCandidate } from './hookScore'
 
 // The hook gate is the difference between a video that gets watched and one that
 // dies in the first second. These tests pin the scorer's *ordering and bounds*
@@ -90,5 +90,49 @@ describe('pickBestHook', () => {
     const r = pickBestHook(['One line only'])
     expect(r.hook).toBe('One line only')
     expect(r.score.score).toBeGreaterThan(0)
+  })
+})
+
+// The true-crime & history factories build a rich hook object (a spoken `verbal`
+// line + a short `onscreenText` overlay). scoreHookCandidate maps that onto the
+// same scorer sports uses so their Review Inbox badge means the same thing.
+describe('scoreHookCandidate', () => {
+  it('takes the stronger of the on-screen line and the spoken line', () => {
+    // A crisp on-screen line beats a long, rambling spoken one.
+    const strongOverlay = scoreHookCandidate({
+      onscreenText: 'Why did 3 witnesses vanish?',
+      verbal:
+        'This is a fairly long spoken opening sentence that rambles well past the on-screen overlay limit',
+    })
+    expect(strongOverlay.score).toBe(
+      scoreHook('Why did 3 witnesses vanish?').score
+    )
+  })
+
+  it('uses the verbal line when the overlay is the weaker of the two', () => {
+    // Offline template case: onscreenText is just the bland case name, the
+    // crafted verbal line carries the curiosity/number signal.
+    const r = scoreHookCandidate({
+      onscreenText: 'The Riverside Case',
+      verbal: 'Why did the jury deadlock after just 40 minutes?',
+    })
+    expect(r.score).toBe(
+      scoreHook('Why did the jury deadlock after just 40 minutes?').score
+    )
+    expect(r.score).toBeGreaterThan(scoreHook('The Riverside Case').score)
+  })
+
+  it('degrades to score 0 for an empty or missing hook', () => {
+    expect(scoreHookCandidate({ verbal: '', onscreenText: '' }).score).toBe(0)
+    expect(scoreHookCandidate(null).score).toBe(0)
+    expect(scoreHookCandidate(undefined).score).toBe(0)
+  })
+
+  it('is deterministic and always in 0-100', () => {
+    const hook = { verbal: 'The record that was quietly erased', onscreenText: 'Erased' }
+    const a = scoreHookCandidate(hook)
+    expect(a).toEqual(scoreHookCandidate(hook))
+    expect(a.score).toBeGreaterThanOrEqual(0)
+    expect(a.score).toBeLessThanOrEqual(100)
   })
 })
