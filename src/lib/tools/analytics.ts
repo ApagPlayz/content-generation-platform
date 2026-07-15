@@ -1,7 +1,14 @@
 import { google } from 'googleapis'
 import type { Metric } from '@prisma/client'
 import { prisma } from '../prisma'
-import { authedClient, connection, hasAnalyticsScope, PLATFORM } from '../youtube'
+import {
+  authedClient,
+  connection,
+  hasAnalyticsScope,
+  isAuthError,
+  markNeedsReconnect,
+  PLATFORM,
+} from '../youtube'
 
 /**
  * Analytics read tool (PRD Phase 2). Polls YouTube Data API v3
@@ -147,6 +154,9 @@ export async function refreshAllMetrics(): Promise<{ updated: number; skipped: n
       }
     }
   } catch (e) {
+    // The metrics refresh runs regularly, so it catches a lapsed login even
+    // before the next publish attempt — flip the connection so Settings warns.
+    if (isAuthError(e)) await markNeedsReconnect()
     const message = e instanceof Error ? e.message : String(e)
     throw new Error(`Failed to refresh YouTube metrics: ${message}`)
   }

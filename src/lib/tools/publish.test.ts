@@ -18,6 +18,11 @@ describe('isAutoPublishFailure', () => {
 
   it('treats actionable problems as failures worth surfacing', () => {
     expect(isAutoPublishFailure('YouTube not connected')).toBe(true)
+    expect(
+      isAutoPublishFailure(
+        'YouTube disconnected — your login expired. Reconnect in Settings to resume publishing.'
+      )
+    ).toBe(true)
     expect(isAutoPublishFailure('daily upload quota reached (6/day)')).toBe(true)
     expect(isAutoPublishFailure('YouTube did not return a video id')).toBe(true)
     expect(

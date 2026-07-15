@@ -2,7 +2,14 @@ import { createReadStream, existsSync } from 'fs'
 import { google } from 'googleapis'
 import { prisma } from '../prisma'
 import { autoPublishEnabled, tiktokAutoPublishEnabled } from '../settings'
-import { authedClient, connection, PLATFORM } from '../youtube'
+import {
+  authedClient,
+  connection,
+  isAuthError,
+  markNeedsReconnect,
+  PLATFORM,
+  YT_RECONNECT_MESSAGE,
+} from '../youtube'
 import {
   connection as tiktokConnection,
   directPost,
@@ -171,6 +178,18 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
       alreadyPublished: false,
     }
   } catch (e) {
+    // A dead OAuth login must stop being painted green in Settings. Flip the
+    // connection to needs_reconnect so the UI prompts a re-login and the next
+    // publish short-circuits at the "not connected" gate — and record the reason
+    // in plain language instead of raw `invalid_grant`.
+    if (isAuthError(e)) {
+      await markNeedsReconnect()
+      await prisma.post.update({
+        where: { id: post.id },
+        data: { status: 'failed', error: YT_RECONNECT_MESSAGE },
+      })
+      throw new Error(YT_RECONNECT_MESSAGE)
+    }
     const message = e instanceof Error ? e.message : String(e)
     await prisma.post.update({
       where: { id: post.id },

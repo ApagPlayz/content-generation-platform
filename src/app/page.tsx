@@ -1,7 +1,8 @@
 import Link from 'next/link'
-import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox } from 'lucide-react'
+import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox, AlertTriangle } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { quotaStatus } from '@/lib/tools/publish'
+import { connectionState } from '@/lib/youtube'
 import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
@@ -85,26 +86,34 @@ async function OverviewTab() {
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
 
-  const [totalVideos, thisMonthVideos, activeFactories, publishedCount, recentVideos, quota] =
-    await Promise.all([
-      prisma.video.count(),
-      prisma.video.count({ where: { createdAt: { gte: startOfMonth } } }),
-      prisma.factory.count({ where: { archived: false } }),
-      prisma.post.count({ where: { platform: 'youtube', status: 'published' } }),
-      prisma.video.findMany({
-        take: 10,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          factory: { select: { name: true, type: true } },
-          posts: {
-            where: { platform: 'youtube', status: 'failed' },
-            select: { error: true },
-            take: 1,
-          },
+  const [
+    totalVideos,
+    thisMonthVideos,
+    activeFactories,
+    publishedCount,
+    recentVideos,
+    quota,
+    ytConn,
+  ] = await Promise.all([
+    prisma.video.count(),
+    prisma.video.count({ where: { createdAt: { gte: startOfMonth } } }),
+    prisma.factory.count({ where: { archived: false } }),
+    prisma.post.count({ where: { platform: 'youtube', status: 'published' } }),
+    prisma.video.findMany({
+      take: 10,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        factory: { select: { name: true, type: true } },
+        posts: {
+          where: { platform: 'youtube', status: 'failed' },
+          select: { error: true },
+          take: 1,
         },
-      }),
-      quotaStatus(),
-    ])
+      },
+    }),
+    quotaStatus(),
+    connectionState(),
+  ])
 
   const stats = [
     {
@@ -131,6 +140,18 @@ async function OverviewTab() {
 
   return (
     <div className="space-y-6">
+      {ytConn.state === 'needs_reconnect' && (
+        <Link href="/settings" className="block">
+          <div className="flex items-center gap-2.5 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100 transition-colors">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="text-sm font-medium">
+              YouTube disconnected — auto-publish is paused. Click here to reconnect and resume
+              publishing.
+            </span>
+          </div>
+        </Link>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {stats.map((s) => (
           <div
