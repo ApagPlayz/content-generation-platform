@@ -351,6 +351,7 @@ async function AgentsTab() {
               enabled={agent.enabled}
               budget={agent.budget}
               playbook={agent.playbook}
+              memory={agent.memory}
               runCount={agent._count.runs}
             />
           ))}
