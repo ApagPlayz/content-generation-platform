@@ -44,10 +44,10 @@
   {
     "date": "2026-07-16",
     "prs_opened": 17,
-    "prs_merged": 8,
+    "prs_merged": 9,
     "prs_rejected": 1,
-    "prs_open_now": 8,
-    "merge_rate_pct": 89,
+    "prs_open_now": 7,
+    "merge_rate_pct": 90,
     "median_pr_size_lines": 328,
     "median_days_to_merge": 0,
     "prs_needing_changes": 1,
