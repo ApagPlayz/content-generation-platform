@@ -17,7 +17,13 @@
 // crime-specific heuristics while keeping every hard safety rule.
 
 import { prisma } from '../prisma'
-import type { ComplianceReportJSON, GateDecision, TrueCrimeScript } from './types'
+import type {
+  ComplianceReportJSON,
+  DefamationFlag,
+  GateDecision,
+  TrueCrimeScript,
+  VisualFlag,
+} from './types'
 import { TRUE_CRIME_PROFILE, type ComplianceProfile } from './profile'
 import { evaluateCaseSelection } from './caseSelection'
 import { extractClaims } from './claims'
@@ -71,20 +77,16 @@ export async function runComplianceGate(
   const visualFlags = visualLint(visuals)
 
   // ── 4. Combine into a decision ──
-  const hasDefamationBlock = defamation.some((f) => f.severity === 'block')
-  const hasVisualBlock = visualFlags.some((f) => f.severity === 'block')
   const failedClaims = uncorroboratedLoadBearing(corroboration)
-  const needsReview =
-    defamation.some((f) => f.severity === 'review' || f.severity === 'warn') ||
-    visualFlags.some((f) => f.severity === 'review' || f.severity === 'warn') ||
-    failedClaims.length > 0 ||
-    !variation.passed ||
-    caseSelection.warnings.length > 0 ||
-    (script.targetDurationSec !== undefined && script.targetDurationSec < profile.minDurationSec)
-
-  let decision: GateDecision = 'pass'
-  if (hasDefamationBlock || hasVisualBlock) decision = 'block'
-  else if (needsReview) decision = 'route_to_review'
+  const decision = decideGate({
+    defamation,
+    visualFlags,
+    failedClaimCount: failedClaims.length,
+    variationPassed: variation.passed,
+    caseSelectionWarnings: caseSelection.warnings.length,
+    targetDurationSec: script.targetDurationSec,
+    minDurationSec: profile.minDurationSec,
+  })
 
   return {
     caseName: script.caseName,
@@ -108,6 +110,37 @@ export async function runComplianceGate(
     }),
     generatedAt: opts.generatedAt,
   }
+}
+
+/**
+ * Combine the individual check outcomes into one gate decision. Pure and
+ * synchronous — no prisma, no network — so the block/review/pass precedence can
+ * be unit-tested directly. Any hard block wins; otherwise any review/warn signal
+ * routes to a human; otherwise the script is clear to publish autonomously.
+ */
+export function decideGate(input: {
+  defamation: Pick<DefamationFlag, 'severity'>[]
+  visualFlags: Pick<VisualFlag, 'severity'>[]
+  failedClaimCount: number
+  variationPassed: boolean
+  caseSelectionWarnings: number
+  targetDurationSec?: number
+  minDurationSec: number
+}): GateDecision {
+  const hasBlock =
+    input.defamation.some((f) => f.severity === 'block') ||
+    input.visualFlags.some((f) => f.severity === 'block')
+  if (hasBlock) return 'block'
+
+  const needsReview =
+    input.defamation.some((f) => f.severity === 'review' || f.severity === 'warn') ||
+    input.visualFlags.some((f) => f.severity === 'review' || f.severity === 'warn') ||
+    input.failedClaimCount > 0 ||
+    !input.variationPassed ||
+    input.caseSelectionWarnings > 0 ||
+    (input.targetDurationSec !== undefined && input.targetDurationSec < input.minDurationSec)
+
+  return needsReview ? 'route_to_review' : 'pass'
 }
 
 function buildSummary(a: {

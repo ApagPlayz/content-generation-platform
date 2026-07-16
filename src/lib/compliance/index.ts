@@ -9,7 +9,7 @@
 
 export * from './types'
 export { TRUE_CRIME_PROFILE, HISTORY_PROFILE, type ComplianceProfile } from './profile'
-export { runComplianceGate, gateVideoScript } from './gate'
+export { runComplianceGate, gateVideoScript, decideGate } from './gate'
 export { evaluateCaseSelection } from './caseSelection'
 export { extractClaims, heuristicExtractClaims } from './claims'
 export { corroborateClaims, corroboratedFraction, uncorroboratedLoadBearing } from './corroboration'
