@@ -2,6 +2,11 @@ import Link from 'next/link'
 import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { quotaStatus } from '@/lib/tools/publish'
+import {
+  composeDescription,
+  ctaOverrideFromPostingDefaults,
+  resolveCta,
+} from '@/lib/tools/description'
 import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
@@ -394,7 +399,7 @@ async function InboxTab() {
     where: { status: 'review' },
     orderBy: { createdAt: 'desc' },
     include: {
-      factory: { select: { name: true, type: true } },
+      factory: { select: { name: true, type: true, postingDefaults: true } },
       highlightSources: true,
       complianceReports: { orderBy: { createdAt: 'desc' }, take: 1 },
       assets: { where: { kind: 'footage-map' }, orderBy: { createdAt: 'desc' }, take: 1 },
@@ -429,6 +434,16 @@ async function InboxTab() {
         <div className="space-y-4">
           {pending.map((video) => {
             const report = video.complianceReports[0] ?? null
+            // Compose the exact description we'll post (incl. the follow/CTA
+            // block) so the owner can see it here — no live YouTube needed.
+            const postPreview = composeDescription({
+              body: video.description,
+              hashtags: video.hashtags ? (JSON.parse(video.hashtags) as string[]) : [],
+              cta: resolveCta(
+                video.factory.type,
+                ctaOverrideFromPostingDefaults(video.factory.postingDefaults)
+              ),
+            })
             return (
               <InboxCard
                 key={video.id}
@@ -460,6 +475,7 @@ async function InboxTab() {
                     : null
                 }
                 footageSummary={footageSummaryFromMeta(video.assets[0]?.meta ?? null)}
+                postPreview={postPreview}
               />
             )
           })}

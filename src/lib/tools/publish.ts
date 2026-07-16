@@ -9,6 +9,12 @@ import {
   PLATFORM as TIKTOK_PLATFORM,
   tiktokPermalink,
 } from '../tiktok'
+import {
+  composeCaption,
+  composeDescription,
+  ctaOverrideFromPostingDefaults,
+  resolveCta,
+} from './description'
 
 /**
  * Publish tool (PRD §8.1 / Phase 2). Uploads a rendered Short to YouTube via
@@ -100,7 +106,7 @@ export interface PublishResult {
 export async function publishToYouTube(videoId: string): Promise<PublishResult> {
   const video = await prisma.video.findUniqueOrThrow({
     where: { id: videoId },
-    include: { factory: { select: { type: true } } },
+    include: { factory: { select: { type: true, postingDefaults: true } } },
   })
 
   // Idempotency: don't re-upload a video that already has a live YouTube post.
@@ -135,8 +141,13 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
 
   // A Short needs vertical ≤60s + "#Shorts" in title/description (PRD §8.1).
   const title = (video.title || 'Untitled').slice(0, 95)
-  const descParts = [video.description || '', hashtags.map((h) => `#${h}`).join(' '), '#Shorts']
-  const description = descParts.filter(Boolean).join('\n\n').slice(0, 4900)
+  // Append the factory's follow/CTA block so the channel can earn (affiliate /
+  // "follow for more") from view #1, before it clears the ad-revenue threshold.
+  const cta = resolveCta(
+    video.factory.type,
+    ctaOverrideFromPostingDefaults(video.factory.postingDefaults)
+  )
+  const description = composeDescription({ body: video.description, hashtags, cta })
 
   // Mark intent before the network call so a crash mid-upload is visible.
   const post = await prisma.post.upsert({
@@ -220,7 +231,10 @@ const TIKTOK_DEFAULT_PRIVACY = 'SELF_ONLY'
  * already live on TikTok is returned as-is rather than re-uploaded.
  */
 export async function publishToTikTok(videoId: string): Promise<PublishResult> {
-  const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } })
+  const video = await prisma.video.findUniqueOrThrow({
+    where: { id: videoId },
+    include: { factory: { select: { type: true, postingDefaults: true } } },
+  })
 
   // Idempotency: don't re-upload a video that already has a live TikTok post.
   const existing = await prisma.post.findUnique({
@@ -244,9 +258,11 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
 
   const privacy = await setting('tiktok_privacy', TIKTOK_DEFAULT_PRIVACY)
   const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
-  const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
-    .filter(Boolean)
-    .join(' ')
+  const cta = resolveCta(
+    video.factory.type,
+    ctaOverrideFromPostingDefaults(video.factory.postingDefaults)
+  )
+  const caption = composeCaption({ title: video.title, hashtags, cta })
 
   // Mark intent before the network call so a crash mid-upload is visible.
   const post = await prisma.post.upsert({

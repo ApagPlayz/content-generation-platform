@@ -53,6 +53,8 @@ interface InboxCardProps {
   caseName?: string | null
   compliance?: ComplianceSummary | null
   footageSummary?: string | null
+  /** The exact description (incl. follow/CTA block) that will be posted. */
+  postPreview?: string | null
 }
 
 export function InboxCard({
@@ -73,6 +75,7 @@ export function InboxCard({
   caseName,
   compliance,
   footageSummary,
+  postPreview,
 }: InboxCardProps) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -244,6 +247,17 @@ export function InboxCard({
             </a>
           )}
         </p>
+      )}
+
+      {postPreview && (
+        <details className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+          <summary className="text-xs font-medium text-gray-500 cursor-pointer select-none">
+            What we&apos;ll post — description &amp; follow link
+          </summary>
+          <pre className="mt-2 text-xs text-gray-600 whitespace-pre-wrap font-sans leading-relaxed">
+            {postPreview}
+          </pre>
+        </details>
       )}
 
       <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
