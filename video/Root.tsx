@@ -57,6 +57,8 @@ export const RemotionRoot: React.FC = () => {
           cues: [],
           fps: DEFAULT_FPS,
           beatClips: [],
+          musicSrc: '',
+          musicEnvelope: [],
         }}
         calculateMetadata={({ props }) => {
           const fps = props.fps || DEFAULT_FPS

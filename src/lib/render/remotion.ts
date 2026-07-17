@@ -20,6 +20,7 @@ import type { AddressInfo } from 'net'
 import type { AssembleResult, MomentResult, ScriptResult } from '../tools/types'
 import type { CaptionsResult, RenderResult, ScriptBeat } from '../truecrime/types'
 import { buildBeatTimeline, toCumulativeFrames } from '../truecrime/timeline'
+import { buildBedSynthArgs, buildMusicEnvelope } from '../truecrime/musicBed'
 
 const FPS = 30
 
@@ -282,6 +283,26 @@ export async function renderTrueCrime(
       }))
     }
 
+    // Background-music bed: synthesise the SAME original ambient drone the
+    // ffmpeg path uses (monetization-safe, no asset, no network) into the render
+    // dir the loopback server already serves, and hand the composition the
+    // matching volume envelope so the bed swells with the beats' musicIntensity
+    // curve. Any failure → no bed, an otherwise-identical (narration-only) render.
+    let musicSrc = ''
+    let musicEnvelope: { atSec: number; gain: number }[] = []
+    if (opts?.beats && opts.beats.length > 0) {
+      try {
+        const bedPath = path.join(dir, 'music-bed.wav')
+        await exec('ffmpeg', buildBedSynthArgs(durationSec, bedPath), { timeout: 300_000 })
+        if (existsSync(bedPath)) {
+          musicSrc = url(bedPath)
+          musicEnvelope = buildMusicEnvelope(opts.beats, durationSec).points
+        }
+      } catch (err) {
+        console.warn('[render/remotion] music bed failed, rendering narration only:', err)
+      }
+    }
+
     const inputProps = {
       imageSrcs: usableImages.map(url),
       audioSrc: url(audioPath),
@@ -289,6 +310,8 @@ export async function renderTrueCrime(
       cues: captions.cues,
       fps: FPS,
       beatClips,
+      musicSrc,
+      musicEnvelope,
     }
 
     const composition = await selectComposition({

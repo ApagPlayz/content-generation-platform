@@ -9,7 +9,29 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion'
-import type { CaptionCue, TrueCrimeProps } from './types'
+import type { CaptionCue, MusicEnvelopePoint, TrueCrimeProps } from './types'
+
+// Piecewise-linear read of the music-gain envelope at an absolute second, with
+// clamping outside the range. Mirrors gainAtSec() in src/lib/truecrime/musicBed.ts
+// exactly so the Remotion bed swells identically to the ffmpeg mix — kept local
+// (not imported) because the composition bundle is built by Remotion's own
+// webpack and does not resolve src/ paths.
+function musicGainAt(points: MusicEnvelopePoint[], sec: number): number {
+  if (points.length === 0) return 0
+  if (sec <= points[0].atSec) return points[0].gain
+  const last = points[points.length - 1]
+  if (sec >= last.atSec) return last.gain
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    if (sec >= a.atSec && sec < b.atSec) {
+      const width = b.atSec - a.atSec
+      if (width <= 0) return b.gain
+      return a.gain + ((sec - a.atSec) / width) * (b.gain - a.gain)
+    }
+  }
+  return last.gain
+}
 
 // 9:16 True Crime slideshow: public-domain stills with a slow Ken-Burns drift,
 // the narration as the audio bed, and word-by-word (karaoke) captions in the
@@ -23,6 +45,8 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
   durationSec,
   cues,
   beatClips,
+  musicSrc,
+  musicEnvelope,
 }) => {
   const { fps, durationInFrames } = useVideoConfig()
   const total = durationInFrames || Math.max(1, Math.round(durationSec * fps))
@@ -103,6 +127,15 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
       <KaraokeCaptions cues={cues} />
 
       {audioSrc ? <Audio src={audioSrc} /> : null}
+      {/* Background-music bed UNDER the narration. Its per-frame volume follows
+          the beats' musicIntensity curve (calm → climax swell), kept low so the
+          voice always dominates. Absent musicSrc → no bed, unchanged render. */}
+      {musicSrc ? (
+        <Audio
+          src={musicSrc}
+          volume={(f) => musicGainAt(musicEnvelope ?? [], f / fps)}
+        />
+      ) : null}
     </AbsoluteFill>
   )
 }

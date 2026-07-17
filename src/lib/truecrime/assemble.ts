@@ -15,6 +15,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import type { CaptionsResult, RenderResult, ScriptBeat, TimelineSegment } from './types'
 import { buildBeatTimeline } from './timeline'
+import { buildBedSynthArgs, buildMixFilter, buildMusicEnvelope } from './musicBed'
 import { kenBurnsClip } from './kenBurns'
 
 const exec = promisify(execFile)
@@ -270,10 +271,39 @@ export async function assembleVideo(
     burnArgs.length = 0
   }
 
+  // 3a. Music bed: synthesise an ORIGINAL ambient drone (100% ffmpeg-generated →
+  // monetization-safe, no asset, no network) and pre-mix it UNDER the narration
+  // at the levels the beats' `musicIntensity` curve already specifies. This is a
+  // SEPARATE audio-only step (ffmpeg forbids `-vf` + `-filter_complex` together,
+  // and the mux below uses `-vf` for the caption burn), so the mux is unchanged
+  // apart from reading `audioForMux`. Any failure keeps narration-only — the
+  // factory always ships, silent bed or not.
+  let audioForMux = audioPath
+  if (opts?.beats && opts.beats.length > 0) {
+    try {
+      const bedPath = path.join(dir, 'music-bed.wav')
+      await exec('ffmpeg', buildBedSynthArgs(audioDurationSec, bedPath), { timeout: 300_000 })
+      if (existsSync(bedPath)) {
+        const mixedPath = path.join(dir, 'mixed.m4a')
+        const env = buildMusicEnvelope(opts.beats, audioDurationSec)
+        await exec(
+          'ffmpeg',
+          ['-y', '-i', audioPath, '-i', bedPath,
+            '-filter_complex', buildMixFilter(env),
+            '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', mixedPath],
+          { timeout: 300_000 }
+        )
+        if (existsSync(mixedPath)) audioForMux = mixedPath
+      }
+    } catch (err) {
+      console.warn('[truecrime/assemble] music bed failed, using narration only:', err)
+    }
+  }
+
   const mux = (extra: string[]) =>
     exec(
       'ffmpeg',
-      ['-y', '-i', silentVideo, '-i', audioPath, ...extra,
+      ['-y', '-i', silentVideo, '-i', audioForMux, ...extra,
         '-map', '0:v:0', '-map', '1:a:0',
         '-c:v', extra.length ? 'libx264' : 'copy', ...(extra.length ? ['-preset', 'fast', '-crf', '21'] : []),
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
