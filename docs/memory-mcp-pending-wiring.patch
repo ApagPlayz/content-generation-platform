@@ -1,0 +1,367 @@
+diff --git a/.github/workflows/claude-audit.yml b/.github/workflows/claude-audit.yml
+index 31d65c6..2213151 100644
+--- a/.github/workflows/claude-audit.yml
++++ b/.github/workflows/claude-audit.yml
+@@ -28,7 +28,24 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           # The Builder's PRs are authored by the `claude` bot. Without this, the action's
+@@ -39,7 +56,7 @@ jobs:
+           claude_args: |
+             --model opus
+             --max-turns 60
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
+           prompt: |
+             You are the ADVERSARIAL AUDITOR for PR #${{ github.event.pull_request.number }}
+             in ${{ github.repository }}. Your job is to find reasons this PR should NOT be
+@@ -62,6 +79,16 @@ jobs:
+               when you have decided on a verdict.
+             ────────────────────────────────────────────────────────────────────────
+ 
++            SHARED LONG-TERM MEMORY (knowledge-graph memory server, the `mcp__memory__*` tools):
++            You share a persistent knowledge graph with every other agent in this loop; it
++            survives across runs. Call `mcp__memory__search_nodes` on the areas this PR touches
++            to recall defect patterns past audits already caught here — repeats are exactly what
++            you are hunting for. When you confirm a recurring class of bug, record it with
++            `create_entities` / `add_observations` so the next audit (and the Builder) knows to
++            watch for it. Keep it short and factual, never store secrets, and never let the graph
++            replace actually reading the diff — it is only a memory aid.
++            ────────────────────────────────────────────────────────────────────────
++
+             Spawn FIVE reviewers with the Task tool, in ONE message, each with
+             `run_in_background: false`, one per lens:
+               1. Correctness  — does it do what the PR claims? Trace the logic. Find the bug.
+diff --git a/.github/workflows/claude-builder.yml b/.github/workflows/claude-builder.yml
+index ceb7064..5906d62 100644
+--- a/.github/workflows/claude-builder.yml
++++ b/.github/workflows/claude-builder.yml
+@@ -95,15 +95,34 @@ jobs:
+             echo "go=true" >> "$GITHUB_OUTPUT"
+           fi
+ 
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - if: steps.gate.outputs.go == 'true'
++        name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - if: steps.gate.outputs.go == 'true'
++        name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - if: steps.gate.outputs.go == 'true'
+         uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           show_full_output: true
+           claude_args: |
+             --model opus
+             --max-turns 80
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
+           prompt: |
+             You are the BUILDER for ${{ github.repository }}. You open exactly ONE pull request
+             this run, then stop.
+@@ -130,6 +149,17 @@ jobs:
+             that.
+             ────────────────────────────────────────────────────────────────────────
+ 
++            SHARED LONG-TERM MEMORY (knowledge-graph memory server, the `mcp__memory__*` tools):
++            You share a persistent knowledge graph with every other agent in this loop; it
++            survives across runs. Before building, call `mcp__memory__read_graph` (and
++            `search_nodes` on the issue's topic) to recall how similar work went before — a
++            pattern the owner rejected, a fragile area to be careful in, a decision already made.
++            After you ship, record durable facts with `create_entities` / `add_observations` /
++            `create_relations`: what you built, any gotcha a future Builder should know, code
++            areas that turned out fragile. Keep it short and factual, never store secrets, and
++            remember the PR/issue is the source of truth — this is only a memory aid.
++            ────────────────────────────────────────────────────────────────────────
++
+             ────────────────────────────────────────────────────────────────────────
+             NEVER BUILD AN ISSUE THAT IS ALREADY BEING BUILT
+ 
+diff --git a/.github/workflows/claude-demo.yml b/.github/workflows/claude-demo.yml
+index fa51c59..6f18565 100644
+--- a/.github/workflows/claude-demo.yml
++++ b/.github/workflows/claude-demo.yml
+@@ -124,7 +124,24 @@ jobs:
+ 
+       # 4. The agent decides WHICH pages the diff touches, drives the browser to capture
+       #    them, and writes evidence/ + evidence/manifest.json.
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           allowed_bots: "claude"
+@@ -132,7 +149,7 @@ jobs:
+           claude_args: |
+             --model opus
+             --max-turns 60
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
+           prompt: |
+             You are the DEMO agent for PR #${{ steps.meta.outputs.pr_number }} in
+             ${{ github.repository }}. Your one job: produce PROOF this PR's feature actually
+@@ -157,6 +174,16 @@ jobs:
+               what to capture but writes no files has produced nothing.
+             ────────────────────────────────────────────────────────────────────────
+ 
++            SHARED LONG-TERM MEMORY (knowledge-graph memory server, the `mcp__memory__*` tools):
++            You share a persistent knowledge graph with every other agent in this loop; it
++            survives across runs. It is optional here — if capturing evidence is going slowly you
++            may skip it — but a quick `mcp__memory__search_nodes` on the feature can remind you
++            which routes past demos found worth showing. If you hit a reusable environment gotcha
++            (a page that needs a specific wait, a route that never boots headlessly), record it
++            with `add_observations` so the next demo run does not rediscover it. Keep it short and
++            factual, never store secrets, and never let it delay writing the evidence folder.
++            ────────────────────────────────────────────────────────────────────────
++
+             ENVIRONMENT FACTS you have been handed (do not re-derive them):
+             - The app server is ${{ steps.app.outputs.up == 'true' && 'UP at http://localhost:3000' || 'NOT running (it would not boot headlessly this run)' }}.
+             - A headless Chromium for Playwright is ${{ steps.pw.outputs.browser == 'ok' && 'installed and ready' || 'NOT available' }}.
+diff --git a/.github/workflows/claude-mention.yml b/.github/workflows/claude-mention.yml
+index 9373dcd..baeed11 100644
+--- a/.github/workflows/claude-mention.yml
++++ b/.github/workflows/claude-mention.yml
+@@ -30,12 +30,29 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           track_progress: true
+           claude_args: |
+             --model opus
+             --max-turns 40
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
+-            --append-system-prompt "The person you are replying to is NON-TECHNICAL and is reading on a phone. Answer in plain English, short paragraphs, no jargon. If you changed code, push a claude/ branch and open a PR — never push to main. Read LEARNINGS.md before you start and obey it. If the owner asks you to change what an issue should cover, EDIT THE ISSUE BODY to match — do not just reply in a comment. The Builder plans from the body, so scope changes that live only in a comment can be missed."
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
++            --append-system-prompt "The person you are replying to is NON-TECHNICAL and is reading on a phone. Answer in plain English, short paragraphs, no jargon. If you changed code, push a claude/ branch and open a PR — never push to main. Read LEARNINGS.md before you start and obey it. If the owner asks you to change what an issue should cover, EDIT THE ISSUE BODY to match — do not just reply in a comment. The Builder plans from the body, so scope changes that live only in a comment can be missed. You share a persistent knowledge graph with the other agents in this loop via the mcp__memory__* tools (it survives across runs): call mcp__memory__search_nodes to recall relevant past decisions before answering, and record durable facts the owner tells you (a lasting preference, a decision) with mcp__memory__add_observations. Keep entries short and factual, and never store secrets or tokens in it."
+diff --git a/.github/workflows/claude-redraft.yml b/.github/workflows/claude-redraft.yml
+index 586fc86..98fa5ec 100644
+--- a/.github/workflows/claude-redraft.yml
++++ b/.github/workflows/claude-redraft.yml
+@@ -38,14 +38,31 @@ jobs:
+     steps:
+       - uses: actions/checkout@v6
+ 
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           show_full_output: true
+           claude_args: |
+             --model opus
+             --max-turns 40
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
+           prompt: |
+             You are the REDRAFTER for ${{ github.repository }}. You take a proposal the owner
+             sent back and rewrite it into a stronger one that honors his feedback. You never
+@@ -72,6 +89,16 @@ jobs:
+               has run, you have produced nothing.
+             ────────────────────────────────────────────────────────────────────────
+ 
++            SHARED LONG-TERM MEMORY (knowledge-graph memory server, the `mcp__memory__*` tools):
++            You share a persistent knowledge graph with every other agent in this loop; it
++            survives across runs. Before you rewrite, call `mcp__memory__search_nodes` on this
++            proposal's topic to recall what the owner has approved or rejected in this area — so
++            the redraft moves toward the shape he actually accepts. If his feedback reveals a
++            durable preference ("keep things smaller", "focus on YouTube"), record it with
++            `add_observations` so future proposals start closer to what he wants. Keep it short
++            and factual, never store secrets, and remember the issue is the source of truth.
++            ────────────────────────────────────────────────────────────────────────
++
+             DO THIS, IN ORDER:
+ 
+             1. READ THE WHOLE CONVERSATION — not just the body:
+diff --git a/.github/workflows/claude-retro.yml b/.github/workflows/claude-retro.yml
+index 40f94d2..8e7f32b 100644
+--- a/.github/workflows/claude-retro.yml
++++ b/.github/workflows/claude-retro.yml
+@@ -27,17 +27,43 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: |
+             --model opus
+             --max-turns 50
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
+           prompt: |
+             You are the RETRO for ${{ github.repository }}'s autonomous improvement loop.
+             You improve the loop itself. You do not touch product code.
+ 
++            SHARED LONG-TERM MEMORY (knowledge-graph memory server, the `mcp__memory__*` tools):
++            Every agent in this loop shares a persistent knowledge graph that survives across
++            runs. Call `mcp__memory__read_graph` at the start — it is a compact record of what
++            the other agents have learned week to week, and it will sharpen your diagnosis of
++            what keeps going wrong. When you land a real, repeated lesson, also record it with
++            `create_entities` / `add_observations` (in ADDITION to LEARNINGS.md, not instead of
++            it — LEARNINGS.md still only changes through a PR the owner merges). Keep entries
++            short and factual, and never store secrets.
++
+             LOOK AT WHAT ACTUALLY HAPPENED in the last 7 days. Use `gh`:
+             - PRs from `claude/` branches: which merged, which the owner closed unmerged,
+               which he asked for changes on, and WHAT he said in the comments. His comments
+diff --git a/.github/workflows/claude-scout.yml b/.github/workflows/claude-scout.yml
+index 780d358..826731a 100644
+--- a/.github/workflows/claude-scout.yml
++++ b/.github/workflows/claude-scout.yml
+@@ -43,15 +43,34 @@ jobs:
+           # Actions expressions have no arithmetic — do the subtraction here.
+           echo "room=$((8 - pool))" >> "$GITHUB_OUTPUT"
+ 
++      # Shared long-term memory: the knowledge-graph MCP server (see .mcp.json → "memory")
++      # persists to this file, carried between runs by the cache (rolling key — restore the
++      # most recent graph, save an updated one at job end). Gitignored, so no commit noise.
++      - if: steps.gate.outputs.go == 'true'
++        name: Restore shared agent memory (knowledge graph)
++        uses: actions/cache@v4
++        with:
++          path: .claude/memory
++          key: claude-memory-${{ github.run_id }}
++          restore-keys: |
++            claude-memory-
++      - if: steps.gate.outputs.go == 'true'
++        name: Ensure the memory directory exists
++        run: mkdir -p .claude/memory
++
+       - if: steps.gate.outputs.go == 'true'
+         uses: anthropics/claude-code-action@v1
++        env:
++          # Absolute path is required — a relative MEMORY_FILE_PATH resolves inside the
++          # ephemeral npx package dir and would not persist. This lands in the cached folder.
++          MEMORY_FILE_PATH: ${{ github.workspace }}/.claude/memory/knowledge-graph.jsonl
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           show_full_output: true
+           claude_args: |
+             --model opus
+             --max-turns 50
+-            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
++            --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch,mcp__memory__read_graph,mcp__memory__search_nodes,mcp__memory__open_nodes,mcp__memory__create_entities,mcp__memory__create_relations,mcp__memory__add_observations,mcp__memory__delete_entities,mcp__memory__delete_observations,mcp__memory__delete_relations"
+           prompt: |
+             You are the SCOUT for ${{ github.repository }}. You never write or change code.
+             You find work that is worth doing, and you make the case for it.
+@@ -80,6 +99,19 @@ jobs:
+             green and the owner got nothing. Do not repeat it.
+             ────────────────────────────────────────────────────────────────────────
+ 
++            SHARED LONG-TERM MEMORY (knowledge-graph memory server, the `mcp__memory__*` tools):
++            You share a persistent knowledge graph with every other agent in this loop; it
++            survives across runs. USE IT so you stop re-proposing the same things:
++            - START by calling `mcp__memory__read_graph` (and `search_nodes` on a topic) to
++              recall what past runs already proposed, what the owner approved, and what he
++              ignored or rejected and why. Do not re-file an idea the graph shows was already
++              tried or already turned down.
++            - When you learn something durable — the owner approved/ignored a proposal, a whole
++              theme keeps getting rejected, a fact about the product's weak spots — record it
++              with `create_entities` / `add_observations` / `create_relations`. Keep it short and
++              factual. Never store secrets. GitHub issues remain the source of truth; this is
++              only a memory aid.
++
+             There are currently ${{ steps.gate.outputs.pool }} open proposals. The pool caps at 8.
+             File at most ${{ steps.gate.outputs.room }} new issues — fewer if you
+             only found fewer things genuinely worth doing.
