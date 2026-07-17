@@ -2,6 +2,7 @@ import { ExternalLink, Trophy } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { PLATFORM, connection } from '@/lib/youtube'
 import { latestMetricsByPost } from '@/lib/tools/analytics'
+import { formatRefreshedAgo } from '@/lib/metrics-refresh'
 import { RefreshMetricsButton } from './refresh-metrics-button'
 
 // Factory-type badge colors (mirrors the inbox-card convention).
@@ -42,13 +43,26 @@ export async function WinnersView() {
     include: { video: { include: { factory: true } } },
   })
 
+  // Newest snapshot time = when metrics were last refreshed (manually or by the
+  // hourly background auto-refresh). Null until the first refresh writes a row.
+  const lastMetric = await prisma.metric.findFirst({
+    orderBy: { capturedAt: 'desc' },
+    select: { capturedAt: true },
+  })
+  const refreshedAgo = formatRefreshedAgo(lastMetric?.capturedAt ?? null, Date.now())
+
   const header = (
     <div className="flex items-start justify-between mb-5">
       <div>
         <h2 className="text-lg font-semibold text-gray-900">Winners</h2>
         <p className="text-sm text-gray-500">Top published videos by views.</p>
       </div>
-      <RefreshMetricsButton />
+      <div className="flex items-center gap-3">
+        {refreshedAgo && (
+          <span className="text-xs text-gray-400 whitespace-nowrap">Updated {refreshedAgo}</span>
+        )}
+        <RefreshMetricsButton />
+      </div>
     </div>
   )
 

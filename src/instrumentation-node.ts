@@ -16,8 +16,12 @@
 const TICK_INTERVAL_MS = 60_000
 
 export async function startScheduler(): Promise<void> {
-  // Guard against double-registration on dev hot-reload.
-  const g = globalThis as typeof globalThis & { __schedulerTimer?: NodeJS.Timeout }
+  // Guard against double-registration on dev hot-reload. `__lastMetricsRefreshAt`
+  // is the in-process throttle stamp for the hourly metrics auto-refresh below.
+  const g = globalThis as typeof globalThis & {
+    __schedulerTimer?: NodeJS.Timeout
+    __lastMetricsRefreshAt?: number
+  }
   if (g.__schedulerTimer) return
 
   const { runDueSchedules } = await import('@/lib/scheduler')
@@ -30,6 +34,24 @@ export async function startScheduler(): Promise<void> {
       const { ran, errors } = await runDueSchedules()
       if (ran.length || errors.length) {
         console.log(`[scheduler] fired ${ran.length} run(s), ${errors.length} error(s)`)
+      }
+
+      // Keep the Winners leaderboard fresh without a human clicking "Refresh
+      // metrics" (issue #50). Throttled to once an hour so it doesn't burn the
+      // YouTube Analytics quota. We stamp BEFORE awaiting so a slow or failing
+      // refresh (e.g. a lapsed YouTube login) backs off a full hour instead of
+      // retrying every 60s; its own try/catch keeps a metrics failure from
+      // touching the scheduler tick.
+      const { shouldAutoRefresh } = await import('@/lib/metrics-refresh')
+      if (shouldAutoRefresh(Date.now(), g.__lastMetricsRefreshAt)) {
+        g.__lastMetricsRefreshAt = Date.now()
+        try {
+          const { refreshAllMetrics } = await import('@/lib/tools/analytics')
+          const { updated } = await refreshAllMetrics()
+          if (updated) console.log(`[analytics] auto-refreshed ${updated} video(s)`)
+        } catch (e) {
+          console.warn('[analytics] auto-refresh failed:', e instanceof Error ? e.message : e)
+        }
       }
     } catch (e) {
       console.warn('[scheduler] tick failed:', e instanceof Error ? e.message : e)
