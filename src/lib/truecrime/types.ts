@@ -205,12 +205,24 @@ export interface WordStamp {
   endSec: number
 }
 
+/** One word of narration: `display` is the original spelling shown in captions,
+ *  `spoken` is what the TTS engine was actually given (issue #51). Equal for
+ *  untouched words. */
+export interface NormSegment {
+  display: string
+  spoken: string
+}
+
 export interface TtsResult {
   audioPath: string
   durationSec: number
   provider: 'elevenlabs' | 'openai-tts' | 'kokoro' | 'macos-say' | 'silent-stub'
   /** Word-level timings when the provider supplies them (Kokoro captioned). */
   words?: WordStamp[]
+  /** Per-word display/spoken cover of the narration, when the pronunciation pass
+   *  changed anything — lets captions relabel spoken stamps back to the original
+   *  spelling so "F B I" is heard but "FBI" is read. */
+  segments?: NormSegment[]
 }
 
 /** One word inside a caption page, for word-by-word (karaoke) highlighting. */

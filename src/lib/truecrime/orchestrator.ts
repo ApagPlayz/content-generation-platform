@@ -188,7 +188,12 @@ export async function executeTrueCrimeRun(
     }
 
     await stage(ctx, 'tts', async () => {
-      ctx.tts = await synthesizeNarration(ctx.videoId, ctx.script!.narration, ctx.config.voice)
+      ctx.tts = await synthesizeNarration(
+        ctx.videoId,
+        ctx.script!.narration,
+        ctx.config.voice,
+        'truecrime'
+      )
       await prisma.asset.create({
         data: {
           videoId: ctx.videoId,
@@ -204,7 +209,8 @@ export async function executeTrueCrimeRun(
         ctx.tts!.audioPath,
         ctx.script!.narration,
         ctx.tts!.durationSec,
-        ctx.tts!.words
+        ctx.tts!.words,
+        ctx.tts!.segments
       )
       await prisma.asset.create({
         data: {

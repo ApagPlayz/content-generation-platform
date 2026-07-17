@@ -22,6 +22,8 @@ import path from 'path'
 import { prisma } from '../prisma'
 import { getSetting } from '../settings'
 import type { TtsResult, WordStamp } from './types'
+import { normalizeForSpeech } from './pronunciation'
+import { resolveLexicon } from './pronunciation.lexicon'
 
 const exec = promisify(execFile)
 const MEDIA_DIR = path.join(process.cwd(), 'media')
@@ -253,12 +255,28 @@ function providerChain(preferred: string): ProviderName[] {
 export async function synthesizeNarration(
   videoId: string,
   narration: string,
-  voice?: string
+  voice?: string,
+  niche?: 'truecrime' | 'history'
 ): Promise<TtsResult> {
   const dir = path.join(MEDIA_DIR, videoId)
   await mkdir(dir, { recursive: true })
   const wavPath = path.join(dir, 'narration.wav')
-  const estDuration = Math.max(8, narration.split(/\s+/).length / WORDS_PER_SEC)
+
+  // Pronunciation pass (issue #51): the engine speaks the corrected `spoken`
+  // text; `segments` lets the caption stage relabel back to the original
+  // spelling so viewers hear "F B I" but read "FBI". A bad lexicon can't break
+  // us — resolveLexicon swallows malformed overrides and the transforms are
+  // conservative — but guard anyway so TTS never fails on this.
+  let spoken = narration
+  let segments: TtsResult['segments']
+  try {
+    const norm = normalizeForSpeech(narration, await resolveLexicon(niche))
+    spoken = norm.spoken
+    if (norm.changed) segments = norm.segments
+  } catch {
+    /* fall back to raw narration */
+  }
+  const estDuration = Math.max(8, spoken.split(/\s+/).length / WORDS_PER_SEC)
 
   const preferred = await getSetting('default_tts_provider')
   const voiceSetting = voice || (await getSetting('default_tts_voice')) || undefined
@@ -266,26 +284,26 @@ export async function synthesizeNarration(
   for (const provider of providerChain(preferred)) {
     let ok = false
     let words: WordStamp[] | undefined
-    if (provider === 'elevenlabs') ok = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
-    else if (provider === 'openai-tts') ok = await openaiTts(narration, voiceSetting ?? '', wavPath)
+    if (provider === 'elevenlabs') ok = await elevenLabs(spoken, voiceSetting ?? 'Rachel', wavPath)
+    else if (provider === 'openai-tts') ok = await openaiTts(spoken, voiceSetting ?? '', wavPath)
     else if (provider === 'kokoro') {
-      const r = await kokoro(narration, voiceSetting ?? '', wavPath)
+      const r = await kokoro(spoken, voiceSetting ?? '', wavPath)
       ok = r.ok
       words = r.words
-    } else if (provider === 'macos-say') ok = await macSay(narration, voiceSetting, wavPath)
+    } else if (provider === 'macos-say') ok = await macSay(spoken, voiceSetting, wavPath)
     if (!ok) continue
 
     if (provider === 'elevenlabs') {
-      await ledger(videoId, 'elevenlabs-tts', narration.length, ELEVENLABS_COST_PER_CHAR)
+      await ledger(videoId, 'elevenlabs-tts', spoken.length, ELEVENLABS_COST_PER_CHAR)
     } else if (provider === 'openai-tts') {
-      await ledger(videoId, 'openai-tts', narration.length, OPENAI_COST_PER_CHAR)
+      await ledger(videoId, 'openai-tts', spoken.length, OPENAI_COST_PER_CHAR)
     }
-    return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider, words }
+    return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider, words, segments }
   }
 
   // Final tier: silent stub so the render stage still has an audio bed.
   await silentStub(estDuration, wavPath)
-  return { audioPath: wavPath, durationSec: estDuration, provider: 'silent-stub' }
+  return { audioPath: wavPath, durationSec: estDuration, provider: 'silent-stub', segments }
 }
 
 async function ledger(videoId: string, service: string, units: number, unitCost: number) {

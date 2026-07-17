@@ -14,8 +14,9 @@ import {
   kokoroCues,
   mergeLeadingPunctuation,
   mergePunctuationStamps,
+  relabelStampsToDisplay,
 } from './captions'
-import type { WordStamp } from './types'
+import type { NormSegment, WordStamp } from './types'
 
 /** True when a cue's first whitespace-token is punctuation-only — the exact
  *  defect this round fixed. */
@@ -129,5 +130,77 @@ describe('kokoroCues', () => {
       expect(startsWithBarePunctuation(cue.text)).toBe(false)
       for (const token of cue.tokens ?? []) expect(isPunctuationOnly(token.text)).toBe(false)
     }
+  })
+})
+
+// Issue #51: the pronunciation pass makes the engine SAY "F B I" but captions
+// must READ "FBI". relabelStampsToDisplay maps the spoken word stamps back to the
+// original spelling, collapsing a multi-word spoken form into one display token
+// over its combined time window — and returns null (→ heuristic fallback) on any
+// drift so the spoken form can never reach the screen.
+describe('relabelStampsToDisplay', () => {
+  const stamp = (word: string, startSec: number, endSec: number): WordStamp => ({ word, startSec, endSec })
+  const seg = (display: string, spoken: string): NormSegment => ({ display, spoken })
+
+  it('collapses an expanded acronym back to its original spelling and time span', () => {
+    const stamps = [stamp('F', 1.0, 1.2), stamp('B', 1.2, 1.4), stamp('I', 1.4, 1.7)]
+    const out = relabelStampsToDisplay(stamps, [seg('FBI', 'F B I')])
+    expect(out).toEqual([stamp('FBI', 1.0, 1.7)])
+  })
+
+  it('keeps unchanged words per-stamp and only collapses the changed one', () => {
+    const stamps = [
+      stamp('The', 0, 0.3),
+      stamp('F', 0.3, 0.45),
+      stamp('B', 0.45, 0.6),
+      stamp('I', 0.6, 0.8),
+      stamp('raided.', 0.8, 1.2),
+    ]
+    const segments = [seg('The', 'The'), seg('FBI', 'F B I'), seg('raided.', 'raided.')]
+    expect(relabelStampsToDisplay(stamps, segments)).toEqual([
+      stamp('The', 0, 0.3),
+      stamp('FBI', 0.3, 0.8),
+      stamp('raided.', 0.8, 1.2),
+    ])
+  })
+
+  it('collapses a spelled-out year (multi-word spoken) to the original digits', () => {
+    const stamps = [
+      stamp('in', 0, 0.2),
+      stamp('nineteen', 0.2, 0.6),
+      stamp('ninety', 0.6, 0.9),
+      stamp('five', 0.9, 1.1),
+    ]
+    const segments = [seg('in', 'in'), seg('1995', 'nineteen ninety-five')]
+    expect(relabelStampsToDisplay(stamps, segments)).toEqual([
+      stamp('in', 0, 0.2),
+      stamp('1995', 0.2, 1.1),
+    ])
+  })
+
+  it('returns the stamps unchanged when nothing was normalized', () => {
+    const stamps = [stamp('she', 0, 0.3), stamp('left', 0.3, 0.6)]
+    const segments = [seg('she', 'she'), seg('left', 'left')]
+    expect(relabelStampsToDisplay(stamps, segments)).toBe(stamps)
+  })
+
+  it('returns null on drift so the caller can fall back to original text', () => {
+    // Stamps run out before the spoken acronym is reconstructed.
+    const stamps = [stamp('F', 0, 0.2), stamp('B', 0.2, 0.4)]
+    expect(relabelStampsToDisplay(stamps, [seg('FBI', 'F B I')])).toBeNull()
+  })
+
+  it('returns null when real stamps are left over', () => {
+    const stamps = [stamp('F', 0, 0.2), stamp('B', 0.2, 0.4), stamp('I', 0.4, 0.6), stamp('extra', 0.6, 0.9)]
+    expect(relabelStampsToDisplay(stamps, [seg('FBI', 'F B I')])).toBeNull()
+  })
+
+  it('produces captions that read the original spelling end-to-end', () => {
+    // The whole point: engine says "F B I", the burned-in caption says "FBI".
+    const stamps = [stamp('F', 0, 0.2), stamp('B', 0.2, 0.4), stamp('I', 0.4, 0.7)]
+    const relabeled = relabelStampsToDisplay(stamps, [seg('FBI', 'F B I')])!
+    const cues = kokoroCues(mergePunctuationStamps(relabeled))
+    expect(cues[0].text).toBe('FBI')
+    expect(cues[0].text).not.toContain('F B I')
   })
 })

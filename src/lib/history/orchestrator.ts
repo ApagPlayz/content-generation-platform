@@ -195,7 +195,12 @@ export async function executeHistoryRun(
     }
 
     await stage(ctx, 'tts', async () => {
-      ctx.tts = await synthesizeNarration(ctx.videoId, ctx.script!.narration, ctx.config.voice)
+      ctx.tts = await synthesizeNarration(
+        ctx.videoId,
+        ctx.script!.narration,
+        ctx.config.voice,
+        'history'
+      )
       await prisma.asset.create({
         data: {
           videoId: ctx.videoId,
@@ -211,7 +216,8 @@ export async function executeHistoryRun(
         ctx.tts!.audioPath,
         ctx.script!.narration,
         ctx.tts!.durationSec,
-        ctx.tts!.words
+        ctx.tts!.words,
+        ctx.tts!.segments
       )
       await prisma.asset.create({
         data: {

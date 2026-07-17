@@ -8,7 +8,8 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { writeFile } from 'fs/promises'
 import path from 'path'
-import type { CaptionCue, CaptionsResult, WordStamp } from './types'
+import type { CaptionCue, CaptionsResult, NormSegment, WordStamp } from './types'
+import { speechKey } from './pronunciation'
 
 const exec = promisify(execFile)
 
@@ -120,20 +121,72 @@ export function kokoroCues(words: WordStamp[], perPage = 3): CaptionCue[] {
   return cues
 }
 
+/**
+ * Relabel spoken word stamps back to the original spelling (issue #51). When the
+ * pronunciation pass changed a word ("FBI"→"F B I", "1995"→"nineteen ninety-
+ * five"), the TTS engine's stamps carry the SPOKEN tokens; burning those into
+ * captions would show "F B I" on screen. Each `segment` is one original word and
+ * its spoken form, so we walk the stamps, consume however many reconstruct each
+ * segment's spoken text, and emit ONE stamp carrying the original `display`
+ * spelling over their combined time window. Karaoke stays per-word (one output
+ * stamp per original word).
+ *
+ * Returns the stamps unchanged when nothing was normalized (byte-identical to
+ * the old behaviour), and `null` on any drift — Kokoro's tokenizer is a black
+ * box — so the caller can safely fall back to heuristic timing on the original
+ * text rather than ever risk showing the spoken form.
+ */
+export function relabelStampsToDisplay(
+  stamps: WordStamp[],
+  segments: NormSegment[]
+): WordStamp[] | null {
+  if (!segments.some((s) => s.display !== s.spoken)) return stamps // nothing changed
+  const out: WordStamp[] = []
+  let si = 0
+  const nextReal = () => {
+    while (si < stamps.length && speechKey(stamps[si].word) === '') si++
+    return si < stamps.length ? stamps[si] : null
+  }
+  for (const seg of segments) {
+    const target = speechKey(seg.spoken)
+    if (target === '') continue // punctuation-only original token — no stamp to consume
+    let acc = ''
+    let start: number | null = null
+    let end = 0
+    while (acc.length < target.length) {
+      const st = nextReal()
+      if (!st) return null // ran out of stamps mid-word → drift
+      acc += speechKey(st.word)
+      if (start === null) start = st.startSec
+      end = st.endSec
+      si++
+    }
+    if (acc !== target || start === null) return null // reconstruction didn't line up
+    out.push({ word: seg.display, startSec: start, endSec: end })
+  }
+  if (nextReal()) return null // leftover real stamps → drift
+  return out
+}
+
 export async function generateCaptions(
   audioPath: string,
   narration: string,
   durationSec: number,
-  words?: WordStamp[]
+  words?: WordStamp[],
+  segments?: NormSegment[]
 ): Promise<CaptionsResult> {
   const dir = path.dirname(audioPath)
   const captionsPath = path.join(dir, 'captions.json')
 
   // Best path: exact, word-level timings supplied by the TTS provider (Kokoro).
-  // Punctuation-only stamps are merged into their previous word first so no
-  // caption page ever opens on a bare "," / "." token. If merging leaves
-  // nothing (all-punctuation stamps), fall through to the heuristic path.
-  const stamps = words && words.length > 0 ? mergePunctuationStamps(words) : []
+  // First relabel any pronunciation-normalized words back to their original
+  // spelling (issue #51) so captions read "FBI" while the audio says "F B I";
+  // on any alignment drift the relabel returns null and we fall through to the
+  // heuristic path, which uses the ORIGINAL narration text (never the spoken
+  // form). Punctuation-only stamps are then merged into their previous word so
+  // no caption page ever opens on a bare "," / "." token.
+  const relabeled = words && words.length > 0 && segments ? relabelStampsToDisplay(words, segments) : words
+  const stamps = relabeled && relabeled.length > 0 ? mergePunctuationStamps(relabeled) : []
   if (stamps.length > 0) {
     const cues = kokoroCues(stamps)
     await writeFile(captionsPath, JSON.stringify({ method: 'kokoro', durationSec, cues }, null, 2))
