@@ -11,60 +11,38 @@ nothing is added here without the owner merging it.
 
 ---
 
-- *2026-07-13* — Seeded. No lessons yet; the loop has not produced a pull request.
-- *2026-07-13* — **A green Actions run does not mean the agent did its job.** The first Scout
-  run finished `success` in 6 minutes, having done all its research, and filed **zero** issues.
-  Cause: `anthropics/claude-code-action` **disables Bash by default**. Job-level
-  `permissions: issues: write` is NOT enough — it grants GitHub-side rights, not tool-side ones.
-  Without `--allowedTools` in `claude_args`, every `gh issue create` was silently denied
-  (`permission_denials_count: 20` in the run log, which is the ONLY place it surfaces).
-  Rule: after any agent run, verify the *outcome* on GitHub (issue/PR/comment exists) —
-  never trust the green tick, and always check `permission_denials_count` when output is missing.
-- *2026-07-13* — **`--allowedTools` REPLACES the default toolset; it does not extend it.** The first
-  attempt at the fix above passed only `--allowedTools "Bash(gh:*),Bash(git:*)"`. That granted Bash
-  and silently revoked `Read`/`Grep`/`Task`/`WebSearch` — denials went UP (20 → 22) and the run
-  collapsed from 46 turns to 21. An allowlist must name EVERY tool the agent needs, not just the
-  new one. Also: `Bash(gh:*)`-style prefix patterns do NOT match commands containing `$(...)`,
-  heredocs or pipes — and `gh issue create --body "$(cat <<EOF...)"` is exactly what these agents
-  write. In an ephemeral CI container on a private repo, plain `Bash` is the right call.
-- *2026-07-14* — **A CI agent has ONE turn. Backgrounded subagents die with it.** Scout spawned its
-  four researchers with the Task tool at its default (background) setting, wrote "I'll wait for
-  their findings... I'll report back once the researchers return", and ended its turn at 20 of 50.
-  There is no second turn in a one-shot Actions job: the container was destroyed, the four
-  researchers were killed mid-flight, and `gh issue create` was never reached. Zero denials, zero
-  errors, `stop_reason: end_turn` — a completely green run that produced nothing. It even ran
-  `sleep 1; echo "checking..."` as filler while "waiting". Rule: every Task call in a workflow
-  agent MUST set `run_in_background: false`, and no agent's job is done until the artifact it was
-  asked for (issue / PR / comment) actually exists on GitHub.
-- *2026-07-14* — **Never let a verification step pass with a warning.** The Scout verify step
-  correctly detected "0 proposals before → 0 after" and emitted `::warning`, which left the run
-  GREEN. The owner saw a passing loop that had produced nothing for a day. Verification steps must
-  `exit 1`. A red run is information; a green run that did nothing is a lie.
-- *2026-07-14* — **An unassigned issue never reaches the owner.** Scout filed 7 correct proposals and
-  the owner still saw nothing: GitHub's Inbox only notifies you about things you authored, are
-  assigned to, are subscribed to, or are @mentioned in. Issues opened by `app/claude` with no
-  assignee match none of those, so they are invisible unless he manually opens the Issues tab.
-  Producing the artifact is not the same as delivering it. Scout must pass `--assignee <owner>`;
-  Builder must pass `--assignee <owner> --reviewer <owner>`.
-- *2026-07-14* — **The Auditor refused to review the Builder's PRs — bot-loop guard.**
-  `claude-code-action` aborts before turn 1 when the triggering actor is a Bot:
-  `Workflow initiated by non-human actor: claude (type: Bot). Add bot to allowed_bots list.`
-  Every Builder PR is authored by the `claude` bot, so the Auditor would never have reviewed a
-  single one — the two halves of the loop could not see each other. Fix: `allowed_bots: "claude"`
-  on the auditor step. Scope it to `claude`, never `*`, or any bot's PR (Dependabot, etc.) burns
-  a five-agent audit.
-- *2026-07-14* — **GitHub cron is best-effort and silently drops runs.** The Builder's `*/30`
-  schedule actually fired at 14:02, 15:59, 16:51, 17:24, 18:42 — a two-hour gap in the middle. The
-  owner approved three issues from his phone and watched nothing happen, because the Builder never
-  woke up. Never rely on a schedule alone for anything a human is waiting on: trigger on the event
-  (`issues: types: [labeled]`) and keep the cron only as a backstop.
-- *2026-07-14* — **The Builder rebuilt an issue that was already being built.** Two runs both picked
-  #15, both spent ~14 minutes, and opened two PRs (#28, #29) for one feature; one had to be thrown
-  away. The prompt said "comment on the issue so a later run doesn't pick it up too" — but nothing
-  *reads* that comment. A prompt-level convention is not a lock. The gate must compute which issues
-  already have an open `claude/` PR (`Closes #N` in the PR body) and hand the agent an explicit
-  off-limits list.
+- *2026-07-13* — **A green Actions run does not mean the agent did its job.** `claude-code-action`
+  disables Bash by default; job-level `permissions:` grants GitHub rights, not tool-side ones, so
+  every `gh` call was silently denied (`permission_denials_count: 20`, the only place it surfaces).
+  Always verify the *outcome* on GitHub (issue/PR/comment exists) — never trust the green tick.
+- *2026-07-13* — **`--allowedTools` REPLACES the default toolset; it does not extend it.** An allowlist
+  must name EVERY tool the agent needs (Read/Grep/Task/WebSearch…), not just the new one. And
+  `Bash(gh:*)` prefix patterns do NOT match `$(...)`, heredocs or pipes — which these agents write
+  constantly. In an ephemeral CI container on a private repo, plain `Bash` is the right call.
+- *2026-07-14* — **A CI agent has ONE turn; backgrounded subagents die with it.** Every Task call in a
+  workflow agent MUST set `run_in_background: false` so the agent blocks on the result. "I'll wait for
+  their findings / report back" = failure: there is no later turn. The job is done only when the
+  artifact (issue/PR/comment) actually exists on GitHub, not when the agent decided what to do.
+- *2026-07-14* — **A verification step must `exit 1`, never `::warning`.** Scout detected "0 proposals
+  before → 0 after" and only warned, leaving the run green. A red run is information; a green run that
+  did nothing is a lie.
+- *2026-07-14* — **An unassigned issue never reaches the owner.** GitHub's Inbox only notifies you about
+  things you authored / are assigned to / @mentioned in. Scout must pass `--assignee <owner>`; Builder
+  `--assignee <owner> --reviewer <owner>`. Producing the artifact is not the same as delivering it.
+- *2026-07-14* — **The Auditor aborts on bot-authored PRs unless allow-listed.** `claude-code-action`
+  refuses non-human actors before turn 1. Set `allowed_bots: "claude"` on the auditor — scope to
+  `claude`, never `*`, or another bot's PR (Dependabot etc.) burns a five-agent audit.
+- *2026-07-14* — **GitHub cron is best-effort and silently drops runs** (a 2-hour gap was observed).
+  Never rely on a schedule for anything a human waits on: trigger on the event
+  (`issues: types: [labeled]`) and keep cron as a backstop only.
+- *2026-07-14* — **Don't rebuild an issue already being built.** A prompt convention ("comment that you
+  started") is not a lock — the next run never reads it. The gate must compute which issues an open
+  `claude/` PR already claims (`Closes #N` in the body) and hand the agent an explicit off-limits list.
 - *2026-07-14* — **Agents read the issue BODY, not the thread.** `gh issue view` omits comments unless
-  you pass `--comments`, so an owner's clarification ("only do the YouTube part") is invisible and the
-  original scope gets built. Every agent that acts on an issue must read the comments, and the owner's
-  comments override the body. When the owner asks @claude to change scope, @claude must edit the body.
+  you pass `--comments`. The owner's clarifications live there and OVERRIDE the body. When he asks
+  @claude to change scope, @claude must edit the body so later runs see it.
+- *2026-07-17* — **Volume is not progress; an unreviewed PR is WIP, not output.** The Builder's overnight
+  review-queue cap was set to 99 (effectively off), so it kept opening large PRs all night regardless of
+  whether the owner had merged the last batch — the queue reached 13 open PRs with the last merge 32h
+  earlier, median size climbing. A WIP cap that lifts every night isn't a cap. Keep it bounded, and
+  prefer the smallest useful slice: big diffs are exactly the ones that never get reviewed.
