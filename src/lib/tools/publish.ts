@@ -1,7 +1,11 @@
 import { createReadStream, existsSync } from 'fs'
 import { google } from 'googleapis'
 import { prisma } from '../prisma'
-import { autoPublishEnabled, tiktokAutoPublishEnabled } from '../settings'
+import {
+  autoPublishEnabled,
+  facebookAutoPublishEnabled,
+  tiktokAutoPublishEnabled,
+} from '../settings'
 import {
   authedClient,
   connection,
@@ -16,6 +20,12 @@ import {
   PLATFORM as TIKTOK_PLATFORM,
   tiktokPermalink,
 } from '../tiktok'
+import {
+  connection as metaConnection,
+  facebookPermalink,
+  PLATFORM as FACEBOOK_PLATFORM,
+  publishReel,
+} from '../meta'
 
 /**
  * Publish tool (PRD §8.1 / Phase 2). Uploads a rendered Short to YouTube via
@@ -311,6 +321,82 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
   }
 }
 
+/**
+ * Publish a rendered Short as a Facebook Page Reel (issue #58). Same shape and
+ * guarantees as publishToYouTube/publishToTikTok: idempotent per (video,
+ * platform) — a video already live on Facebook is returned as-is rather than
+ * re-uploaded. Facebook Reels take a direct file upload, so the exact MP4 at
+ * video.localPath is what ships.
+ */
+export async function publishToFacebook(videoId: string): Promise<PublishResult> {
+  const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } })
+
+  // Idempotency: don't re-upload a video that already has a live Facebook post.
+  const existing = await prisma.post.findUnique({
+    where: { videoId_platform: { videoId, platform: FACEBOOK_PLATFORM } },
+  })
+  if (isAlreadyPublished(existing)) {
+    return {
+      postId: existing.id,
+      platformPostId: existing.platformPostId,
+      permalink: existing.permalink || facebookPermalink(existing.platformPostId),
+      alreadyPublished: true,
+    }
+  }
+
+  if (!video.localPath || !existsSync(video.localPath)) {
+    throw new Error('Rendered MP4 not found for this video — render it before publishing.')
+  }
+
+  const conn = await metaConnection()
+  if (!conn) throw new Error('Facebook is not connected. Connect it in Settings first.')
+
+  const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
+  const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
+    .filter(Boolean)
+    .join(' ')
+
+  // Mark intent before the network call so a crash mid-upload is visible.
+  const post = await prisma.post.upsert({
+    where: { videoId_platform: { videoId, platform: FACEBOOK_PLATFORM } },
+    update: { status: 'publishing', error: null },
+    create: { videoId, platform: FACEBOOK_PLATFORM, status: 'publishing' },
+  })
+
+  try {
+    const { videoId: fbVideoId, permalink } = await publishReel({
+      filePath: video.localPath,
+      caption,
+    })
+
+    const updated = await prisma.post.update({
+      where: { id: post.id },
+      data: {
+        platformPostId: fbVideoId,
+        permalink,
+        status: 'published',
+        publishedAt: new Date(),
+        error: null,
+      },
+    })
+
+    await prisma.video.update({ where: { id: videoId }, data: { status: 'published' } })
+
+    await prisma.costLedger.create({
+      data: { videoId, service: 'facebook_publish', units: 1, unitCost: 0, total: 0 },
+    })
+
+    return { postId: updated.id, platformPostId: fbVideoId, permalink, alreadyPublished: false }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { status: 'failed', error: message },
+    })
+    throw e
+  }
+}
+
 export type AutoPublishOutcome =
   | { published: true; permalink: string }
   | { published: false; reason: string }
@@ -391,6 +477,13 @@ const PLATFORM_ADAPTERS: PlatformAdapter[] = [
     isAutoEnabled: tiktokAutoPublishEnabled,
     isConnected: async () => !!(await tiktokConnection()),
     publish: async (videoId) => ({ permalink: (await publishToTikTok(videoId)).permalink }),
+  },
+  {
+    platform: FACEBOOK_PLATFORM,
+    label: 'Facebook',
+    isAutoEnabled: facebookAutoPublishEnabled,
+    isConnected: async () => !!(await metaConnection()),
+    publish: async (videoId) => ({ permalink: (await publishToFacebook(videoId)).permalink }),
   },
 ]
 

@@ -129,3 +129,13 @@ export async function tiktokAutoPublishEnabled(): Promise<boolean> {
   const v = (await getSetting('tiktok_auto_publish_enabled', 'false')).toLowerCase()
   return v === 'true' || v === '1' || v === 'on'
 }
+
+/**
+ * Same opt-in for Facebook Reels (issue #58). Its own setting so connecting
+ * Facebook never changes what YouTube or TikTok does — switched on independently
+ * and off by default, exactly like the others.
+ */
+export async function facebookAutoPublishEnabled(): Promise<boolean> {
+  const v = (await getSetting('facebook_auto_publish_enabled', 'false')).toLowerCase()
+  return v === 'true' || v === '1' || v === 'on'
+}
