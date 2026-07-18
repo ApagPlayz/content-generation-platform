@@ -6,6 +6,8 @@ import { runScript } from './tools/script'
 import { runTransform } from './tools/transform'
 import { runAssemble } from './tools/assemble'
 import { maybeAutoPublish } from './tools/publish'
+import { checkGenericVariation } from './compliance/genericVariation'
+import { resolveFinalStatus } from './pipeline/finalize'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
 import type { ToolContext } from './tools/types'
 
@@ -147,12 +149,43 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
       })
     })
 
-    const finalStatus = agent.autonomy === 'auto' ? 'approved' : 'review'
+    // Anti-repetition brake (issue #17): the same template stamped out again is
+    // what YouTube's "inauthentic / mass-produced content" policy demonetizes.
+    // A trip is a SOFT failure — hold the video for review, never auto-publish a
+    // near-duplicate. Best-effort: it never throws, so it can't fail a good run.
+    const variation = await checkGenericVariation(agent.factoryId, {
+      currentVideoId: ctx.videoId,
+      title: ctx.script?.title,
+      hook: ctx.script?.hook,
+      sourceUrl: ctx.ingest?.youtubeUrl,
+    })
+    if (!variation.passed) {
+      // Surface WHY it was held on the dashboard queue (job.error renders in red).
+      await prisma.job.create({
+        data: {
+          videoId: ctx.videoId,
+          stage: 'variation-check',
+          status: 'failed',
+          attempts: 1,
+          error: variation.reasons.join(' '),
+          startedAt: new Date(),
+          finishedAt: new Date(),
+        },
+      })
+    }
+
+    const finalStatus = resolveFinalStatus({
+      complianceDecision: variation.passed ? 'pass' : 'route_to_review',
+      autonomy: agent.autonomy,
+      silentVoiceover: false,
+    })
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
 
     // Auto agents publish straight away when the operator has opted in; this is
     // non-fatal — publishToYouTube flips the video to 'published' on success and
     // otherwise leaves it 'approved' for a manual publish from the Review inbox.
+    // A flagged variation already forced finalStatus to 'review', so a
+    // near-duplicate never reaches auto-publish.
     if (finalStatus === 'approved') await maybeAutoPublish(ctx.videoId, agent.autonomy)
 
     await prisma.agentRun.update({

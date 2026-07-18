@@ -10,7 +10,7 @@
 import { prisma } from '../prisma'
 import type { ScriptStructure, TrueCrimeScript, VariationVerdict } from './types'
 import { TRUE_CRIME_PROFILE, type ComplianceProfile } from './profile'
-import { tokenize } from './sources'
+import { shingles, jaccard } from './textSimilarity'
 import { computeVisualSignature, visualRepetition } from './visualSignature'
 
 const SIMILARITY_THRESHOLD = 0.8
@@ -18,21 +18,6 @@ const SIMILARITY_THRESHOLD = 0.8
 // recent video is a strong inauthentic-content signal the text axes can't see.
 const VISUAL_REPETITION_THRESHOLD = 0.6
 const RECENT_WINDOW = 15
-
-/** 4-gram word shingles for narration-level similarity. */
-function shingles(text: string, n = 4): Set<string> {
-  const words = tokenize(text)
-  const out = new Set<string>()
-  for (let i = 0; i + n <= words.length; i++) out.add(words.slice(i, i + n).join(' '))
-  return out
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0
-  let inter = 0
-  for (const x of a) if (b.has(x)) inter++
-  return inter / (a.size + b.size - inter)
-}
 
 function structuralSimilarity(a: ScriptStructure, b: ScriptStructure): number {
   let score = 0
