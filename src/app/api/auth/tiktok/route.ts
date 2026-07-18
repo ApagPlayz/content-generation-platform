@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { connection, PLATFORM } from '@/lib/tiktok'
+import { connectionState, PLATFORM } from '@/lib/tiktok'
 
-// Connection status for the Settings UI.
+// Connection status for the Settings UI. Three distinct states so a silently
+// expired login (needs_reconnect) is never painted the same as a healthy one
+// ("connected") or a never-set-up one ("none") — matching the YouTube route.
 export async function GET() {
-  const conn = await connection()
-  return NextResponse.json(
-    conn
-      ? { connected: true, handle: conn.accountHandle, connectedAt: conn.updatedAt }
-      : { connected: false }
-  )
+  const { state, handle } = await connectionState()
+  return NextResponse.json({ connected: state === 'active', state, handle: handle ?? null })
 }
 
 // Disconnect — drops the stored tokens.
