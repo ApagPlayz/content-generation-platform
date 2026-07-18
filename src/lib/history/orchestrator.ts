@@ -22,9 +22,11 @@ import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from '../retry'
 import {
   isEmptyRender,
   isSilentVoiceover,
+  isPaidVoiceFallback,
   resolveFinalStatus,
   EMPTY_RENDER_ERROR,
   SILENT_VOICEOVER_REASON,
+  paidVoiceFallbackReason,
 } from '../pipeline/finalize'
 import type { F11Context, F11FactoryConfig, F11Stage } from './types'
 
@@ -269,10 +271,31 @@ export async function executeHistoryRun(
       })
     }
 
+    // A configured paid voice that failed (expired key / no credits / rate limit)
+    // and fell back to a cheaper voice is also a soft failure: the video is fine
+    // but it isn't in the voice the owner pays for, so surface it and hold for
+    // review instead of quietly publishing the wrong voice. (A silent stub is
+    // reported above with a stronger reason and takes precedence.)
+    const paidVoiceFallback = isPaidVoiceFallback(ctx.tts?.paidVoiceFailure, ctx.tts?.provider)
+    if (paidVoiceFallback) {
+      await prisma.job.create({
+        data: {
+          videoId: ctx.videoId,
+          stage: 'voiceover',
+          status: 'failed',
+          attempts: 1,
+          error: paidVoiceFallbackReason(ctx.tts!.paidVoiceFailure!, ctx.tts!.provider),
+          startedAt: new Date(),
+          finishedAt: new Date(),
+        },
+      })
+    }
+
     const finalStatus = resolveFinalStatus({
       complianceDecision: ctx.complianceDecision,
       autonomy: agent.autonomy,
       silentVoiceover,
+      paidVoiceFallback,
     })
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
 

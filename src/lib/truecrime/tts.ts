@@ -21,7 +21,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { prisma } from '../prisma'
 import { getSetting } from '../settings'
-import type { TtsResult, WordStamp } from './types'
+import type { TtsResult, WordStamp, PaidVoiceFailure } from './types'
 
 const exec = promisify(execFile)
 const MEDIA_DIR = path.join(process.cwd(), 'media')
@@ -85,9 +85,38 @@ async function toWav(srcBytes: ArrayBuffer | Uint8Array, ext: string, wavPath: s
   return existsSync(wavPath)
 }
 
-async function elevenLabs(text: string, voice: string, wavPath: string): Promise<boolean> {
+/**
+ * Outcome of a paid-provider attempt. `ok` says whether we got usable audio;
+ * `failure` is set ONLY when the provider was configured (key present) but the
+ * call failed — the signal issue #57 surfaces to the owner. A missing key
+ * yields `{ ok: false }` with no failure: the owner never opted into the paid
+ * voice, so a fallback is expected, not a fault.
+ */
+interface PaidAttempt {
+  ok: boolean
+  failure?: PaidVoiceFailure
+}
+
+/**
+ * Classify one paid-provider attempt. Returns a PaidVoiceFailure ONLY when the
+ * owner configured that provider (its key is present) AND the request came back
+ * non-ok (or threw — pass `res: null`). No key returns undefined: the owner
+ * never opted in, so a fallback is not a failure. Exported for unit testing —
+ * this is the distinction issue #57 turns on.
+ */
+export function classifyPaidVoiceFailure(
+  provider: PaidVoiceFailure['provider'],
+  keyPresent: boolean,
+  res: { ok: boolean; status: number } | null,
+): PaidVoiceFailure | undefined {
+  if (!keyPresent) return undefined
+  if (res && res.ok) return undefined
+  return res ? { provider, status: res.status } : { provider }
+}
+
+async function elevenLabs(text: string, voice: string, wavPath: string): Promise<PaidAttempt> {
   const key = process.env.ELEVENLABS_API_KEY
-  if (!key) return false
+  if (!key) return { ok: false }
   try {
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`,
@@ -101,16 +130,18 @@ async function elevenLabs(text: string, voice: string, wavPath: string): Promise
         }),
       }
     )
-    if (!res.ok) return false
-    return toWav(await res.arrayBuffer(), 'mp3', wavPath)
+    if (!res.ok) return { ok: false, failure: classifyPaidVoiceFailure('elevenlabs', true, res) }
+    // A 200 we couldn't convert locally still leaves us on a fallback voice.
+    const ok = await toWav(await res.arrayBuffer(), 'mp3', wavPath)
+    return ok ? { ok: true } : { ok: false, failure: { provider: 'elevenlabs' } }
   } catch {
-    return false
+    return { ok: false, failure: classifyPaidVoiceFailure('elevenlabs', true, null) }
   }
 }
 
-async function openaiTts(text: string, voice: string, wavPath: string): Promise<boolean> {
+async function openaiTts(text: string, voice: string, wavPath: string): Promise<PaidAttempt> {
   const key = process.env.OPENAI_API_KEY
-  if (!key) return false
+  if (!key) return { ok: false }
   try {
     const res = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
@@ -122,10 +153,11 @@ async function openaiTts(text: string, voice: string, wavPath: string): Promise<
         response_format: 'wav',
       }),
     })
-    if (!res.ok) return false
-    return toWav(await res.arrayBuffer(), 'wav', wavPath)
+    if (!res.ok) return { ok: false, failure: classifyPaidVoiceFailure('openai-tts', true, res) }
+    const ok = await toWav(await res.arrayBuffer(), 'wav', wavPath)
+    return ok ? { ok: true } : { ok: false, failure: { provider: 'openai-tts' } }
   } catch {
-    return false
+    return { ok: false, failure: classifyPaidVoiceFailure('openai-tts', true, null) }
   }
 }
 
@@ -263,12 +295,23 @@ export async function synthesizeNarration(
   const preferred = await getSetting('default_tts_provider')
   const voiceSetting = voice || (await getSetting('default_tts_voice')) || undefined
 
+  // Remember the first configured paid provider that was tried and failed, so the
+  // orchestrator can warn the owner their paid voice broke even though a cheaper
+  // voice ultimately shipped (issue #57).
+  let paidVoiceFailure: PaidVoiceFailure | undefined
+
   for (const provider of providerChain(preferred)) {
     let ok = false
     let words: WordStamp[] | undefined
-    if (provider === 'elevenlabs') ok = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
-    else if (provider === 'openai-tts') ok = await openaiTts(narration, voiceSetting ?? '', wavPath)
-    else if (provider === 'kokoro') {
+    if (provider === 'elevenlabs') {
+      const r = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
+      ok = r.ok
+      if (r.failure && !paidVoiceFailure) paidVoiceFailure = r.failure
+    } else if (provider === 'openai-tts') {
+      const r = await openaiTts(narration, voiceSetting ?? '', wavPath)
+      ok = r.ok
+      if (r.failure && !paidVoiceFailure) paidVoiceFailure = r.failure
+    } else if (provider === 'kokoro') {
       const r = await kokoro(narration, voiceSetting ?? '', wavPath)
       ok = r.ok
       words = r.words
@@ -280,12 +323,18 @@ export async function synthesizeNarration(
     } else if (provider === 'openai-tts') {
       await ledger(videoId, 'openai-tts', narration.length, OPENAI_COST_PER_CHAR)
     }
-    return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider, words }
+    return {
+      audioPath: wavPath,
+      durationSec: await probeDuration(wavPath, estDuration),
+      provider,
+      words,
+      paidVoiceFailure,
+    }
   }
 
   // Final tier: silent stub so the render stage still has an audio bed.
   await silentStub(estDuration, wavPath)
-  return { audioPath: wavPath, durationSec: estDuration, provider: 'silent-stub' }
+  return { audioPath: wavPath, durationSec: estDuration, provider: 'silent-stub', paidVoiceFailure }
 }
 
 async function ledger(videoId: string, service: string, units: number, unitCost: number) {

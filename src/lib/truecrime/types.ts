@@ -205,12 +205,30 @@ export interface WordStamp {
   endSec: number
 }
 
+/**
+ * A configured PAID voice provider that was actually attempted and failed. Only
+ * set when the owner's API key is present (they opted into the paid voice) and
+ * the request came back non-ok or threw — never for the benign "no key set"
+ * case. Drives the owner-facing "your paid voice failed" warning (issue #57).
+ */
+export interface PaidVoiceFailure {
+  provider: 'elevenlabs' | 'openai-tts'
+  /** HTTP status when the request returned non-ok; undefined when it threw. */
+  status?: number
+}
+
 export interface TtsResult {
   audioPath: string
   durationSec: number
   provider: 'elevenlabs' | 'openai-tts' | 'kokoro' | 'macos-say' | 'silent-stub'
   /** Word-level timings when the provider supplies them (Kokoro captioned). */
   words?: WordStamp[]
+  /**
+   * Set when a configured paid provider (its API key is present) was attempted
+   * but failed, so narration fell back to a different/cheaper voice. Undefined
+   * for the benign "no key set" case and when the paid voice actually succeeded.
+   */
+  paidVoiceFailure?: PaidVoiceFailure
 }
 
 /** One word inside a caption page, for word-by-word (karaoke) highlighting. */
