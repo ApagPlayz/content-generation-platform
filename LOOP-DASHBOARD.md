@@ -8,10 +8,10 @@
 
 | | |
 |---|---|
-| Pull requests merged | 9 |
+| Pull requests merged | 12 (+3) |
 | Pull requests rejected | 1 |
-| **Merge rate** | **90%** |
-| Waiting on you right now | 18 |
+| **Merge rate** | **92%** |
+| Waiting on you right now | 15 |
 
 ## Is it outrunning you?
 
@@ -27,7 +27,7 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Proposals filed | 12 |
+| Proposals filed | 21 |
 | Proposals you approved | 0 |
 | **Approval rate** | **0%** |
 
