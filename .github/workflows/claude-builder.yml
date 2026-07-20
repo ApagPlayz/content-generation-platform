@@ -9,15 +9,16 @@ name: Claude — Builder (implements work, keeps your queue full)
 # because the Builder simply never woke up. Now approving from the phone starts a build
 # within a minute, and the schedule is only a safety net.
 #
-# THE QUEUE RULE:
-#   - Daytime (7am–11pm ET): at most 3 agent PRs may be open and waiting on you at once.
-#     Merge or close one and a slot frees up; the next run fills it.
-#   - Overnight (11pm–7am ET): the cap is lifted, so work piles up while you sleep.
-#
-# WHAT IT BUILDS:
-#   - An issue you labeled `approved` always jumps the queue and gets built first.
-#   - Otherwise it picks the strongest open `proposal` on its own. You do not have to
-#     approve anything for the loop to keep moving.
+# THE QUEUE RULE — both numbers below are configurable per-project from the dashboard's
+# Ideas page, stored in this repo's `.github/loop-config.json`. No time-of-day special
+# casing: the same rule applies at 3pm and at 3am.
+#   - `prCap` (default 3): at most this many agent PRs may be open and waiting on you at
+#     once. Merge or close one and a slot frees up; the next run fills it.
+#   - `autonomousBuildEnabled` (default false):
+#       - OFF — the Builder only ever builds an issue you've explicitly labeled
+#         `approved`. It is never told that self-picking a proposal is an option.
+#       - ON — if nothing is `approved`, it picks the strongest open `proposal` on its
+#         own. You do not have to approve anything for the loop to keep moving.
 #   - It NEVER picks an issue that already has an open `claude/` PR against it.
 #
 # A cheap bash gate runs first, so a run with no room and no work costs ~15 seconds.
@@ -49,22 +50,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Read this repo's automation settings. Missing file or missing field falls back
+      # to the safe default (prCap 3, autonomous build OFF) — a repo that hasn't been
+      # backfilled with loop-config.json yet, or hasn't visited the Ideas page settings
+      # panel, gets the conservative behavior, never the permissive one.
+      - name: Read loop config
+        id: config
+        run: |
+          cap=$(jq -r '.prCap // 3' .github/loop-config.json 2>/dev/null || echo 3)
+          autonomous=$(jq -r '.autonomousBuildEnabled // false' .github/loop-config.json 2>/dev/null || echo false)
+          [ "$autonomous" = "true" ] || autonomous=false
+          echo "Review-queue cap: $cap | Autonomous build: $autonomous"
+          echo "cap=$cap" >> "$GITHUB_OUTPUT"
+          echo "autonomous=$autonomous" >> "$GITHUB_OUTPUT"
+
       # Cheap pre-flight in plain bash so we never boot an expensive agent for nothing.
       - name: Check the queue
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CAP: ${{ steps.config.outputs.cap }}
+          AUTONOMOUS: ${{ steps.config.outputs.autonomous }}
         run: |
-          hour=$(TZ=America/New_York date +%H)
-          hour=${hour#0}
-          if [ "$hour" -ge 23 ] || [ "$hour" -lt 7 ]; then
-            cap=99
-            echo "Overnight (${hour}:00 ET) — review-queue cap lifted."
-          else
-            cap=3
-            echo "Daytime (${hour}:00 ET) — review-queue cap is 3."
-          fi
-
           open_prs=$(gh pr list --state open --json headRefName \
             --jq '[.[] | select(.headRefName | startswith("claude/"))] | length')
 
@@ -81,15 +88,28 @@ jobs:
 
           approved=$(gh issue list --state open --label approved --json number --jq 'length')
           proposals=$(gh issue list --state open --label proposal --json number --jq 'length')
-          echo "Agent PRs awaiting you: $open_prs / $cap | approved: $approved | proposals: $proposals"
+          echo "Agent PRs awaiting you: $open_prs / $CAP | approved: $approved | proposals: $proposals | autonomous: $AUTONOMOUS"
           echo "Already claimed by an open PR: $claimed"
           echo "claimed=$claimed" >> "$GITHUB_OUTPUT"
 
-          if [ "$open_prs" -ge "$cap" ]; then
+          if [ "$AUTONOMOUS" = "true" ]; then
+            pick_rule='2. If none are approved, choose the SINGLE strongest open issue labeled `proposal` — judge by value to the product against effort and risk, and prefer small. You are trusted to choose. Do not ask, do not build more than one.'
+            nothing_to_build=$([ "$approved" -eq 0 ] && [ "$proposals" -eq 0 ] && echo true || echo false)
+          else
+            pick_rule='2. If none are approved, STOP without opening a PR. Autonomous build is OFF for this project — you may only build issues the owner has explicitly labeled `approved`. Do not self-pick a proposal, no matter how strong it looks, and do not comment suggesting one — the owner has chosen to review before anything gets built.'
+            nothing_to_build=$([ "$approved" -eq 0 ] && echo true || echo false)
+          fi
+          {
+            echo "pick_rule<<PICKEOF"
+            echo "$pick_rule"
+            echo "PICKEOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$open_prs" -ge "$CAP" ]; then
             echo "Your review queue is full — standing down. Merge or close one to free a slot."
             echo "go=false" >> "$GITHUB_OUTPUT"
-          elif [ "$approved" -eq 0 ] && [ "$proposals" -eq 0 ]; then
-            echo "Nothing to build — the shelf is empty. Scout will restock it."
+          elif [ "$nothing_to_build" = "true" ]; then
+            echo "Nothing to build — the shelf is empty (or autonomous build is off and nothing is approved). Scout will restock it."
             echo "go=false" >> "$GITHUB_OUTPUT"
           else
             echo "go=true" >> "$GITHUB_OUTPUT"
@@ -146,9 +166,7 @@ jobs:
 
             PICK — in this strict order, skipping anything in the off-limits list above:
             1. The OLDEST open issue labeled `approved`. The owner asked for it; it always wins.
-            2. If none are approved, choose the SINGLE strongest open issue labeled `proposal` —
-               judge by value to the product against effort and risk, and prefer small. You are
-               trusted to choose. Do not ask, do not build more than one.
+            ${{ steps.gate.outputs.pick_rule }}
             3. If neither exists, stop without opening a PR.
 
             READ THE WHOLE CONVERSATION, NOT JUST THE ISSUE BODY:
