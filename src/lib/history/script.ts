@@ -18,6 +18,7 @@
 
 import { prisma } from '../prisma'
 import { resolveModel, claudeCallCost } from '../settings'
+import { scoreHookCandidate } from '../tools/hookScore'
 import type { ScriptStructure } from '../compliance'
 import {
   loadRecentStyleProfiles,
@@ -241,6 +242,7 @@ export async function generateHistoryScript(
     if (!built) return templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
 
     const fallback = templateScript(brief, specs, targetDurationSec, citations, style, editorialLayer)
+    const hookGate = scoreHookCandidate(built.hook)
     return {
       caseName: brief.caseName,
       subjects: brief.subjects,
@@ -251,6 +253,8 @@ export async function generateHistoryScript(
       structure: structureFor(brief, specs, built.hook.type, style),
       hook: built.hook,
       beats: built.beats,
+      hookScore: hookGate.score,
+      hookStyle: hookGate.style,
       title: parsed.title ? String(parsed.title).slice(0, 100) : fallback.title,
       description: parsed.description ? String(parsed.description) : fallback.description,
       hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags.map(String) : fallback.hashtags,
@@ -440,6 +444,7 @@ function templateScript(
     .trim()
 
   const yr = brief.year ? ` (${brief.year})` : ''
+  const hookGate = scoreHookCandidate(hook)
   return {
     caseName: brief.caseName,
     subjects: brief.subjects,
@@ -450,6 +455,8 @@ function templateScript(
     structure: structureFor(brief, specs, hook.type, style),
     hook,
     beats,
+    hookScore: hookGate.score,
+    hookStyle: hookGate.style,
     title: `${brief.caseName}${yr}: the rise and the fallout`.slice(0, 100),
     description:
       (facts[0] ?? brief.summary.slice(0, 160)) +

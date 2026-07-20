@@ -139,3 +139,22 @@ export function pickBestHook(candidates: string[]): { hook: string; score: HookS
   }
   return best
 }
+
+/**
+ * Score the rich hook the true-crime and history factories build (their hook is
+ * an object, not a bare string like sports'). The viewer receives that hook as
+ * BOTH a spoken opening line (`verbal`, 10-14 words) and a compressed on-screen
+ * overlay (`onscreenText`, ≤7 words), so its strength is the stronger of the
+ * two: `pickBestHook` scores each and returns the winner. This avoids two
+ * biases — the long `verbal` line usually trips the scorer's >60-char length
+ * penalty, while the offline template's `onscreenText` is just the case name
+ * (no curiosity/number signal) — so scoring either alone would under-report.
+ * Reuses the same deterministic scorer sports uses, so the Review Inbox badge
+ * means the same thing across all three factories. Empty hook → score 0.
+ */
+export function scoreHookCandidate(hook: {
+  verbal?: string
+  onscreenText?: string
+} | null | undefined): HookScore {
+  return pickBestHook([hook?.onscreenText ?? '', hook?.verbal ?? '']).score
+}
