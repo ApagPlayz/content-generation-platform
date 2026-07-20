@@ -33,7 +33,10 @@ export const moodBankTier: Tier = async ({ beat, beatIndex, dest, brief, moodUsa
   try {
     const vintage = brief.year != null && brief.year < VINTAGE_CUTOFF_YEAR
     const exclude = vintage ? ANACHRONISTIC_MOOD_CATEGORIES : []
-    const clips = await selectMoodClips(beat.visualCue || '', CANDIDATE_POOL_SIZE, beatIndex, exclude)
+    // Vintage stories (round 8): mood clips only on a DIRECT cue match, never
+    // via fallback, and never a climate/style-mismatched clip — an unmatched
+    // beat falls to the era-appropriate Wikimedia placeholder floor instead.
+    const clips = await selectMoodClips(beat.visualCue || '', CANDIDATE_POOL_SIZE, beatIndex, exclude, vintage)
     const clip = moodUsage ? pickLeastUsedClip(clips, moodUsage) : clips[0]
     if (!clip || !clip.path) return null
 

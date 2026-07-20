@@ -25,9 +25,11 @@ import {
   brightenGamma,
   isAcceptableStill,
   isBrightEnoughStill,
+  isDetailedEnoughStill,
   isFlatColorCard,
   MIN_STILL_BYTES,
   MIN_STILL_DIM,
+  MIN_STILL_EDGE_DENSITY,
   MIN_STILL_LUMA,
   parseFileLengthSec,
   pickBestFile,
@@ -277,6 +279,29 @@ describe('isBrightEnoughStill', () => {
 
   it('rejects non-finite measurements', () => {
     expect(isBrightEnoughStill(Number.NaN)).toBe(false)
+  })
+})
+
+describe('isDetailedEnoughStill', () => {
+  it('rejects near-featureless frames — calibrated on real blank-fog frames (0-0.014)', () => {
+    expect(isDetailedEnoughStill(0)).toBe(false)
+    expect(isDetailedEnoughStill(0.014)).toBe(false)
+    expect(isDetailedEnoughStill(MIN_STILL_EDGE_DENSITY - 0.001)).toBe(false)
+  })
+
+  it('accepts every real scene, even soft/dark ones (palms 0.066, neon street 0.24)', () => {
+    expect(isDetailedEnoughStill(MIN_STILL_EDGE_DENSITY)).toBe(true)
+    expect(isDetailedEnoughStill(0.066)).toBe(true)
+    expect(isDetailedEnoughStill(0.24)).toBe(true)
+    expect(isDetailedEnoughStill(9.4)).toBe(true)
+  })
+
+  it('passes an unmeasurable (null) edge density — fail-open like every probe', () => {
+    expect(isDetailedEnoughStill(null)).toBe(true)
+  })
+
+  it('rejects non-finite measurements', () => {
+    expect(isDetailedEnoughStill(Number.NaN)).toBe(false)
   })
 })
 

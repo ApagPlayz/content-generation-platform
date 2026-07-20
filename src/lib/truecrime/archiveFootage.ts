@@ -464,6 +464,42 @@ export async function stillLumaYAvg(filePath: string): Promise<number | null> {
   }
 }
 
+/** Minimum average edge density for a FALLBACK (mood-bank) still. Calibrated
+ *  on real staged frames (round 8): pure-fog frames measure 0–0.014, tropical
+ *  rain 0.066, a dark neon street 0.24, genuine archive stills 0.3–9.4 — so
+ *  0.05 rejects only near-featureless gray mush while every real scene, even
+ *  soft/dark ones, clears it. Deliberately NOT applied to the archive path:
+ *  legitimate soft-focus era photographs must never be rejected for softness. */
+export const MIN_STILL_EDGE_DENSITY = 0.05
+
+/** Pure accept/reject for a fallback still's measured edge density. `null`
+ *  (probe failed / ffmpeg absent) passes — fail-open like every other probe. */
+export function isDetailedEnoughStill(edgeAvg: number | null): boolean {
+  if (edgeAvg == null) return true
+  return Number.isFinite(edgeAvg) && edgeAvg >= MIN_STILL_EDGE_DENSITY
+}
+
+/** Measure a still's average EDGE density (edgedetect → signalstats YAVG,
+ *  0–255) with one cheap single-frame ffmpeg pass; null when unmeasurable.
+ *  A near-zero value means a featureless frame (blank fog/gray mush).
+ *  Exported for the mood-bank detail gate and tests. */
+export async function stillEdgeDensity(filePath: string): Promise<number | null> {
+  if (!(await ffmpegAvailable())) return null
+  try {
+    const { stdout } = await exec(
+      'ffmpeg',
+      ['-v', 'error', '-i', filePath, '-vf', 'edgedetect=low=0.1:high=0.3,signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-'],
+      { timeout: VALIDATE_TIMEOUT_MS }
+    )
+    const m = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(stdout)
+    if (!m) return null
+    const v = Number(m[1])
+    return Number.isFinite(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
 async function probeStillDimensions(filePath: string): Promise<{ width: number | null; height: number | null }> {
   try {
     const { stdout } = await exec(
