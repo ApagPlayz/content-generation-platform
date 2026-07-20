@@ -8,10 +8,15 @@ name: Claude — Auditor (adversarial PR review)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to (re)audit"
+        required: true
 
 # A new push supersedes an in-flight audit of the same PR — don't pay twice.
 concurrency:
-  group: audit-${{ github.event.pull_request.number }}
+  group: audit-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
@@ -24,9 +29,34 @@ jobs:
       issues: write
       id-token: write
     steps:
+      # Work out which PR we're on. Handles both the normal pull_request trigger
+      # AND a manual/scripted re-run (workflow_dispatch) — the latter matters
+      # because a follow-up push from the @mention agent uses the default
+      # GITHUB_TOKEN identity, which GitHub's own recursion-prevention rule
+      # silently excludes from ever firing `pull_request: synchronize` — so
+      # without this, a fix pushed onto an existing PR would never get
+      # re-audited, and the stale verdict would sit there indefinitely.
+      - name: Resolve PR number
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            pr="${{ github.event.inputs.pr_number }}"
+          else
+            pr="${{ github.event.pull_request.number }}"
+          fi
+          echo "PR under review: #$pr"
+          echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Check out the PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ steps.meta.outputs.pr_number }}
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -41,7 +71,7 @@ jobs:
             --max-turns 60
             --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
           prompt: |
-            You are the ADVERSARIAL AUDITOR for PR #${{ github.event.pull_request.number }}
+            You are the ADVERSARIAL AUDITOR for PR #${{ steps.meta.outputs.pr_number }}
             in ${{ github.repository }}. Your job is to find reasons this PR should NOT be
             merged. Assume it is subtly broken until you prove otherwise.
 
