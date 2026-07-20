@@ -191,11 +191,13 @@ async function OverviewTab() {
                           Not posted: {video.posts[0].error}
                         </span>
                       )}
-                      {!video.posts[0]?.error && video.jobs[0]?.error && (
-                        <span className="block text-xs text-red-500 truncate">
-                          {video.jobs[0].error}
-                        </span>
-                      )}
+                      {video.status === 'failed' &&
+                        !video.posts[0]?.error &&
+                        video.jobs[0]?.error && (
+                          <span className="block text-xs text-red-500 truncate">
+                            {video.jobs[0].error}
+                          </span>
+                        )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0 ml-4">
