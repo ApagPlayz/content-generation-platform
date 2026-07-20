@@ -5,8 +5,11 @@ import { runMomentDetect } from './tools/momentDetect'
 import { runScript } from './tools/script'
 import { runTransform } from './tools/transform'
 import { runAssemble } from './tools/assemble'
+import { gateSportsCopyright } from './tools/copyrightGate'
 import { maybeAutoPublish } from './tools/publish'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
+import type { AssetLicense } from './compliance/types'
+import type { LeagueTolerance } from './tools/leaguePolicy'
 import type { ToolContext } from './tools/types'
 
 /**
@@ -147,7 +150,57 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
       })
     })
 
-    const finalStatus = agent.autonomy === 'auto' ? 'approved' : 'review'
+    // ── Copyright-risk gate — the pre-publish decision point (issue #21) ──
+    // Sports downloads real broadcast footage; this is where we refuse to auto-
+    // publish an unaccounted-for/unlicensed clip and flag high-risk videos into
+    // the review inbox BEFORE a DMCA strike can land. Fails closed.
+    await stage(ctx, 'copyright', async () => {
+      const sd = (ctx.source?.sourceData ?? {}) as Record<string, unknown>
+      const cfg = ctx.factoryConfig
+      const teamCase =
+        typeof sd.visitorTeam === 'string' && typeof sd.homeTeam === 'string'
+          ? `${sd.visitorTeam} vs ${sd.homeTeam}`
+          : null
+      const caseName =
+        teamCase ??
+        ctx.source?.triggerReason?.replace(/^\[FLAG:[^\]]*\]\s*/, '').slice(0, 80) ??
+        'Sports highlight'
+
+      ctx.copyright = await gateSportsCopyright(
+        ctx.videoId,
+        {
+          caseName,
+          sourceUrl: ctx.ingest?.youtubeUrl,
+          sourceLicense: (cfg.sourceLicense as AssetLicense) ?? 'unknown',
+          licenseRef: cfg.sourceLicenseRef as string | undefined,
+          strategy: ctx.source?.strategy,
+          league: sd.league as string | undefined,
+          leagueTolerance: sd.claimTolerance as LeagueTolerance | undefined,
+          policyNote: sd.policyNote as string | undefined,
+          treatments: ctx.transform?.treatments,
+          analysisLines: ctx.transform?.analysisLines,
+          telestrationCount: ctx.transform?.telestrationCount,
+          reframedVertical: Boolean(ctx.assembled),
+          durationSec: ctx.assembled?.durationSec,
+          shortClipMaxSec: Number(cfg.copyrightShortClipMaxSec) || undefined,
+        },
+        { generatedAt: new Date().toISOString() }
+      )
+    })
+
+    // A hard block never ships; any copyright risk routes to human review; only
+    // a clean 'pass' is eligible for an auto agent's auto-publish. If the gate
+    // verdict is somehow missing, fail closed to review — never auto-publish an
+    // unchecked clip (this is the whole point of issue #21).
+    const decision = ctx.copyright?.decision ?? 'route_to_review'
+    const finalStatus =
+      decision === 'block'
+        ? 'rejected'
+        : decision === 'route_to_review'
+          ? 'review'
+          : agent.autonomy === 'auto'
+            ? 'approved'
+            : 'review'
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
 
     // Auto agents publish straight away when the operator has opted in; this is
