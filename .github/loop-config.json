@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "autonomousBuildEnabled": false,
+  "prCap": 3,
+  "ideaQueueCap": 25
+}
