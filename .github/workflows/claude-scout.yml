@@ -2,8 +2,11 @@ name: Claude — Scout (finds work worth doing)
 
 # Runs every hour. Researches the market + the codebase, then files issues labeled
 # `proposal`. It NEVER writes code — it only stocks the shelf that the Builder picks
-# from. A cheap bash gate keeps the pool at 8 open proposals, so most hourly runs
-# cost ~15 seconds and never boot an agent.
+# from. A cheap bash gate keeps the open-proposal pool under the repo's configured
+# cap (`.github/loop-config.json`, `ideaQueueCap` — set from the dashboard's Ideas
+# page; defaults to 25 if the file is missing), so most hourly runs cost ~15 seconds
+# and never boot an agent. Because this runs every hour regardless of time of day,
+# ideas accumulate steadily throughout the day up to the cap, not in an overnight burst.
 
 on:
   schedule:
@@ -25,15 +28,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Read the per-project cap. Missing file or missing field both fall back to 25 —
+      # this repo may not have been backfilled with a loop-config.json yet.
+      - name: Read loop config
+        id: config
+        run: |
+          cap=$(jq -r '.ideaQueueCap // 25' .github/loop-config.json 2>/dev/null || echo 25)
+          if [ "$cap" = "unlimited" ] || [ "$cap" = "null" ] || [ -z "$cap" ]; then
+            cap=999999
+          fi
+          echo "Idea queue cap: $cap"
+          echo "cap=$cap" >> "$GITHUB_OUTPUT"
+
       # Cheap pre-flight in plain bash so we never boot an expensive agent for nothing.
       - name: Check the proposal pool
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CAP: ${{ steps.config.outputs.cap }}
         run: |
           pool=$(gh issue list --state open --label proposal --json number --jq 'length')
-          echo "Open proposals: $pool"
-          if [ "$pool" -ge 8 ]; then
+          echo "Open proposals: $pool / $CAP"
+          if [ "$pool" -ge "$CAP" ]; then
             echo "Pool is full — standing down. An unread queue is noise, not a backlog."
             echo "go=false" >> "$GITHUB_OUTPUT"
           else
@@ -41,7 +57,7 @@ jobs:
           fi
           echo "pool=$pool" >> "$GITHUB_OUTPUT"
           # Actions expressions have no arithmetic — do the subtraction here.
-          echo "room=$((8 - pool))" >> "$GITHUB_OUTPUT"
+          echo "room=$((CAP - pool))" >> "$GITHUB_OUTPUT"
 
       - if: steps.gate.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
@@ -80,7 +96,8 @@ jobs:
             green and the owner got nothing. Do not repeat it.
             ────────────────────────────────────────────────────────────────────────
 
-            There are currently ${{ steps.gate.outputs.pool }} open proposals. The pool caps at 8.
+            There are currently ${{ steps.gate.outputs.pool }} open proposals. The pool caps at
+            ${{ steps.config.outputs.cap }}.
             File at most ${{ steps.gate.outputs.room }} new issues — fewer if you
             only found fewer things genuinely worth doing.
 
