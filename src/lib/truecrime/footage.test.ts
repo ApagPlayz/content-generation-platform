@@ -14,7 +14,7 @@ import { existsSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { archivePoolQueries, archiveQuery, cueToQuery, MULTI_SLOT_TIERS, namesRealSubject, TIER_ALIASES, walkTierLadder } from './footage'
+import { archivePoolQueries, archiveQuery, cueToQuery, LOCAL_TIERS, MULTI_SLOT_TIERS, namesRealSubject, TIER_ALIASES, walkTierLadder } from './footage'
 import type { Tier, TierInput, TierOutput } from './footage'
 import { archiveTier } from './footage/archiveOrg'
 import {
@@ -25,9 +25,11 @@ import {
   brightenGamma,
   isAcceptableStill,
   isBrightEnoughStill,
+  isDetailedEnoughStill,
   isFlatColorCard,
   MIN_STILL_BYTES,
   MIN_STILL_DIM,
+  MIN_STILL_EDGE_DENSITY,
   MIN_STILL_LUMA,
   parseFileLengthSec,
   pickBestFile,
@@ -280,6 +282,29 @@ describe('isBrightEnoughStill', () => {
   })
 })
 
+describe('isDetailedEnoughStill', () => {
+  it('rejects near-featureless frames — calibrated on real blank-fog frames (0-0.014)', () => {
+    expect(isDetailedEnoughStill(0)).toBe(false)
+    expect(isDetailedEnoughStill(0.014)).toBe(false)
+    expect(isDetailedEnoughStill(MIN_STILL_EDGE_DENSITY - 0.001)).toBe(false)
+  })
+
+  it('accepts every real scene, even soft/dark ones (palms 0.066, neon street 0.24)', () => {
+    expect(isDetailedEnoughStill(MIN_STILL_EDGE_DENSITY)).toBe(true)
+    expect(isDetailedEnoughStill(0.066)).toBe(true)
+    expect(isDetailedEnoughStill(0.24)).toBe(true)
+    expect(isDetailedEnoughStill(9.4)).toBe(true)
+  })
+
+  it('passes an unmeasurable (null) edge density — fail-open like every probe', () => {
+    expect(isDetailedEnoughStill(null)).toBe(true)
+  })
+
+  it('rejects non-finite measurements', () => {
+    expect(isDetailedEnoughStill(Number.NaN)).toBe(false)
+  })
+})
+
 describe('stillLumaVerdict', () => {
   it('hard-rejects only near-black frames', () => {
     expect(stillLumaVerdict(0)).toBe('reject')
@@ -381,14 +406,14 @@ describe('ArchiveStillPool', () => {
    *  succeeding unless the identifier is listed in `failing`. */
   function fakeDeps(scoped: string[], relaxed: string[] = [], failing: string[] = []) {
     const searches: { query: string; collections: string[]; rows: number }[] = []
-    const resolves: { identifier: string; beatIndex?: number; variant?: string }[] = []
+    const resolves: { identifier: string; beatIndex?: number; seekSeed?: number; variant?: string }[] = []
     const deps: ArchivePoolDeps = {
       search: async (query, collections, rows) => {
         searches.push({ query, collections, rows })
         return (isRelaxedSearch(collections) ? relaxed : scoped).map(doc)
       },
       resolve: async (d, opts, variant) => {
-        resolves.push({ identifier: d.identifier as string, beatIndex: opts.beatIndex, variant })
+        resolves.push({ identifier: d.identifier as string, beatIndex: opts.beatIndex, seekSeed: opts.seekSeed, variant })
         if (failing.includes(d.identifier as string)) return null
         return okResult(d.identifier as string, variant)
       },
@@ -492,6 +517,55 @@ describe('ArchiveStillPool', () => {
     const { deps } = fakeDeps(['bad-a', 'bad-b'], [], ['bad-a', 'bad-b'])
     const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 2 }, deps)
     expect(await pool.acquireStill(0)).toBeNull()
+  })
+
+  describe('acquireSecondFrame (round 7 — reuse the beat reel, no new downloads)', () => {
+    it("grabs ANOTHER FRAME of the beat's own reel: same identifier, distinct variant + seek seed", async () => {
+      const { deps, resolves } = fakeDeps(['reel-a', 'reel-b'])
+      const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 2 }, deps)
+      await pool.acquireStill(0) // slot 0 → reel-a
+      const second = await pool.acquireSecondFrame(0, 1)
+      expect(second).not.toBeNull()
+      expect(resolves[1].identifier).toBe('reel-a') // reuses the SAME reel — no new download
+      expect(resolves[1].variant).toBe('beat0s1') // …as a distinct cache entry…
+      expect(resolves[1].seekSeed).toBeDefined() // …at a genuinely different timestamp
+      expect(resolves[1].seekSeed).not.toBe(0) // not the slot-0 seed (beatIndex)
+    })
+
+    it('does NOT consume pool inventory — the next beat still gets its own distinct reel', async () => {
+      const { deps } = fakeDeps(['reel-a', 'reel-b'])
+      const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 2 }, deps)
+      await pool.acquireStill(0)
+      await pool.acquireSecondFrame(0, 1)
+      const next = await pool.acquireStill(1)
+      expect(next?.visual.source).toContain('reel-b')
+    })
+
+    it('misses (null) when the beat has no slot-0 reel yet', async () => {
+      const { deps, resolves } = fakeDeps(['reel-a'])
+      const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 1 }, deps)
+      expect(await pool.acquireSecondFrame(3, 1)).toBeNull()
+      expect(resolves.length).toBe(0) // no resolve attempted at all
+    })
+
+    it('misses (null) for a single-image item — there is no other frame to grab', async () => {
+      const searches: unknown[] = []
+      const resolves: string[] = []
+      const deps: ArchivePoolDeps = {
+        search: async () => {
+          searches.push(1)
+          return [{ identifier: 'photo-1', mediatype: 'image' }]
+        },
+        resolve: async (d, _opts, variant) => {
+          resolves.push(`${d.identifier}${variant ?? ''}`)
+          return okResult(d.identifier as string, variant)
+        },
+      }
+      const pool = new ArchiveStillPool(['panic 1907'], { beatCount: 1 }, deps)
+      await pool.acquireStill(0)
+      expect(await pool.acquireSecondFrame(0, 1)).toBeNull()
+      expect(resolves).toEqual(['photo-1']) // only the slot-0 resolve happened
+    })
   })
 })
 
@@ -625,6 +699,31 @@ describe('walkTierLadder', () => {
     const tiers = { archive: boom, moodbank: fakeTier('mood', 5, []) }
     const slots = await walkTierLadder(baseInput(), ['archive', 'moodbank'], tiers, 2, (n) => `/d/${n}.jpg`)
     expect(slots.map((s) => s.tierName)).toEqual(['moodbank', 'moodbank'])
+  })
+
+  describe('stage watchdog (round 7 — deadline degrades, never hangs)', () => {
+    it('past the deadline, network tiers are skipped and only LOCAL tiers may fill the beat', async () => {
+      const archiveCalls: TierInput[] = []
+      const tiers = { archive: fakeTier('archive', 5, archiveCalls), moodbank: fakeTier('mood', 5, []) }
+      const pastDeadline = Date.now() - 1
+      const slots = await walkTierLadder(baseInput(), ['archive', 'moodbank'], tiers, 2, (n) => `/d/${n}.jpg`, pastDeadline)
+      expect(LOCAL_TIERS.has('moodbank')).toBe(true)
+      expect(archiveCalls.length).toBe(0) // no NEW network acquisition after the budget
+      expect(slots.map((s) => s.tierName)).toEqual(['moodbank', 'moodbank'])
+    })
+
+    it('with the deadline still ahead, behavior is unchanged', async () => {
+      const tiers = { archive: fakeTier('archive', 5, []), moodbank: fakeTier('mood', 5, []) }
+      const futureDeadline = Date.now() + 60_000
+      const slots = await walkTierLadder(baseInput(), ['archive', 'moodbank'], tiers, 2, (n) => `/d/${n}.jpg`, futureDeadline)
+      expect(slots.map((s) => s.tierName)).toEqual(['archive', 'archive'])
+    })
+
+    it('no deadline supplied = no watchdog (backwards compatible)', async () => {
+      const tiers = { archive: fakeTier('archive', 5, []) }
+      const slots = await walkTierLadder(baseInput(), ['archive'], tiers, 2, (n) => `/d/${n}.jpg`)
+      expect(slots.length).toBe(2)
+    })
   })
 })
 

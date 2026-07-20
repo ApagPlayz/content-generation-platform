@@ -6,11 +6,17 @@
 
 import { mkdir, writeFile } from 'fs/promises'
 import path from 'path'
+import { fetchBufferBudget, fetchJsonBudget } from './budget'
 import type { AssetLicense, VisualAsset } from '../compliance'
 import type { CaseBrief } from './types'
 
 export const MEDIA_DIR = path.join(process.cwd(), 'media')
 const UA = 'ContentEngine-F10/1.0 (local content tool)'
+// Round 7: whole-request budgets so a stalled Commons response can never hang
+// the visuals stage (same failure class as the archive.org footage hang).
+const SEARCH_TIMEOUT_MS = 15_000
+const DOWNLOAD_TIMEOUT_MS = 90_000
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 interface CommonsPage {
   title: string
@@ -35,14 +41,10 @@ async function commonsSearch(query: string, limit: number): Promise<CommonsPage[
     'https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search' +
     `&gsrnamespace=6&gsrlimit=${limit}&gsrsearch=${encodeURIComponent(query)}` +
     '&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=1080'
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' })
-    if (!res.ok) return []
-    const data = (await res.json()) as { query?: { pages?: Record<string, CommonsPage> } }
-    return Object.values(data.query?.pages ?? {})
-  } catch {
-    return []
-  }
+  const data = (await fetchJsonBudget(url, { timeoutMs: SEARCH_TIMEOUT_MS, headers: { 'User-Agent': UA } })) as
+    | { query?: { pages?: Record<string, CommonsPage> } }
+    | null
+  return Object.values(data?.query?.pages ?? {})
 }
 
 function toAsset(page: CommonsPage, depictsRealPerson: boolean): VisualAsset | null {
@@ -63,9 +65,12 @@ function toAsset(page: CommonsPage, depictsRealPerson: boolean): VisualAsset | n
 
 async function download(url: string, dest: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA } })
-    if (!res.ok) return false
-    const buf = Buffer.from(await res.arrayBuffer())
+    const buf = await fetchBufferBudget(url, {
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      headers: { 'User-Agent': UA },
+      maxBytes: MAX_IMAGE_BYTES,
+    })
+    if (!buf) return false
     await writeFile(dest, buf)
     return true
   } catch {

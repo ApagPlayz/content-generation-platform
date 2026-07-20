@@ -24,6 +24,10 @@ const config = {
   //    the demo pipeline keeps using the Wikimedia public-domain slideshow until
   //    the owner opts in. These document the new config keys downstream stages read.
   footageEnabled: true,
+  // Wall-clock budget for the whole footage stage (round 7): past it the
+  // remaining beats fill from local sources instead of new archive.org
+  // fetches — a degraded video that renders beats a hung run. 0 disables.
+  footageBudgetSec: 480,
   maxClipsPerBeat: 2,
   maxImagesPerBeat: 2,
   // AI script writer (Claude) — off until an API key + opt-in are set.

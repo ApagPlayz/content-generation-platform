@@ -117,6 +117,12 @@ export interface F10FactoryConfig {
 
   /** Master switch for the per-beat footage stage. Default false. */
   footageEnabled?: boolean
+  /** Wall-clock budget (seconds) for the WHOLE footage stage (round 7): past
+   *  it, remaining beats are filled from local sources only (mood bank +
+   *  Wikimedia backfill) instead of new archive.org fetches — a degraded
+   *  video that renders beats a hung run. Default 480 (8 min,
+   *  DEFAULT_FOOTAGE_BUDGET_SEC in footage.ts); 0 disables. */
+  footageBudgetSec?: number
   /** Per-beat cap on sourced video clips. Default small (e.g. 2). */
   maxClipsPerBeat?: number
   /** Per-beat cap on sourced still images. */

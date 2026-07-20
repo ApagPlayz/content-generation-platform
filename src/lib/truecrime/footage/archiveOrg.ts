@@ -41,12 +41,18 @@ async function stageResult(
   return { imagePath: dest, asset: { ...result.visual, beatIndex } }
 }
 
-export const archiveTier: Tier = async ({ query, archiveQuery, archiveQueries, beatIndex, config, dest, archivePool }) => {
+export const archiveTier: Tier = async ({ query, archiveQuery, archiveQueries, beatIndex, config, dest, archivePool, slot }) => {
   try {
-    // Preferred path: the per-video pool distributes distinct identifiers
-    // across beats (no reuse until the pool is exhausted; see ArchiveStillPool).
+    // Preferred path: the per-video pool. Slot 0 draws a DISTINCT reel; extra
+    // slots reuse the beat's already-fetched reel at a different timestamp
+    // (round 7 — halves the distinct-reel fetch load, still no identical
+    // frames). Both paths run the same junk/luma/staging pipeline.
     if (archivePool) {
-      return await stageResult(await archivePool.acquireStill(beatIndex), dest, beatIndex)
+      const result =
+        slot && slot > 0
+          ? await archivePool.acquireSecondFrame(beatIndex, slot)
+          : await archivePool.acquireStill(beatIndex)
+      return await stageResult(result, dest, beatIndex)
     }
 
     // Fallback (no pool supplied): walk the broad-to-narrow query candidates

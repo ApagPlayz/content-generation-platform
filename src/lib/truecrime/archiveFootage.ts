@@ -38,15 +38,20 @@ import { rename, stat, unlink, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import type { StockClip } from '@prisma/client'
 import type { AssetLicense, VisualAsset } from '../compliance'
+import { fetchBufferBudget, fetchJsonBudget } from './budget'
 import { ensureStockDir, findCachedClip, parseBeatsUsed, recordStockClip, stockClipPath } from './stockClipCache'
 
 const exec = promisify(execFile)
 const UA = 'ContentEngine-F10/1.0 (local content tool; archive.org footage)'
 const SOURCE = 'archive.org'
 
+// Round 7: every archive.org HTTP call runs under a WHOLE-REQUEST budget
+// (connect + headers + body — see ./budget). The old helper stopped covering
+// the request once headers arrived, so a stalled body read could hang the
+// pipeline forever (the round-6 stuck run).
 const SEARCH_TIMEOUT_MS = 15_000
 const METADATA_TIMEOUT_MS = 15_000
-const DOWNLOAD_TIMEOUT_MS = 30_000
+const DOWNLOAD_TIMEOUT_MS = 90_000 // whole image body, not just headers
 const POSTER_TIMEOUT_MS = 45_000
 const VALIDATE_TIMEOUT_MS = 20_000
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024 // 15MB — stills only, never a full video download
@@ -113,6 +118,10 @@ export interface ArchiveFootageOptions {
   depictsRealPerson?: boolean
   /** Cap on candidate clips searched/considered per call. Default MAX_SEARCH_RESULTS (5). */
   maxClips?: number
+  /** Overrides beatIndex as the poster-seek seed (round 7): a SECOND frame
+   *  grabbed from the same reel for the same beat must land on a different
+   *  timestamp, so the reuse path passes a distinct seed here. */
+  seekSeed?: number
 }
 
 export interface ArchiveFootageResult {
@@ -150,21 +159,9 @@ interface ArchiveMetadata {
   }
 }
 
-async function fetchWithTimeout(url: string, ms: number): Promise<Response | null> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), ms)
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: controller.signal, cache: 'no-store' })
-    return res
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 /** archive.org Advanced Search, scoped to movies/images (+ optional collection
- *  clause). Exported as the ArchivePoolDeps.search default and probe/test seam. */
+ *  clause). Whole-request budget + one retry; [] on any failure. Exported as
+ *  the ArchivePoolDeps.search default and probe/test seam. */
 export async function archiveSearch(query: string, collections: string[], maxResults: number): Promise<ArchiveDoc[]> {
   const qParts = [`(${query})`, 'mediatype:(movies OR image)']
   const collClause = collections.map((c) => c.trim()).filter(Boolean)
@@ -176,24 +173,32 @@ export async function archiveSearch(query: string, collections: string[], maxRes
     '&fl[]=identifier&fl[]=title&fl[]=mediatype&fl[]=licenseurl&fl[]=rights' +
     '&fl[]=possible-copyright-status&fl[]=collection' +
     `&sort[]=downloads+desc&rows=${maxResults}&page=1&output=json`
-  try {
-    const res = await fetchWithTimeout(url, SEARCH_TIMEOUT_MS)
-    if (!res || !res.ok) return []
-    const data = (await res.json()) as { response?: { docs?: ArchiveDoc[] } }
-    return data.response?.docs ?? []
-  } catch {
-    return []
-  }
+  const data = (await fetchJsonBudget(url, { timeoutMs: SEARCH_TIMEOUT_MS, headers: { 'User-Agent': UA } })) as
+    | { response?: { docs?: ArchiveDoc[] } }
+    | null
+  return data?.response?.docs ?? []
 }
 
+// Small metadata memo: variant frames and repeat candidates re-resolve the
+// same item within one process, so don't re-fetch its (sizeable) metadata.
+const metadataCache = new Map<string, ArchiveMetadata>()
+const METADATA_CACHE_MAX = 50
+
 async function fetchItemMetadata(identifier: string): Promise<ArchiveMetadata | null> {
-  try {
-    const res = await fetchWithTimeout(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, METADATA_TIMEOUT_MS)
-    if (!res || !res.ok) return null
-    return (await res.json()) as ArchiveMetadata
-  } catch {
-    return null
+  const cached = metadataCache.get(identifier)
+  if (cached) return cached
+  const data = (await fetchJsonBudget(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, {
+    timeoutMs: METADATA_TIMEOUT_MS,
+    headers: { 'User-Agent': UA },
+  })) as ArchiveMetadata | null
+  if (data) {
+    if (metadataCache.size >= METADATA_CACHE_MAX) {
+      const oldest = metadataCache.keys().next().value
+      if (oldest != null) metadataCache.delete(oldest)
+    }
+    metadataCache.set(identifier, data)
   }
+  return data
 }
 
 function extOf(name: string): string {
@@ -459,6 +464,42 @@ export async function stillLumaYAvg(filePath: string): Promise<number | null> {
   }
 }
 
+/** Minimum average edge density for a FALLBACK (mood-bank) still. Calibrated
+ *  on real staged frames (round 8): pure-fog frames measure 0–0.014, tropical
+ *  rain 0.066, a dark neon street 0.24, genuine archive stills 0.3–9.4 — so
+ *  0.05 rejects only near-featureless gray mush while every real scene, even
+ *  soft/dark ones, clears it. Deliberately NOT applied to the archive path:
+ *  legitimate soft-focus era photographs must never be rejected for softness. */
+export const MIN_STILL_EDGE_DENSITY = 0.05
+
+/** Pure accept/reject for a fallback still's measured edge density. `null`
+ *  (probe failed / ffmpeg absent) passes — fail-open like every other probe. */
+export function isDetailedEnoughStill(edgeAvg: number | null): boolean {
+  if (edgeAvg == null) return true
+  return Number.isFinite(edgeAvg) && edgeAvg >= MIN_STILL_EDGE_DENSITY
+}
+
+/** Measure a still's average EDGE density (edgedetect → signalstats YAVG,
+ *  0–255) with one cheap single-frame ffmpeg pass; null when unmeasurable.
+ *  A near-zero value means a featureless frame (blank fog/gray mush).
+ *  Exported for the mood-bank detail gate and tests. */
+export async function stillEdgeDensity(filePath: string): Promise<number | null> {
+  if (!(await ffmpegAvailable())) return null
+  try {
+    const { stdout } = await exec(
+      'ffmpeg',
+      ['-v', 'error', '-i', filePath, '-vf', 'edgedetect=low=0.1:high=0.3,signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-'],
+      { timeout: VALIDATE_TIMEOUT_MS }
+    )
+    const m = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(stdout)
+    if (!m) return null
+    const v = Number(m[1])
+    return Number.isFinite(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
 async function probeStillDimensions(filePath: string): Promise<{ width: number | null; height: number | null }> {
   try {
     const { stdout } = await exec(
@@ -566,12 +607,14 @@ async function extractPosterFromUrl(url: string, destPath: string, beatIndex = 0
 
 async function downloadImageFile(url: string, destPath: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(url, DOWNLOAD_TIMEOUT_MS)
-    if (!res || !res.ok) return false
-    const len = Number(res.headers.get('content-length') ?? '0')
-    if (len && len > MAX_IMAGE_BYTES) return false
-    const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.byteLength > MAX_IMAGE_BYTES) return false
+    // Whole-body budget + one retry: the old helper stopped covering the
+    // request after headers, so this arrayBuffer read could hang forever.
+    const buf = await fetchBufferBudget(url, {
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      headers: { 'User-Agent': UA },
+      maxBytes: MAX_IMAGE_BYTES,
+    })
+    if (!buf) return false
     // archive.org serves stills in formats headless Chromium can't decode
     // (progressive/CMYK JPEG, TIFF, JP2) — ffmpeg accepts them, so validation
     // passes but the Remotion render blanks out. Re-encode every still to a
@@ -674,7 +717,7 @@ export async function resolveDocStill(
   const posterOk =
     doc.mediatype === 'image'
       ? await downloadImageFile(url, destPath)
-      : await extractPosterFromUrl(url, destPath, opts.beatIndex ?? 0, identifier)
+      : await extractPosterFromUrl(url, destPath, opts.seekSeed ?? opts.beatIndex ?? 0, identifier)
   if (!posterOk) return null
 
   // 3. Junk-still gate — a corrupt/tiny/near-black still is a miss.
@@ -845,6 +888,9 @@ export class ArchiveStillPool {
   private docs: ArchiveDoc[] | null = null
   private readonly used = new Set<string>()
   private readonly dead = new Set<string>()
+  /** beatIndex → the identifier that served the beat's FIRST slot, so extra
+   *  slots can reuse the already-fetched reel (round 7 fetch-load reduction). */
+  private readonly beatReel = new Map<number, string>()
 
   constructor(
     private readonly queries: string[],
@@ -886,10 +932,43 @@ export class ArchiveStillPool {
         const result = await this.deps.resolve(doc, { beatIndex, depictsRealPerson: this.opts.depictsRealPerson })
         if (result) {
           this.used.add(id)
+          this.beatReel.set(beatIndex, id)
           return result
         }
         this.dead.add(id) // junk/unreachable item — stop retrying it for later beats
       }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Second (and later) slot of a beat: grab ANOTHER FRAME of the reel that
+   * already serves the beat's first slot instead of downloading a brand-new
+   * reel (round 7 — halves the distinct-reel fetch load per video). A
+   * distinct `seekSeed` + variant cache id guarantee a different timestamp
+   * and file, and the frame runs the full junk/luma pipeline like any other.
+   * Null when the beat has no reel yet, the item is a single image (no other
+   * frame exists), or the extra frame fails its gates — the beat then simply
+   * keeps fewer images with longer holds. Never downloads anything new.
+   */
+  async acquireSecondFrame(beatIndex: number, slot: number): Promise<ArchiveFootageResult | null> {
+    try {
+      const id = this.beatReel.get(beatIndex)
+      if (!id || !this.docs) return null
+      const doc = this.docs.find((d) => d.identifier === id)
+      if (!doc || doc.mediatype === 'image') return null
+      return await this.deps.resolve(
+        doc,
+        {
+          beatIndex,
+          depictsRealPerson: this.opts.depictsRealPerson,
+          // A seed far outside the beat range lands on a genuinely different
+          // poster-seek fraction than the slot-0 frame.
+          seekSeed: beatIndex * 7 + slot + 101,
+        },
+        `beat${beatIndex}s${slot}`
+      )
     } catch {
       return null
     }

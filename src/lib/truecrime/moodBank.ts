@@ -12,7 +12,7 @@ import { readFile, unlink } from 'fs/promises'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
-import { ensureLegibleStill } from './archiveFootage'
+import { ensureLegibleStill, isDetailedEnoughStill, stillEdgeDensity } from './archiveFootage'
 import type { AssetLicense, VisualAsset } from '../compliance'
 
 const exec = promisify(execFile)
@@ -118,8 +118,24 @@ const NEUTRAL_FALLBACK_CATEGORIES: MoodCategory[] = ['night-street', 'foggy-hous
  *  1882 oil-trust beat reads as a mistake (round-4 frame evidence). */
 export const ANACHRONISTIC_MOOD_CATEGORIES: MoodCategory[] = ['police-lights', 'night-street', 'highway-night']
 
-/** Stories set before this year exclude ANACHRONISTIC_MOOD_CATEGORIES. */
+/** Stories set before this year get the full vintage relevance treatment:
+ *  ANACHRONISTIC_MOOD_CATEGORIES excluded, climate/style-mismatched clips
+ *  excluded (see VINTAGE_MISMATCH_TOKENS), and mood clips allowed ONLY on a
+ *  direct cue match — never via a generic fallback (round 8). */
 export const VINTAGE_CUTOFF_YEAR = 1950
+
+/** Id/tag tokens that mark a clip as climate- or style-mismatched for a
+ *  vintage story even when its CATEGORY is cue-appropriate: tropical palm
+ *  rain behind a 1903 North Carolina beat reads as a mistake (round-8 frame
+ *  evidence) although the cue genuinely asked for rain. A future
+ *  period-appropriate rain clip (no such token) would still serve rain cues. */
+export const VINTAGE_MISMATCH_TOKENS = ['tropical', 'palm', 'jungle', 'neon', 'modern']
+
+/** True when a clip's id or tags carry a vintage-mismatch token. */
+function isVintageMismatch(e: MoodClipEntry): boolean {
+  const hay = [e.id, ...(e.tags ?? [])].join(' ').toLowerCase()
+  return VINTAGE_MISMATCH_TOKENS.some((t) => hay.includes(t))
+}
 
 function mapCategory(cueOrCategory: string): MoodCategory | null {
   const s = cueOrCategory.toLowerCase()
@@ -153,14 +169,23 @@ function toVisualAsset(entry: MoodClipEntry, beatIndex?: number): VisualAsset {
  * excluded category can never come back through a fallback; when exclusion
  * empties the bank the result is [] — the tier misses and the placeholder
  * floor (Wikimedia-era imagery) takes the beat instead of a modern clip.
+ *
+ * `vintage` (round 8) tightens this to RELEVANCE-ONLY for pre-1950 stories:
+ * clips carrying a VINTAGE_MISMATCH_TOKENS id/tag are dropped outright (a
+ * tropical-palm rain clip can never suit a 1903 beat, even when the cue asks
+ * for rain), and there are NO fallbacks — a clip is returned only on a direct
+ * cue match, otherwise [] so the era-appropriate Wikimedia floor takes the
+ * beat instead of generic atmosphere.
  */
 export function pickMoodCandidates(
   bank: MoodClipEntry[],
   cueOrCategory: string,
-  excludeCategories: MoodCategory[] = []
+  excludeCategories: MoodCategory[] = [],
+  vintage = false
 ): MoodClipEntry[] {
   const excluded = new Set(excludeCategories)
-  const eligible = bank.filter((e) => !excluded.has(e.category))
+  let eligible = bank.filter((e) => !excluded.has(e.category))
+  if (vintage) eligible = eligible.filter((e) => !isVintageMismatch(e))
   if (eligible.length === 0) return []
 
   const category = mapCategory(cueOrCategory)
@@ -170,6 +195,10 @@ export function pickMoodCandidates(
     category && !excluded.has(category)
       ? eligible.filter((e) => e.category === category)
       : eligible.filter((e) => e.category.toLowerCase().includes(needle) || (e.tags ?? []).some((t) => needle.includes(t.toLowerCase()) || t.toLowerCase().includes(needle)))
+
+  // Vintage stories take cue-matched clips ONLY — an off-topic mood clip
+  // reads worse than the Wikimedia placeholder's era imagery (round 8).
+  if (vintage) return matches
 
   // No thematic hit: fall back to the neutral categories (in preference
   // order), then to anything non-nature; the whole eligible bank is the true
@@ -219,10 +248,11 @@ export async function selectMoodClips(
   cueOrCategory: string,
   max = 2,
   beatIndex?: number,
-  excludeCategories: MoodCategory[] = []
+  excludeCategories: MoodCategory[] = [],
+  vintage = false
 ): Promise<MoodClipResult[]> {
   const bank = await loadMoodBank()
-  let matches = pickMoodCandidates(bank, cueOrCategory, excludeCategories)
+  let matches = pickMoodCandidates(bank, cueOrCategory, excludeCategories, vintage)
   if (matches.length === 0) return []
 
   // Deterministic tie-break: rotate the candidate list by beat index so
@@ -287,10 +317,11 @@ export async function extractMoodStill(
 ): Promise<string | null> {
   // Round-5: mood stills run the SAME luma gate as every other still that can
   // reach imagePaths (a near-black frame of a night clip rendered as a black
-  // beat). Each candidate seek is extracted, gated via ensureLegibleStill
-  // (hard-reject near-black, gamma-brighten dark-but-recoverable), and a
-  // rejected frame retries a different timestamp of the same clip before the
-  // clip is given up on.
+  // beat). Round-8 adds a DETAIL gate on this fallback path only: a
+  // near-featureless frame (blank fog, gray mush — edge density < 0.05, see
+  // MIN_STILL_EDGE_DENSITY) is rejected the same way. Each candidate seek is
+  // extracted, gated, and a rejected frame retries a different timestamp of
+  // the same clip before the clip is given up on.
   // 13-step window: (beatIndex*2 + slot) for 6 beats × 2 slots spans 0..11,
   // so every (beat, slot) pair lands on a distinct seek before wrapping; the
   // duration clamp below keeps even the longest seek inside short clips.
@@ -316,8 +347,10 @@ export async function extractMoodStill(
         { timeout: 30_000 }
       )
       if (!existsSync(outPath)) continue
-      if (await ensureLegibleStill(outPath)) return outPath
-      await unlink(outPath).catch(() => {}) // near-black frame → try another timestamp
+      if ((await ensureLegibleStill(outPath)) && isDetailedEnoughStill(await stillEdgeDensity(outPath))) {
+        return outPath
+      }
+      await unlink(outPath).catch(() => {}) // near-black or featureless frame → try another timestamp
     } catch {
       /* extraction failed at this seek — try the next one */
     }

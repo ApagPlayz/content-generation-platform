@@ -19,6 +19,7 @@ import {
   pickLeastUsedClip,
   pickMoodCandidates,
   VINTAGE_CUTOFF_YEAR,
+  VINTAGE_MISMATCH_TOKENS,
 } from './moodBank'
 import { MIN_STILL_LUMA, stillLumaYAvg } from './archiveFootage'
 import type { MoodClipEntry, MoodClipResult } from './moodBank'
@@ -84,6 +85,42 @@ describe('pickMoodCandidates', () => {
   it('returns [] for an empty bank', () => {
     expect(pickMoodCandidates([], 'anything')).toEqual([])
   })
+
+  describe('vintage relevance filter (round 8 — cue-matched only, no mismatched clips)', () => {
+    const VINTAGE = true
+
+    it('drops a climate-mismatched clip even when the cue genuinely asks for its category', () => {
+      // The 39s/45s regression: "rain on a window at night" (a 1903 North
+      // Carolina beat) cue-matched the TROPICAL palm-leaves rain clip. For
+      // vintage stories the mismatch tokens veto it → [] → Wikimedia floor.
+      expect(VINTAGE_MISMATCH_TOKENS).toContain('tropical')
+      const picks = pickMoodCandidates(BANK, 'rain on a window at night', ANACHRONISTIC_MOOD_CATEGORIES, VINTAGE)
+      expect(picks).toEqual([])
+    })
+
+    it('NEVER falls back for an unmatched cue — the era-appropriate Wikimedia floor wins', () => {
+      // The 51s/56s regression: "old documents on a desk" matched nothing and
+      // the neutral fallback served blank-fog frames. Vintage = no fallbacks.
+      const picks = pickMoodCandidates(BANK, 'old documents on a desk, warm light', ANACHRONISTIC_MOOD_CATEGORIES, VINTAGE)
+      expect(picks).toEqual([])
+    })
+
+    it('still serves a DIRECT cue match from a period-neutral clip', () => {
+      const picks = pickMoodCandidates(BANK, 'foggy abandoned exterior at dawn', ANACHRONISTIC_MOOD_CATEGORIES, VINTAGE)
+      expect(picks.map((e) => e.id)).toEqual(['foggy-house-search-02'])
+    })
+
+    it('a period-appropriate rain clip (no mismatch token) would still serve a rain cue', () => {
+      const bank = [...BANK, entry('rain-window-1930s', 'rain', ['rain', 'window', 'archival'])]
+      const picks = pickMoodCandidates(bank, 'rain on a window at night', ANACHRONISTIC_MOOD_CATEGORIES, VINTAGE)
+      expect(picks.map((e) => e.id)).toEqual(['rain-window-1930s'])
+    })
+
+    it('non-vintage behavior is unchanged: tropical rain still serves modern rain cues', () => {
+      const picks = pickMoodCandidates(BANK, 'rain on a window at night')
+      expect(picks.map((e) => e.id)).toEqual(['rain-tropical-01'])
+    })
+  })
 })
 
 describe('pickLeastUsedClip', () => {
@@ -120,29 +157,40 @@ describe('pickLeastUsedClip', () => {
 // every frame is near-black must never yield a still (this was the round-5
 // black-beat defect — beat-NN-1 stills bypassed all gates), while a normal
 // clip still produces one, brightened when needed.
-describe.skipIf(!hasFfmpeg())('extractMoodStill luma gate (ffmpeg)', () => {
-  async function makeClip(color: string): Promise<string> {
+describe.skipIf(!hasFfmpeg())('extractMoodStill luma + detail gates (ffmpeg)', () => {
+  async function makeClip(name: string, lavfiSrc: string): Promise<string> {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'mood-gate-'))
-    const clip = path.join(dir, `${color.replace(/[^a-z0-9]/gi, '')}.mp4`)
+    const clip = path.join(dir, `${name}.mp4`)
     execFileSync('ffmpeg', [
       '-y', '-v', 'error',
-      '-f', 'lavfi', '-i', `color=${color}:s=320x240:d=12`,
+      '-f', 'lavfi', '-i', lavfiSrc,
       '-pix_fmt', 'yuv420p', clip,
     ])
     return clip
   }
 
-  it('returns null for a near-black clip — no timestamp can pass the gate', async () => {
-    const clip = await makeClip('black')
+  it('returns null for a near-black clip — no timestamp can pass the luma gate', async () => {
+    const clip = await makeClip('black', 'color=black:s=320x240:d=12')
     const out = path.join(path.dirname(clip), 'still-black.jpg')
     expect(await extractMoodStill(clip, out, 3)).toBeNull()
     expect(existsSync(out)).toBe(false)
   }, 30_000)
 
-  it('returns a legible still for a normal clip (brightened if it was dark)', async () => {
-    // 0x404040 ≈ YAVG 64 — passes the gate untouched.
-    const clip = await makeClip('0x404040')
-    const out = path.join(path.dirname(clip), 'still-gray.jpg')
+  it('returns null for a bright but FEATURELESS clip (round-8 gray-mush regression)', async () => {
+    // 0x707070 ≈ YAVG 112 — the luma gate passes it, but edge density is 0,
+    // like the blank-fog frames that rendered as blurry gray clouds.
+    const clip = await makeClip('flatgray', 'color=0x707070:s=320x240:d=12')
+    const out = path.join(path.dirname(clip), 'still-flat.jpg')
+    expect(await extractMoodStill(clip, out, 3)).toBeNull()
+    expect(existsSync(out)).toBe(false)
+  }, 30_000)
+
+  it('returns a legible, detailed still for a normal structured clip', async () => {
+    // testsrc2: bright, edge-rich test pattern whose CENTER 9:16 crop keeps
+    // structure (plain testsrc's center crop is its flat gradient and is
+    // correctly rejected by the detail gate — measured 0.004).
+    const clip = await makeClip('testsrc2', 'testsrc2=size=320x240:duration=12:rate=25')
+    const out = path.join(path.dirname(clip), 'still-detail.jpg')
     const result = await extractMoodStill(clip, out, 3)
     expect(result).toBe(out)
     expect(existsSync(out)).toBe(true)
