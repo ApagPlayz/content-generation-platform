@@ -26,6 +26,7 @@ import {
   EMPTY_RENDER_ERROR,
   SILENT_VOICEOVER_REASON,
 } from '../pipeline/finalize'
+import { withTimeout } from '../truecrime/budget'
 import type { F11Context, F11FactoryConfig, F11Stage } from './types'
 
 /**
@@ -310,15 +311,24 @@ async function finalizeCost(videoId: string): Promise<void> {
   })
 }
 
+// Round 7: every stage attempt runs under a hard wall-clock ceiling. A stage
+// that overruns REJECTS, which flows into the retry/failure handling below and
+// ultimately marks the Job + AgentRun 'failed' — a run can never sit in
+// 'running' forever again (the round-6 stuck-run failure mode). Assemble gets
+// extra headroom for Remotion renders (incl. the one-time Chromium download).
+const DEFAULT_STAGE_TIMEOUT_MS = 15 * 60_000
+const STAGE_TIMEOUT_MS: Partial<Record<F11Stage, number>> = { assemble: 30 * 60_000 }
+
 async function stage(ctx: F11Context, name: F11Stage, fn: () => Promise<void>): Promise<void> {
   const job = await prisma.job.create({
     data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 0, startedAt: new Date() },
   })
+  const timeoutMs = STAGE_TIMEOUT_MS[name] ?? DEFAULT_STAGE_TIMEOUT_MS
   let lastErr: unknown
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt++) {
     await prisma.job.update({ where: { id: job.id }, data: { attempts: attempt, status: 'running' } })
     try {
-      await fn()
+      await withTimeout(fn(), timeoutMs, `stage "${name}" exceeded its ${Math.round(timeoutMs / 60_000)}min budget`)
       await prisma.job.update({
         where: { id: job.id },
         data: { status: 'completed', finishedAt: new Date() },

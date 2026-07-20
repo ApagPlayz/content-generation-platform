@@ -13,10 +13,16 @@
 
 import { promises as fs } from 'fs'
 import { existsSync } from 'fs'
+import { fetchBufferBudget, fetchJsonBudget } from './budget'
 import type { VisualAsset } from '../compliance'
 import { ensureStockDir, findCachedClip, recordStockClip, stockClipPath } from './stockClipCache'
 
 const UA = 'ContentEngine-F10/1.0 (local content tool)'
+// Round 7: whole-request budgets (connect + headers + body) so a stalled
+// provider response can never hang the footage stage.
+const SEARCH_TIMEOUT_MS = 15_000
+const DOWNLOAD_TIMEOUT_MS = 90_000
+const MAX_CLIP_BYTES = 100 * 1024 * 1024 // vertical stock clips run tens of MB
 
 export type StockSource = 'pexels' | 'pixabay'
 
@@ -72,9 +78,11 @@ async function searchPexels(query: string, perPage: number): Promise<StockCandid
     const url =
       'https://api.pexels.com/videos/search?' +
       `query=${encodeURIComponent(query)}&orientation=portrait&per_page=${perPage}`
-    const res = await fetch(url, { headers: { Authorization: key, 'User-Agent': UA } })
-    if (!res.ok) return []
-    const data = (await res.json()) as PexelsSearchResponse
+    const data = (await fetchJsonBudget(url, {
+      timeoutMs: SEARCH_TIMEOUT_MS,
+      headers: { Authorization: key, 'User-Agent': UA },
+    })) as PexelsSearchResponse | null
+    if (!data) return []
     const out: StockCandidate[] = []
     for (const v of data.videos ?? []) {
       const files = (v.video_files ?? []).filter((f) => f.link && f.width && f.height)
@@ -132,9 +140,11 @@ async function searchPixabay(query: string, perPage: number): Promise<StockCandi
     const url =
       'https://pixabay.com/api/videos/?' +
       `key=${key}&q=${encodeURIComponent(query)}&per_page=${Math.max(3, perPage)}`
-    const res = await fetch(url, { headers: { 'User-Agent': UA } })
-    if (!res.ok) return []
-    const data = (await res.json()) as PixabaySearchResponse
+    const data = (await fetchJsonBudget(url, {
+      timeoutMs: SEARCH_TIMEOUT_MS,
+      headers: { 'User-Agent': UA },
+    })) as PixabaySearchResponse | null
+    if (!data) return []
     const out: StockCandidate[] = []
     for (const hit of data.hits ?? []) {
       const files = [hit.videos?.large, hit.videos?.medium, hit.videos?.small, hit.videos?.tiny].filter(
@@ -165,9 +175,12 @@ async function searchPixabay(query: string, perPage: number): Promise<StockCandi
 
 async function download(url: string, dest: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA } })
-    if (!res.ok) return false
-    const buf = Buffer.from(await res.arrayBuffer())
+    const buf = await fetchBufferBudget(url, {
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      headers: { 'User-Agent': UA },
+      maxBytes: MAX_CLIP_BYTES,
+    })
+    if (!buf) return false
     await fs.writeFile(dest, buf)
     return true
   } catch {

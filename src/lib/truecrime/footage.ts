@@ -334,10 +334,12 @@ export async function resolveBeatFootage(
     ladder.includes('archive') && poolQueries.length
       ? new ArchiveStillPool(poolQueries, {
           collections: config.archiveCollections,
-          // The pool serves every image SLOT (beats × images per beat) and
-          // over-fetches 3× that internally, so a few dead items can't force
-          // a shortfall (round 6 — no repeats, ever).
-          beatCount: beats.length * maxPerBeat,
+          // The pool serves one DISTINCT reel per beat (slot 0) and
+          // over-fetches 3× that internally so dead items can't force a
+          // shortfall. Extra slots reuse the beat's own reel at a different
+          // timestamp (round 7 fetch-load reduction), so they need no pool
+          // inventory of their own.
+          beatCount: beats.length,
           maxClips: config.archiveMaxClips,
         })
       : undefined
@@ -348,6 +350,16 @@ export async function resolveBeatFootage(
 
   const dir = path.join(MEDIA_DIR, videoId)
   await mkdir(dir, { recursive: true })
+
+  // Stage WATCHDOG (round 7): the whole footage stage gets a hard wall-clock
+  // budget. Past the deadline, no NEW network acquisition starts — remaining
+  // beats fall to the local mood bank (and the visuals stage's Wikimedia
+  // backfill floor) so a slow archive.org degrades the video instead of
+  // hanging the run. Individual HTTP calls are budgeted too (see ./budget),
+  // so one in-flight call can only overshoot the deadline by its own timeout.
+  const budgetSec = config.footageBudgetSec ?? DEFAULT_FOOTAGE_BUDGET_SEC
+  const deadlineMs = budgetSec > 0 ? Date.now() + budgetSec * 1000 : undefined
+  let warnedBudget = false
 
   const visuals: VisualAsset[] = []
   const imagePaths: string[] = []
@@ -363,12 +375,21 @@ export async function resolveBeatFootage(
     const archiveQs = archiveQueryCandidates(query, brief)
     const realSubject = namesRealSubject(beat, brief)
 
+    if (deadlineMs && Date.now() > deadlineMs && !warnedBudget) {
+      warnedBudget = true
+      console.warn(
+        `[footage] stage budget exceeded (footageBudgetSec=${budgetSec}); ` +
+          `finishing remaining beats from local sources only (beat ${beatIndex} of ${beats.length}).`
+      )
+    }
+
     const slots = await walkTierLadder(
       { videoId, beat, beatIndex, query, archiveQuery: archiveQ, archiveQueries: archiveQs, brief, config, dir, realSubject, archivePool, moodUsage },
       ladder,
       TIERS,
       maxPerBeat,
-      (n) => path.join(dir, `beat-${String(beatIndex).padStart(2, '0')}-${n}.jpg`)
+      (n) => path.join(dir, `beat-${String(beatIndex).padStart(2, '0')}-${n}.jpg`),
+      deadlineMs
     )
 
     for (const { tierName, out } of slots) {
@@ -391,6 +412,15 @@ export async function resolveBeatFootage(
  *  a metered API for a near-duplicate. */
 export const MULTI_SLOT_TIERS: ReadonlySet<string> = new Set(['archive', 'moodbank'])
 
+/** Default wall-clock budget for the whole footage stage (round 7). 8 minutes
+ *  comfortably fits ~6 beats of budgeted archive fetches; past it the stage
+ *  degrades to local sources instead of hanging. Config: footageBudgetSec. */
+export const DEFAULT_FOOTAGE_BUDGET_SEC = 480
+
+/** Tiers that touch NO network — still allowed after the stage budget is
+ *  spent, so late beats keep getting local atmosphere instead of nothing. */
+export const LOCAL_TIERS: ReadonlySet<string> = new Set(['moodbank'])
+
 /** One filled slot of a beat: which tier won it and what it produced. */
 export interface BeatSlot {
   tierName: string
@@ -406,7 +436,9 @@ export interface BeatSlot {
  * are re-invoked while they keep producing and slots remain; other tiers get
  * one shot each. The ladder only BACKSTOPS empty beats — once any tier has
  * produced, lower tiers never top the beat up with filler (round 6: fewer
- * images with longer holds beat generic padding). A tier miss or throw simply
+ * images with longer holds beat generic padding). Past `deadlineMs` (the
+ * footage-stage watchdog, round 7) network tiers are skipped entirely and
+ * only LOCAL_TIERS may still fill the beat. A tier miss or throw simply
  * falls through — never breaks the ladder. Exported (with injectable `tiers`)
  * for tests.
  */
@@ -415,13 +447,17 @@ export async function walkTierLadder(
   ladder: string[],
   tiers: Record<string, Tier>,
   maxPerBeat: number,
-  makeDest: (slot: number) => string
+  makeDest: (slot: number) => string,
+  deadlineMs?: number
 ): Promise<BeatSlot[]> {
   const slots: BeatSlot[] = []
+  const overBudget = () => deadlineMs != null && Date.now() > deadlineMs
   for (const tierName of ladder) {
     if (slots.length >= maxPerBeat) break
     const tier = tiers[tierName]
     if (!tier) continue
+    // Stage budget spent → no NEW network acquisition; local tiers only.
+    if (overBudget() && !LOCAL_TIERS.has(tierName)) continue
 
     do {
       const dest = makeDest(slots.length)
@@ -433,7 +469,7 @@ export async function walkTierLadder(
       }
       if (!out || !out.imagePath) break // tier miss
       slots.push({ tierName, out })
-    } while (MULTI_SLOT_TIERS.has(tierName) && slots.length < maxPerBeat)
+    } while (MULTI_SLOT_TIERS.has(tierName) && slots.length < maxPerBeat && !(overBudget() && !LOCAL_TIERS.has(tierName)))
 
     // No low-tier TOP-UP (round 6): once any tier has produced for this beat,
     // extra slots are optional — a beat with one strong image held long reads

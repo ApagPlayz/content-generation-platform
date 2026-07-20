@@ -5,20 +5,19 @@
 // the source of truth the compliance gate relies on.
 
 import { countDistinctArchiveItems } from './archiveFootage'
+import { fetchJsonBudget } from './budget'
 import { archivePoolQueries } from './footage'
 import type { CaseSubject } from '../compliance'
 import type { CaseBrief, CuratedCase, F10FactoryConfig } from './types'
 
 const UA = 'ContentEngine-F10/1.0 (local content tool)'
+const WIKI_TIMEOUT_MS = 15_000
 
-async function safeJson(url: string): Promise<unknown | null> {
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' })
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  }
+/** Whole-request budget + one retry (round 7): the media-richness gate
+ *  multiplied discovery's Wikipedia/Wikidata calls, so an unbounded fetch
+ *  here could hang the run exactly like the archive.org one did. */
+function safeJson(url: string): Promise<unknown | null> {
+  return fetchJsonBudget(url, { timeoutMs: WIKI_TIMEOUT_MS, headers: { 'User-Agent': UA } })
 }
 
 interface WikiSummary {
