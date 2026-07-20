@@ -24,11 +24,35 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read
+      actions: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # If this mention is happening on an existing PR (not a plain issue), note where
+      # its branch is RIGHT NOW so we can tell afterward whether the agent actually
+      # pushed something — see "Re-check the PR" below for why that matters.
+      - name: Resolve PR context
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request_review_comment" ]; then
+            pr="${{ github.event.pull_request.number }}"
+          elif [ "${{ github.event_name }}" = "issue_comment" ] && [ -n "${{ github.event.issue.pull_request.url }}" ]; then
+            pr="${{ github.event.issue.number }}"
+          else
+            pr=""
+          fi
+          echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
+          if [ -n "$pr" ]; then
+            before=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+            echo "before_sha=$before" >> "$GITHUB_OUTPUT"
+            echo "Mention is on PR #$pr, currently at $before"
+          else
+            echo "Mention is not on an existing PR — nothing to re-check afterward."
+          fi
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -39,3 +63,28 @@ jobs:
             --max-turns 40
             --allowedTools "Bash,BashOutput,KillShell,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebSearch,WebFetch"
             --append-system-prompt "The person you are replying to is NON-TECHNICAL and is reading on a phone. Answer in plain English, short paragraphs, no jargon. If you changed code, push a claude/ branch and open a PR — never push to main. Read LEARNINGS.md before you start and obey it. If the owner asks you to change what an issue should cover, EDIT THE ISSUE BODY to match — do not just reply in a comment. The Builder plans from the body, so scope changes that live only in a comment can be missed."
+
+      # This agent's push uses the default GITHUB_TOKEN identity, which GitHub's own
+      # recursion-prevention rule silently excludes from ever triggering
+      # `pull_request: synchronize` — so the Auditor, Demo, and plain-CI tests would
+      # otherwise never re-run after a follow-up fix lands on an existing PR, leaving
+      # a stale verdict on screen forever even though the code actually changed.
+      # workflow_dispatch is explicitly exempt from that rule, so trigger it by hand,
+      # and only when something on the PR's branch actually moved.
+      - name: Re-check the PR if this mention pushed a new commit to it
+        if: steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr="${{ steps.pr.outputs.pr_number }}"
+          before="${{ steps.pr.outputs.before_sha }}"
+          after_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+          after_ref=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+          if [ "$after_sha" = "$before" ]; then
+            echo "No new commit on PR #$pr — nothing to re-check."
+            exit 0
+          fi
+          echo "PR #$pr moved $before -> $after_sha — re-triggering the review pipeline."
+          gh workflow run claude-audit.yml --ref main -f pr_number="$pr" || echo "::warning::Couldn't queue a re-audit."
+          gh workflow run claude-demo.yml --ref main -f pr_number="$pr" || echo "::warning::Couldn't queue a re-demo."
+          gh workflow run repo-tests.yml --ref "$after_ref" || echo "::warning::Couldn't queue a re-test."
