@@ -12,9 +12,11 @@ import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from '../retry'
 import {
   isEmptyRender,
   isSilentVoiceover,
+  isTruncatedRender,
   resolveFinalStatus,
   EMPTY_RENDER_ERROR,
   SILENT_VOICEOVER_REASON,
+  TRUNCATED_RENDER_REASON,
 } from '../pipeline/finalize'
 import { withTimeout } from './budget'
 import type { F10Context, F10FactoryConfig, F10Stage } from './types'
@@ -265,10 +267,31 @@ export async function executeTrueCrimeRun(
       })
     }
 
+    // A too-short render (some stills failed → the `-shortest` mux clipped the
+    // voice) is a soft failure like a silent voiceover: keep it, hold for review.
+    const truncatedRender = isTruncatedRender({
+      measuredSec: ctx.render?.measuredDurationSec,
+      intendedSec: ctx.tts?.durationSec,
+    })
+    if (truncatedRender) {
+      await prisma.job.create({
+        data: {
+          videoId: ctx.videoId,
+          stage: 'assemble',
+          status: 'failed',
+          attempts: 1,
+          error: TRUNCATED_RENDER_REASON,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+        },
+      })
+    }
+
     const finalStatus = resolveFinalStatus({
       complianceDecision: ctx.complianceDecision,
       autonomy: agent.autonomy,
       silentVoiceover,
+      truncatedRender,
     })
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
 

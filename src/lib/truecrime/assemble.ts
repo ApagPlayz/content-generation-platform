@@ -95,6 +95,24 @@ async function renderVideoClip(src: string, inSec: number, dur: number, out: str
   }
 }
 
+/** Measure a finished file's real duration (seconds) via ffprobe. Returns null
+ *  when ffprobe is missing or the probe fails, so callers can tell "couldn't
+ *  measure" apart from "measured too short" and never false-alarm a ship. */
+async function ffprobeDurationSec(file: string): Promise<number | null> {
+  try {
+    const { stdout } = await exec(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', file],
+      { timeout: 30_000 }
+    )
+    const sec = parseFloat(stdout.trim())
+    return Number.isFinite(sec) && sec > 0 ? sec : null
+  } catch {
+    return null
+  }
+}
+
 /** Solid-colour fallback clip when no images were sourced. */
 async function renderColorClip(dur: number, out: string): Promise<boolean> {
   try {
@@ -216,13 +234,36 @@ export async function assembleVideo(
     if (clipPaths.length !== timeline.length) clipPaths.length = 0
   }
   // Even-split still slideshow — the graceful fallback (also used if the
-  // timeline produced zero usable segments).
+  // timeline produced zero usable segments). Like the timeline path above, this
+  // must always cover the FULL narration: a partial track (some still failed to
+  // render) sums to LESS than the audio, and the final `-shortest` mux would
+  // then cut the voice off mid-story (issue #94). So if any still fails, we
+  // re-render the survivors at a redistributed duration that still spans the
+  // whole narration, rather than shipping a short track.
   if (clipPaths.length === 0 && imagePaths.length > 0) {
     const per = audioDurationSec / imagePaths.length
+    const firstPass: string[] = []
+    const survivors: string[] = [] // SOURCE images whose first render succeeded
     for (let i = 0; i < imagePaths.length; i++) {
       const clip = path.join(dir, `clip-${String(i).padStart(2, '0')}.mp4`)
-      if (await renderImageClip(imagePaths[i], per, clip)) clipPaths.push(clip)
+      if (await renderImageClip(imagePaths[i], per, clip)) {
+        firstPass.push(clip)
+        survivors.push(imagePaths[i])
+      }
     }
+    if (survivors.length === imagePaths.length) {
+      // Every still rendered — the first-pass clips already cover the full audio.
+      clipPaths.push(...firstPass)
+    } else if (survivors.length > 0) {
+      // Partial: re-render only the survivors, each stretched so that
+      // survivorCount × per2 === audioDurationSec (full narration coverage).
+      const per2 = audioDurationSec / survivors.length
+      for (let i = 0; i < survivors.length; i++) {
+        const clip = path.join(dir, `restretch-${String(i).padStart(2, '0')}.mp4`)
+        if (await renderImageClip(survivors[i], per2, clip)) clipPaths.push(clip)
+      }
+    }
+    // survivors.length === 0 → clipPaths stays empty → colour fallback below.
   }
   if (clipPaths.length === 0) {
     const clip = path.join(dir, 'clip-bg.mp4')
@@ -293,5 +334,15 @@ export async function assembleVideo(
   if (!existsSync(outputPath)) {
     return { outputPath: null, durationSec: audioDurationSec, rendered: false }
   }
-  return { outputPath, durationSec: audioDurationSec, rendered: true }
+  // Probe the ACTUAL muxed duration so the finalize gate can catch a render the
+  // `-shortest` mux clipped short of the narration. `durationSec` stays the
+  // intended length (it's persisted as the video's duration); the measured
+  // value is a separate belt-and-braces signal.
+  const measured = await ffprobeDurationSec(outputPath)
+  return {
+    outputPath,
+    durationSec: audioDurationSec,
+    rendered: true,
+    ...(measured != null ? { measuredDurationSec: measured } : {}),
+  }
 }

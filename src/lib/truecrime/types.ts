@@ -250,6 +250,11 @@ export interface RenderResult {
   outputPath: string | null
   durationSec: number
   rendered: boolean
+  /** Actual duration (seconds) of the finished file, measured via ffprobe.
+   *  `durationSec` above is the INTENDED narration length; this is what the mux
+   *  really produced, so the finalize gate can catch a `-shortest`-truncated
+   *  render. Undefined when ffprobe is missing or the probe failed. */
+  measuredDurationSec?: number
   /** When ffmpeg is unavailable we emit a timeline plan instead of a video. */
   planPath?: string
 }

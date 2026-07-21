@@ -8,9 +8,11 @@ import { describe, expect, it } from 'vitest'
 import {
   isEmptyRender,
   isSilentVoiceover,
+  isTruncatedRender,
   resolveFinalStatus,
   EMPTY_RENDER_ERROR,
   SILENT_VOICEOVER_REASON,
+  TRUNCATED_RENDER_REASON,
 } from './finalize'
 
 describe('isEmptyRender', () => {
@@ -46,6 +48,36 @@ describe('isSilentVoiceover', () => {
   })
 })
 
+describe('isTruncatedRender', () => {
+  it('flags a render well shorter than the narration', () => {
+    expect(isTruncatedRender({ measuredSec: 40, intendedSec: 75 })).toBe(true)
+  })
+
+  it('passes a full-length render (with rounding slack)', () => {
+    expect(isTruncatedRender({ measuredSec: 75, intendedSec: 75 })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: 74.2, intendedSec: 75 })).toBe(false) // within 1.5s tolerance
+    expect(isTruncatedRender({ measuredSec: 80, intendedSec: 75 })).toBe(false) // longer is fine
+  })
+
+  it('flags just past the tolerance boundary', () => {
+    expect(isTruncatedRender({ measuredSec: 75 - 1.6, intendedSec: 75 })).toBe(true)
+  })
+
+  it('never flags when a value is unknown/zero (unmeasurable → ship)', () => {
+    expect(isTruncatedRender({ measuredSec: null, intendedSec: 75 })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: undefined, intendedSec: 75 })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: 0, intendedSec: 75 })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: Number.NaN, intendedSec: 75 })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: 40, intendedSec: null })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: 40, intendedSec: 0 })).toBe(false)
+  })
+
+  it('honours a custom tolerance', () => {
+    expect(isTruncatedRender({ measuredSec: 70, intendedSec: 75, toleranceSec: 10 })).toBe(false)
+    expect(isTruncatedRender({ measuredSec: 70, intendedSec: 75, toleranceSec: 2 })).toBe(true)
+  })
+})
+
 describe('resolveFinalStatus', () => {
   it('publishes (approved) a clean auto run with real audio', () => {
     expect(
@@ -70,11 +102,32 @@ describe('resolveFinalStatus', () => {
       resolveFinalStatus({ complianceDecision: 'pass', autonomy: 'auto', silentVoiceover: true }),
     ).toBe('review')
   })
+
+  it('forces review — never auto-publish — when the render was truncated', () => {
+    expect(
+      resolveFinalStatus({
+        complianceDecision: 'pass',
+        autonomy: 'auto',
+        silentVoiceover: false,
+        truncatedRender: true,
+      }),
+    ).toBe('review')
+  })
+
+  it('still approves a clean auto run when truncatedRender is omitted', () => {
+    expect(
+      resolveFinalStatus({ complianceDecision: 'pass', autonomy: 'auto', silentVoiceover: false }),
+    ).toBe('approved')
+  })
 })
 
 describe('owner-facing reason strings', () => {
   it('explain both failure modes in plain English', () => {
     expect(EMPTY_RENDER_ERROR).toMatch(/no video file/i)
     expect(SILENT_VOICEOVER_REASON).toMatch(/no voiceover/i)
+  })
+
+  it('explains a truncated render in plain English', () => {
+    expect(TRUNCATED_RENDER_REASON).toMatch(/shorter than the narration/i)
   })
 })
