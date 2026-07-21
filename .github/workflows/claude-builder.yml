@@ -58,6 +58,9 @@ jobs:
         id: config
         run: |
           cap=$(jq -r '.prCap // 3' .github/loop-config.json 2>/dev/null || echo 3)
+          if [ "$cap" = "unlimited" ] || [ "$cap" = "null" ] || [ -z "$cap" ]; then
+            cap=999999
+          fi
           autonomous=$(jq -r '.autonomousBuildEnabled // false' .github/loop-config.json 2>/dev/null || echo false)
           [ "$autonomous" = "true" ] || autonomous=false
           echo "Review-queue cap: $cap | Autonomous build: $autonomous"
