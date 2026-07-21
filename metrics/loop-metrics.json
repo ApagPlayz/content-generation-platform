@@ -110,5 +110,19 @@
     "proposals_filed": 30,
     "proposals_approved": 0,
     "proposal_approval_rate_pct": 0
+  },
+  {
+    "date": "2026-07-21",
+    "prs_opened": 29,
+    "prs_merged": 12,
+    "prs_rejected": 1,
+    "prs_open_now": 16,
+    "merge_rate_pct": 92,
+    "median_pr_size_lines": 328,
+    "median_days_to_merge": 0,
+    "prs_needing_changes": 1,
+    "proposals_filed": 31,
+    "proposals_approved": 0,
+    "proposal_approval_rate_pct": 0
   }
 ]
