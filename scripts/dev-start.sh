@@ -11,6 +11,26 @@ KOKORO_HEALTH="http://localhost:8880/health"
 
 echo "▶ Content Engine — starting on ${URL}"
 
+# --- Auto-sync from GitHub --------------------------------------------------
+# The autonomous improvement loop (GitHub Actions) merges fixes to `main` all
+# day, but it can only ever push to GitHub — it has no access to this laptop.
+# Without this, the app silently runs on whatever code happened to be checked
+# out days ago. Only pulls when it's safe to: on `main`, tree clean, fast-
+# forward only. Never blocks the launch — a failed/skipped pull just means
+# you're running the code you already had.
+if [ "$(git branch --show-current 2>/dev/null)" = "main" ]; then
+  if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "▶ Syncing latest code from GitHub…"
+    if git pull --ff-only origin main >/dev/null 2>&1; then
+      echo "✓ Up to date with main."
+    else
+      echo "  ⚠ Couldn't fast-forward from GitHub (offline, or local commits ahead) — using local code."
+    fi
+  else
+    echo "  ⚠ Uncommitted local changes — skipping auto-sync so nothing gets overwritten."
+  fi
+fi
+
 # --- Free voice engine (Kokoro, runs in Docker) ----------------------------
 # The narration voice runs as a Docker container (kokoro-fastapi on :8880). We
 # make sure Docker Desktop + that container are up so the launcher brings up
