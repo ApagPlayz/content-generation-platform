@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-21. Do not edit by hand.*
+*Auto-generated 2026-07-22. Do not edit by hand.*
 
 **Healthy.** Most of what the agents build is good enough to keep.
 
@@ -11,14 +11,14 @@
 | Pull requests merged | 12 |
 | Pull requests rejected | 1 |
 | **Merge rate** | **92%** |
-| Waiting on you right now | 16 |
+| Waiting on you right now | 17 |
 
 ## Is it outrunning you?
 
 | | |
 |---|---|
 | Typical days to merge | 0 |
-| Typical PR size (lines) | 328 |
+| Typical PR size (lines) | 316 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
@@ -27,7 +27,7 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Proposals filed | 31 |
+| Proposals filed | 32 |
 | Proposals you approved | 0 |
 | **Approval rate** | **0%** |
 
