@@ -34,6 +34,30 @@ export function isSilentVoiceover(provider: string | null | undefined): boolean 
 }
 
 /**
+ * True when the finished video is meaningfully SHORTER than the narration it
+ * should carry — e.g. some slideshow stills failed to render and the final
+ * `-shortest` mux clipped the voice off mid-story (issue #94). SOFT failure:
+ * keep the video but force review, never auto-publish a cut-off clip.
+ *
+ * `measuredSec` is the ffprobe-measured output duration; `intendedSec` the
+ * narration (audio) length. When the measurement is unknown (null/NaN/<=0 —
+ * e.g. ffprobe unavailable) we return false, so a build that can't measure keeps
+ * today's behaviour instead of false-flagging every render. `toleranceSec`
+ * absorbs normal encoder/keyframe rounding so a full-length render isn't held.
+ */
+export function isTruncatedRender(input: {
+  measuredSec: number | null | undefined
+  intendedSec: number | null | undefined
+  toleranceSec?: number
+}): boolean {
+  const { measuredSec, intendedSec } = input
+  const tol = input.toleranceSec ?? 1.5
+  if (measuredSec == null || !Number.isFinite(measuredSec) || measuredSec <= 0) return false
+  if (intendedSec == null || !Number.isFinite(intendedSec) || intendedSec <= 0) return false
+  return measuredSec < intendedSec - tol
+}
+
+/**
  * Decide a video's final status. A silent voiceover forces review (and so
  * blocks auto-publish, since only 'approved' publishes). Compliance's
  * route_to_review already did the same; this just adds the audio check.
@@ -42,9 +66,11 @@ export function resolveFinalStatus(input: {
   complianceDecision?: string
   autonomy: string
   silentVoiceover: boolean
+  truncatedRender?: boolean
 }): 'review' | 'approved' {
   if (input.complianceDecision === 'route_to_review') return 'review'
   if (input.silentVoiceover) return 'review'
+  if (input.truncatedRender) return 'review'
   return input.autonomy === 'auto' ? 'approved' : 'review'
 }
 
@@ -55,3 +81,7 @@ export const EMPTY_RENDER_ERROR =
 /** Plain-English reason shown to the owner when the voiceover was silent. */
 export const SILENT_VOICEOVER_REASON =
   'No voiceover was produced (all voice providers failed) — held for review instead of publishing a silent video.'
+
+/** Plain-English reason shown to the owner when the video came out too short. */
+export const TRUNCATED_RENDER_REASON =
+  'The finished video was shorter than the narration (some images failed to render), so the voiceover would be cut off — held for review instead of publishing a clipped video.'
