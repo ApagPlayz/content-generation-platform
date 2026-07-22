@@ -89,7 +89,16 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
       const modelOverride =
         (ctx.factoryConfig.scriptModel as string | undefined) ??
         (ctx.factoryConfig.modelTier as string | undefined)
-      ctx.script = await runScript(ctx.videoId, ctx.playbook, ctx.source!, modelOverride)
+      // agent.memory holds the "what's winning" digest built after the last
+      // metrics refresh (winnerDigest.ts) — feed it in so this run biases toward
+      // proven topics/hooks instead of generating blind.
+      ctx.script = await runScript(
+        ctx.videoId,
+        ctx.playbook,
+        ctx.source!,
+        modelOverride,
+        agent.memory
+      )
       await prisma.video.update({
         where: { id: ctx.videoId },
         data: {

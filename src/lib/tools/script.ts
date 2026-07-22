@@ -14,7 +14,8 @@ export async function runScript(
   videoId: string,
   playbook: string,
   source: SourceResult,
-  modelOverride?: string
+  modelOverride?: string,
+  memory?: string | null
 ): Promise<ScriptResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return templateScript(source)
@@ -40,7 +41,15 @@ export async function runScript(
       messages: [
         {
           role: 'user',
-          content: `Strategy: ${source.strategy}\nTrigger: ${source.triggerReason}\nDetails: ${JSON.stringify(source.sourceData)}`,
+          // The winners digest (Agent.memory) is per-run and changes as
+          // analytics update, so it goes in the user message — NOT the cached
+          // system prefix — and only when present, keeping the offline/no-digest
+          // request byte-identical to before.
+          content:
+            `Strategy: ${source.strategy}\nTrigger: ${source.triggerReason}\nDetails: ${JSON.stringify(source.sourceData)}` +
+            (memory?.trim()
+              ? `\n\nWhat's worked on this channel so far — bias your angle, topic and hook toward these proven winners (don't copy them verbatim):\n${memory.trim()}`
+              : ''),
         },
       ],
     }),

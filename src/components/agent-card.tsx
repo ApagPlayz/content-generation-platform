@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Zap, Eye, Play, Trash2, Power } from 'lucide-react'
+import { Zap, Eye, Play, Trash2, Power, Sparkles, BrainCircuit } from 'lucide-react'
 
 const TYPE_META: Record<string, { color: string }> = {
   F1: { color: 'bg-orange-100 text-orange-700' },
@@ -28,6 +28,7 @@ interface AgentCardProps {
   enabled: boolean
   budget: number | null
   playbook: string
+  memory: string | null
   runCount: number
 }
 
@@ -40,6 +41,7 @@ export function AgentCard({
   enabled: initialEnabled,
   budget,
   playbook,
+  memory,
   runCount,
 }: AgentCardProps) {
   const router = useRouter()
@@ -128,6 +130,30 @@ export function AgentCard({
       <p className="text-xs text-gray-500 line-clamp-2 mb-4 leading-relaxed">
         {playbook}
       </p>
+
+      {/* What's winning — the analytics feedback loop (Agent.memory). Shows the
+          owner WHY the agent will make what it makes next. Empty until videos
+          publish and metrics refresh. */}
+      {memory?.trim() ? (
+        <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2 mb-4">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            <span className="text-xs font-medium text-amber-800">What&apos;s winning</span>
+          </div>
+          <p className="text-xs text-amber-900/80 leading-relaxed whitespace-pre-line line-clamp-4">
+            {memory.trim()}
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-md bg-gray-50 border border-gray-100 px-3 py-2 mb-4">
+          <div className="flex items-center gap-1.5">
+            <BrainCircuit className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+            <span className="text-xs text-gray-400 leading-relaxed">
+              No winners learned yet — fills in once videos publish and metrics refresh.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="flex items-center gap-3 text-xs text-gray-400 mb-4">
