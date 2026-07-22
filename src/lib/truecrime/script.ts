@@ -174,12 +174,6 @@ export async function generateScript(
               'contested claim, and complianceFlag = factual | attributed | opinion-clear.\n' +
               '- Never name or depict minors. No gore; focus on investigation/timeline/mystery. ' +
               'Build tension from documented unresolved facts, not speculation.\n\n' +
-              (editorialLayer
-                ? `EDITORIAL FRAMING: present this as a "${humanizeAngle(style.editorialAngle)}" — ` +
-                  'original analytical commentary on the documented record, not a bare recap. The ' +
-                  'framing must ADD analysis; it must never introduce a new accusation and every ' +
-                  'factual claim stays attributed and hedged.\n\n'
-                : '') +
               `BEAT TEMPLATE (return EXACTLY ${specs.length} beats, in this order):\n${beatGuide}\n\n` +
               'Respond with ONLY JSON: {"hook":{"type","verbal","onscreenText","visualCue",' +
               '"opensLoop","payoffRef"},"beats":[{"name","narration","linkWord","visualCue",' +
@@ -187,6 +181,22 @@ export async function generateScript(
               '"description","hashtags"(5-8, no #)}. The first beat\'s narration is the hook verbal line.',
             cache_control: { type: 'ephemeral' },
           },
+          // The editorial framing rotates every video (divergent style), so it
+          // lives in its own block AFTER the cache breakpoint above — keeping it
+          // inside the cached block would change the cached prefix on every run
+          // and the prompt-cache would never be read (see issue #90).
+          ...(editorialLayer
+            ? [
+                {
+                  type: 'text',
+                  text:
+                    `EDITORIAL FRAMING: present this as a "${humanizeAngle(style.editorialAngle)}" — ` +
+                    'original analytical commentary on the documented record, not a bare recap. The ' +
+                    'framing must ADD analysis; it must never introduce a new accusation and every ' +
+                    'factual claim stays attributed and hedged.',
+                },
+              ]
+            : []),
         ],
         messages: [
           {
