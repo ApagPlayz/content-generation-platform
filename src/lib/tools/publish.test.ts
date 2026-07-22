@@ -1,10 +1,55 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Publish-path safety tests below need the DB + platform SDKs mocked. The pure
+// arithmetic tests further down don't touch these, so the mocks are inert there.
+const { insertMock } = vi.hoisted(() => ({ insertMock: vi.fn() }))
+
+vi.mock('../prisma', () => ({
+  prisma: {
+    video: { findUniqueOrThrow: vi.fn(), update: vi.fn() },
+    post: { findUnique: vi.fn(), upsert: vi.fn(), update: vi.fn(), count: vi.fn() },
+    setting: { findUnique: vi.fn() },
+    complianceReport: { findFirst: vi.fn() },
+    costLedger: { create: vi.fn() },
+  },
+}))
+vi.mock('../youtube', () => ({
+  authedClient: vi.fn().mockResolvedValue({}),
+  connection: vi.fn(),
+  isAuthError: vi.fn(() => false),
+  markNeedsReconnect: vi.fn(),
+  PLATFORM: 'youtube',
+  YT_RECONNECT_MESSAGE: 'reconnect',
+}))
+vi.mock('../tiktok', () => ({
+  connection: vi.fn(),
+  directPost: vi.fn(),
+  PLATFORM: 'tiktok',
+  tiktokPermalink: vi.fn(() => 'https://www.tiktok.com/@x/video/1'),
+}))
+vi.mock('../settings', () => ({
+  autoPublishEnabled: vi.fn(),
+  tiktokAutoPublishEnabled: vi.fn(),
+}))
+vi.mock('fs', () => ({
+  existsSync: vi.fn(() => true),
+  createReadStream: vi.fn(() => 'STREAM'),
+}))
+vi.mock('googleapis', () => ({
+  google: { youtube: vi.fn(() => ({ videos: { insert: insertMock } })) },
+}))
+
+import { prisma } from '../prisma'
+import { connection as ytConnection } from '../youtube'
+import { directPost } from '../tiktok'
 import {
   AUTO_PUBLISH_DISABLED,
   AUTO_PUBLISH_REVIEW_GATED,
   isAlreadyPublished,
   isAutoPublishFailure,
   maybeAutoPublish,
+  publishToTikTok,
+  publishToYouTube,
   remainingQuota,
   startOfDayUTC,
 } from './publish'
@@ -40,6 +85,139 @@ describe('isAutoPublishFailure', () => {
     // sync the classifier would start flagging opt-out states as failures.
     expect(AUTO_PUBLISH_REVIEW_GATED).toBe('agent is review-gated')
     expect(AUTO_PUBLISH_DISABLED).toBe('auto-publish disabled in Settings')
+  })
+})
+
+// ── Publish-path safety gates (pre-launch hardening) ──
+//
+// The publish tools are the last line before a video goes public. These lock two
+// invariants: (1) a video that isn't 'approved' — above all a compliance-
+// 'rejected' one — can NEVER be uploaded, on either platform; (2) YouTube's
+// synthetic-media disclosure flag is driven by the compliance gate's plan.
+
+const APPROVED_VIDEO = {
+  id: 'v1',
+  status: 'approved',
+  localPath: '/tmp/v1.mp4',
+  title: 'Case X',
+  description: 'desc',
+  hashtags: null,
+  factory: { type: 'F10' },
+}
+
+/** Wire up the happy-path mocks for a YouTube upload of `video`, with the given
+ *  compliance report (or null for "no report"). */
+function primeYouTube(video: Record<string, unknown>, reportJson: string | null) {
+  vi.mocked(prisma.video.findUniqueOrThrow).mockResolvedValue(video as never)
+  vi.mocked(prisma.post.findUnique).mockResolvedValue(null as never)
+  vi.mocked(ytConnection).mockResolvedValue({} as never)
+  vi.mocked(prisma.setting.findUnique).mockResolvedValue(null as never) // cap + privacy fall back
+  vi.mocked(prisma.post.count).mockResolvedValue(0 as never) // full quota headroom
+  vi.mocked(prisma.complianceReport.findFirst).mockResolvedValue(
+    (reportJson === null ? null : { report: reportJson }) as never
+  )
+  vi.mocked(prisma.post.upsert).mockResolvedValue({ id: 'post1' } as never)
+  vi.mocked(prisma.post.update).mockResolvedValue({ id: 'post1' } as never)
+  vi.mocked(prisma.video.update).mockResolvedValue({} as never)
+  vi.mocked(prisma.costLedger.create).mockResolvedValue({} as never)
+  insertMock.mockResolvedValue({ data: { id: 'ytABC' } })
+}
+
+function insertedStatus(): Record<string, unknown> {
+  const call = insertMock.mock.calls[0][0] as { requestBody: { status: Record<string, unknown> } }
+  return call.requestBody.status
+}
+
+describe('publish status gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('refuses to publish a compliance-rejected video to YouTube (never reaches the upload)', async () => {
+    vi.mocked(prisma.video.findUniqueOrThrow).mockResolvedValue({
+      ...APPROVED_VIDEO,
+      status: 'rejected',
+    } as never)
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(null as never)
+
+    await expect(publishToYouTube('v1')).rejects.toThrow(/only approved videos can be published/)
+    expect(insertMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['rejected', 'failed', 'draft', 'queued', 'review'])(
+    'refuses to publish a "%s" video to YouTube',
+    async (status) => {
+      vi.mocked(prisma.video.findUniqueOrThrow).mockResolvedValue({
+        ...APPROVED_VIDEO,
+        status,
+      } as never)
+      vi.mocked(prisma.post.findUnique).mockResolvedValue(null as never)
+      await expect(publishToYouTube('v1')).rejects.toThrow(/only approved/)
+      expect(insertMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it('refuses to publish a compliance-rejected video to TikTok', async () => {
+    vi.mocked(prisma.video.findUniqueOrThrow).mockResolvedValue({
+      ...APPROVED_VIDEO,
+      status: 'rejected',
+    } as never)
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(null as never)
+
+    await expect(publishToTikTok('v1')).rejects.toThrow(/only approved videos can be published/)
+    expect(directPost).not.toHaveBeenCalled()
+  })
+
+  it('allows an approved video through to the YouTube upload', async () => {
+    primeYouTube(
+      APPROVED_VIDEO,
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: false, requiresAiAudioLabel: false } })
+    )
+    const res = await publishToYouTube('v1')
+    expect(insertMock).toHaveBeenCalledTimes(1)
+    expect(res.platformPostId).toBe('ytABC')
+  })
+})
+
+describe('publish AI-disclosure flag (containsSyntheticMedia)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('sets containsSyntheticMedia=true when the plan requires an AI visual label', async () => {
+    primeYouTube(
+      APPROVED_VIDEO,
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: true, requiresAiAudioLabel: false } })
+    )
+    await publishToYouTube('v1')
+    expect(insertedStatus().containsSyntheticMedia).toBe(true)
+  })
+
+  it('sets containsSyntheticMedia=true when only the AI audio label is required', async () => {
+    primeYouTube(
+      APPROVED_VIDEO,
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: false, requiresAiAudioLabel: true } })
+    )
+    await publishToYouTube('v1')
+    expect(insertedStatus().containsSyntheticMedia).toBe(true)
+  })
+
+  it('sets containsSyntheticMedia=false when a report exists and needs no labels', async () => {
+    primeYouTube(
+      APPROVED_VIDEO,
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: false, requiresAiAudioLabel: false } })
+    )
+    await publishToYouTube('v1')
+    expect(insertedStatus().containsSyntheticMedia).toBe(false)
+  })
+
+  it('falls back to false and warns when a gated-factory video has no report', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    primeYouTube(APPROVED_VIDEO, null)
+    await publishToYouTube('v1')
+    expect(insertedStatus().containsSyntheticMedia).toBe(false)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('No ComplianceReport'))
+    warn.mockRestore()
   })
 })
 

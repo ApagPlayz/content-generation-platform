@@ -40,7 +40,10 @@ async function commonsSearch(query: string, limit: number): Promise<CommonsPage[
   const url =
     'https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search' +
     `&gsrnamespace=6&gsrlimit=${limit}&gsrsearch=${encodeURIComponent(query)}` +
-    '&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=1080'
+    // Request a 1800px-wide thumbnail (was 1080): the slideshow upscales to
+    // 1080×1920+, so a 1080-wide source was blown up ~2.7× and read soft. 1800
+    // gives Chromium/ffmpeg real pixels to work with at 9:16 output width.
+    '&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=1800'
   const data = (await fetchJsonBudget(url, { timeoutMs: SEARCH_TIMEOUT_MS, headers: { 'User-Agent': UA } })) as
     | { query?: { pages?: Record<string, CommonsPage> } }
     | null

@@ -40,7 +40,9 @@ const config = {
   // Fallback ladder in tier-key vocabulary (ai_still | stock | archive | moodbank).
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
   // keyless Wikimedia floor — so this is safe with zero API keys.
-  footageLadder: ['archive', 'stock', 'moodbank'],
+  footageLadder: ['archive'],
+  // Archive footage as stills only (no motion clips) — set for the footage stage.
+  archiveStillsOnly: true,
   // Named visual styles rotated across videos for variety.
   styleRotation: ['sepia-archival', 'noir-contrast', 'muted-documentary'],
   // Editorial angles rotated to avoid "inauthentic content" sameness.

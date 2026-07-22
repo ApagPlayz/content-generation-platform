@@ -23,7 +23,6 @@ import type { ScriptStructure } from '../compliance'
 import {
   loadRecentStyleProfiles,
   pickDivergentStyle,
-  humanizeAngle,
   type StyleProfile,
 } from '../truecrime/styleVariation'
 import type {
@@ -101,6 +100,65 @@ const WORDS_PER_SEC = 2.7
 
 function specsFor(targetDurationSec: number): BeatSpec[] {
   return targetDurationSec >= 80 ? BEATS_90 : BEATS_60
+}
+
+/** Maps an editorial-angle SLUG to natural, grammatical copy: a full closing
+ *  sentence and a noun-phrase "framing" for the hook loop, description, and AI
+ *  prompt. This replaces raw-slug interpolation, which produced broken prose
+ *  like "This courtroom sticks to what the public record documents." Unknown
+ *  angles fall back to a safe generic line. */
+const ANGLE_COPY: Record<string, { close: string; framing: string }> = {
+  'turning-point': {
+    close: 'The turning point comes into focus once the documented record is lined up in order.',
+    framing: 'turning-point breakdown',
+  },
+  'human-story': {
+    close: 'Underneath the events, the human story stays anchored to what the record documents.',
+    framing: 'human-story angle',
+  },
+  'myth-vs-record': {
+    close: 'Where the popular myth and the record diverge, this stays with what is documented.',
+    framing: 'myth-versus-record check',
+  },
+  legacy: {
+    close: 'Its legacy still rests on what the public record documents.',
+    framing: 'legacy retrospective',
+  },
+  'business-postmortem': {
+    close: 'Read as a business postmortem, it stays with what the public record documents.',
+    framing: 'business postmortem',
+  },
+  'timeline-reconstruction': {
+    close: 'Reconstructed step by step, the timeline stays with what the public record documents.',
+    framing: 'timeline reconstruction',
+  },
+  'decision-point-analysis': {
+    close: 'At each decision point, the account stays with what the public record documents.',
+    framing: 'decision-point analysis',
+  },
+  'rise-and-fall-recap': {
+    close: 'From the rise to the fall, the recap stays with what the public record documents.',
+    framing: 'rise-and-fall recap',
+  },
+}
+
+const DEFAULT_ANGLE_COPY = {
+  close: 'Throughout, the account stays with what the public record documents.',
+  framing: 'closer look',
+}
+
+/** Grammatical copy for an editorial angle. Never interpolates a raw slug. */
+export function angleCopyFor(angleSlug: string): { close: string; framing: string } {
+  return ANGLE_COPY[(angleSlug || '').toLowerCase()] ?? DEFAULT_ANGLE_COPY
+}
+
+/** "a"/"an" for a phrase, by leading vowel. */
+function withArticle(phrase: string): string {
+  return /^[aeiou]/i.test(phrase.trim()) ? `an ${phrase}` : `a ${phrase}`
+}
+
+function capitalizeFirst(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s
 }
 
 /** Structural signature reflects the real beats so the inauthentic-content
@@ -201,7 +259,7 @@ export async function generateHistoryScript(
               '- visualCue must be GENERIC b-roll (newspapers, documents, maps, clocks, city ' +
               'skylines, roads, rain) — never a named person or brand asset.\n\n' +
               (editorialLayer
-                ? `EDITORIAL FRAMING: present this as a "${humanizeAngle(style.editorialAngle)}" — ` +
+                ? `EDITORIAL FRAMING: frame this as ${withArticle(angleCopyFor(style.editorialAngle).framing)} — ` +
                   'original analytical commentary on the documented record, not a bare recap. The ' +
                   'framing must ADD analysis; it must never introduce a new accusation and every ' +
                   'factual claim stays attributed and hedged.\n\n'
@@ -380,8 +438,10 @@ function templateScript(
   // A generic, hedged editorial frame — NEVER a topic-specific assertion, so it
   // can't trip the defamation lint or the corroboration rule. Off when the
   // operator disables the editorial layer.
-  const angleWords = editorialLayer ? humanizeAngle(style.editorialAngle) : ''
-  const editorialClose = angleWords ? ` This ${angleWords} sticks to what the public record documents.` : ''
+  // Each angle maps to a full, grammatical sentence (no raw-slug interpolation —
+  // that produced "This courtroom sticks to what the public record documents.").
+  const copy = editorialLayer ? angleCopyFor(style.editorialAngle) : null
+  const editorialClose = copy ? ` ${copy.close}` : ''
 
   // Varied fillers so a fact-poor topic never repeats the same line verbatim.
   const fillers = [
@@ -400,6 +460,15 @@ function templateScript(
     if (cursor < facts.length - 1) return facts[cursor++]
     return fillers[fillerIdx++ % fillers.length]
   }
+  // Return the next filler that differs from `avoid` (fillers are all distinct,
+  // so one always qualifies) — used to break a consecutive repeat.
+  const distinctFiller = (avoid: string): string => {
+    for (let k = 0; k < fillers.length; k++) {
+      const f = fillers[fillerIdx++ % fillers.length]
+      if (f !== avoid) return f
+    }
+    return fillers[0]
+  }
 
   const beatTexts: string[] = specs.map((spec, i) => {
     const n = spec.name.toLowerCase()
@@ -411,6 +480,15 @@ function templateScript(
     // Context / rise / turning point: next unused fact.
     return nextFact()
   })
+
+  // Guarantee no two CONSECUTIVE beats share the exact same sentence — the old
+  // bug where a fact-poor topic repeated one filler line back-to-back. Any beat
+  // that matches the one before it is swapped for a fresh, distinct filler.
+  for (let i = 1; i < beatTexts.length; i++) {
+    if (beatTexts[i] && beatTexts[i] === beatTexts[i - 1]) {
+      beatTexts[i] = distinctFiller(beatTexts[i - 1])
+    }
+  }
 
   const beats: ScriptBeat[] = specs.map((spec, i) => ({
     name: spec.name,
@@ -430,8 +508,8 @@ function templateScript(
     verbal: beatTexts[0],
     onscreenText: `${brief.caseName}`.split(/\s+/).slice(0, 7).join(' '),
     visualCue: defaultVisualCue('Hook'),
-    opensLoop: angleWords
-      ? `a ${angleWords} of how it actually unfolded`
+    opensLoop: copy
+      ? `${withArticle(copy.framing)} of how it actually unfolded`
       : 'how the documented record says it actually unfolded',
     payoffRef: 'Legacy / Lesson',
   }
@@ -460,7 +538,7 @@ function templateScript(
     title: `${brief.caseName}${yr}: the rise and the fallout`.slice(0, 100),
     description:
       (facts[0] ?? brief.summary.slice(0, 160)) +
-      (angleWords ? ` A ${angleWords} of the documented record.` : '') +
+      (copy ? ` ${capitalizeFirst(withArticle(copy.framing))} of the documented record.` : '') +
       ` Source: ${brief.wikipediaUrl}`,
     hashtags: ['history', 'business', 'documentary', 'storytime', 'didyouknow'],
   }

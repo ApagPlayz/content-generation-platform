@@ -53,11 +53,14 @@ const config = {
   // Fallback ladder in tier-key vocabulary (ai_still | stock | archive | moodbank).
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
   // keyless Wikimedia floor — so this is safe with zero API keys.
-  footageLadder: ['archive', 'stock', 'moodbank'],
+  footageLadder: ['archive'],
+  // Archive footage as stills only (no motion clips) — set for the footage stage.
+  archiveStillsOnly: true,
   // Named visual styles rotated across videos for variety.
   styleRotation: ['sepia-archival', 'noir-contrast', 'muted-documentary'],
-  // Editorial angles rotated to avoid "inauthentic content" sameness.
-  editorialAngles: ['investigation', 'forensics', 'courtroom', 'aftermath'],
+  // Editorial angles rotated to avoid "inauthentic content" sameness. History
+  // stories get genuinely historical framings (NOT the true-crime angles).
+  editorialAngles: ['turning-point', 'human-story', 'myth-vs-record', 'legacy'],
   styleDivergenceWindow: 5,
   enableEditorialLayer: true,
   // Mood-bank b-roll layer — dormant by default.

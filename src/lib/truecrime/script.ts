@@ -18,7 +18,6 @@ import type { ScriptStructure } from '../compliance'
 import {
   loadRecentStyleProfiles,
   pickDivergentStyle,
-  humanizeAngle,
   type StyleProfile,
 } from './styleVariation'
 import type {
@@ -77,6 +76,69 @@ const WORDS_PER_SEC = 2.7
 
 function specsFor(targetDurationSec: number): BeatSpec[] {
   return targetDurationSec >= 80 ? BEATS_90 : BEATS_60
+}
+
+/** Maps an editorial-angle SLUG to natural, grammatical copy: a full closing
+ *  sentence and a noun-phrase "framing" for the hook loop, description, and AI
+ *  prompt. This replaces raw-slug interpolation, which produced broken prose
+ *  like "This courtroom sticks to what the public record documents." Unknown
+ *  angles fall back to a safe generic line. */
+const ANGLE_COPY: Record<string, { close: string; framing: string }> = {
+  investigation: {
+    close: 'As an investigation, the account stays with what the public record documents.',
+    framing: 'investigative breakdown',
+  },
+  forensics: {
+    close: 'On the forensic evidence, the account stays with what the public record documents.',
+    framing: 'forensic breakdown',
+  },
+  courtroom: {
+    close: 'On what happened in court, the account stays with what the public record documents.',
+    framing: 'courtroom recap',
+  },
+  aftermath: {
+    close: 'In the aftermath, the account stays with what the public record documents.',
+    framing: 'look at the aftermath',
+  },
+  'forensic-breakdown': {
+    close: 'On the forensic evidence, the account stays with what the public record documents.',
+    framing: 'forensic breakdown',
+  },
+  'legal-procedure-explainer': {
+    close: 'On the legal procedure, the account stays with what the public record documents.',
+    framing: 'legal-procedure explainer',
+  },
+  'timeline-reconstruction': {
+    close: 'Reconstructed step by step, the timeline stays with what the public record documents.',
+    framing: 'timeline reconstruction',
+  },
+  'unanswered-questions': {
+    close: 'On the questions that remain open, the account stays with what the public record documents.',
+    framing: 'look at the unanswered questions',
+  },
+  'investigative-recap': {
+    close: 'As an investigative recap, the account stays with what the public record documents.',
+    framing: 'investigative recap',
+  },
+}
+
+const DEFAULT_ANGLE_COPY = {
+  close: 'Throughout, the account stays with what the public record documents.',
+  framing: 'closer look',
+}
+
+/** Grammatical copy for an editorial angle. Never interpolates a raw slug. */
+export function angleCopyFor(angleSlug: string): { close: string; framing: string } {
+  return ANGLE_COPY[(angleSlug || '').toLowerCase()] ?? DEFAULT_ANGLE_COPY
+}
+
+/** "a"/"an" for a phrase, by leading vowel. */
+function withArticle(phrase: string): string {
+  return /^[aeiou]/i.test(phrase.trim()) ? `an ${phrase}` : `a ${phrase}`
+}
+
+function capitalizeFirst(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s
 }
 
 /** Structural signature reflects the real beats so the inauthentic-content
@@ -175,7 +237,7 @@ export async function generateScript(
               '- Never name or depict minors. No gore; focus on investigation/timeline/mystery. ' +
               'Build tension from documented unresolved facts, not speculation.\n\n' +
               (editorialLayer
-                ? `EDITORIAL FRAMING: present this as a "${humanizeAngle(style.editorialAngle)}" — ` +
+                ? `EDITORIAL FRAMING: frame this as ${withArticle(angleCopyFor(style.editorialAngle).framing)} — ` +
                   'original analytical commentary on the documented record, not a bare recap. The ' +
                   'framing must ADD analysis; it must never introduce a new accusation and every ' +
                   'factual claim stays attributed and hedged.\n\n'
@@ -343,9 +405,10 @@ function templateScript(
   const lastFact = facts[facts.length - 1]
   // A generic, hedged editorial frame — NEVER a case-specific assertion, so it
   // can't trip the defamation lint or the corroboration rule. Off when the
-  // operator disables the editorial layer.
-  const angleWords = editorialLayer ? humanizeAngle(style.editorialAngle) : ''
-  const editorialClose = angleWords ? ` This ${angleWords} sticks to what the public record documents.` : ''
+  // operator disables the editorial layer. Each angle maps to a full, grammatical
+  // sentence (no raw-slug interpolation — that produced "This courtroom sticks…").
+  const copy = editorialLayer ? angleCopyFor(style.editorialAngle) : null
+  const editorialClose = copy ? ` ${copy.close}` : ''
 
   // Varied fillers so a fact-poor case never repeats the same line verbatim.
   const fillers = [
@@ -364,6 +427,15 @@ function templateScript(
     if (cursor < facts.length - 1) return facts[cursor++]
     return fillers[fillerIdx++ % fillers.length]
   }
+  // Return the next filler that differs from `avoid` (fillers are all distinct,
+  // so one always qualifies) — used to break a consecutive repeat.
+  const distinctFiller = (avoid: string): string => {
+    for (let k = 0; k < fillers.length; k++) {
+      const f = fillers[fillerIdx++ % fillers.length]
+      if (f !== avoid) return f
+    }
+    return fillers[0]
+  }
 
   const beatTexts: string[] = specs.map((spec, i) => {
     const n = spec.name.toLowerCase()
@@ -375,6 +447,16 @@ function templateScript(
     // Setup / inciting / rising / turn / falling: next unused fact.
     return nextFact()
   })
+
+  // Guarantee no two CONSECUTIVE beats share the exact same sentence — the old
+  // bug where a fact-poor case repeated one filler line back-to-back (e.g. the
+  // Leopold and Loeb script that had the same sentence 3× in a row). Any beat
+  // that matches the one before it is swapped for a fresh, distinct filler.
+  for (let i = 1; i < beatTexts.length; i++) {
+    if (beatTexts[i] && beatTexts[i] === beatTexts[i - 1]) {
+      beatTexts[i] = distinctFiller(beatTexts[i - 1])
+    }
+  }
 
   const beats: ScriptBeat[] = specs.map((spec, i) => ({
     name: spec.name,
@@ -394,7 +476,9 @@ function templateScript(
     verbal: beatTexts[0],
     onscreenText: `${brief.caseName}`.split(/\s+/).slice(0, 7).join(' '),
     visualCue: defaultVisualCue('Hook'),
-    opensLoop: angleWords ? `a ${angleWords} of what the record actually shows` : 'what the record actually shows',
+    opensLoop: copy
+      ? `${withArticle(copy.framing)} of what the record actually shows`
+      : 'what the record actually shows',
     payoffRef: 'Resolution',
   }
 
@@ -422,7 +506,7 @@ function templateScript(
     title: `${brief.caseName}${yr}: what really happened`.slice(0, 100),
     description:
       (facts[0] ?? brief.summary.slice(0, 160)) +
-      (angleWords ? ` A ${angleWords} of the documented record.` : '') +
+      (copy ? ` ${capitalizeFirst(withArticle(copy.framing))} of the documented record.` : '') +
       ` Source: ${brief.wikipediaUrl}`,
     hashtags: ['truecrime', 'coldcase', 'mystery', 'history', 'unsolved'],
   }
