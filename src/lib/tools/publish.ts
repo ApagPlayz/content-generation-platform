@@ -11,6 +11,7 @@ import {
   YT_RECONNECT_MESSAGE,
 } from '../youtube'
 import {
+  buildTikTokCaption,
   connection as tiktokConnection,
   directPost,
   PLATFORM as TIKTOK_PLATFORM,
@@ -263,9 +264,14 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
 
   const privacy = await setting('tiktok_privacy', TIKTOK_DEFAULT_PRIVACY)
   const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
-  const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
-    .filter(Boolean)
-    .join(' ')
+  // Humanized, TikTok-native caption — never byte-identical to the YouTube
+  // metadata, the #1 named shadowban trigger (issue #88).
+  const caption = buildTikTokCaption({
+    title: video.title || '',
+    hashtags,
+    seed: video.id,
+    avoid: [video.title || '', video.description || ''],
+  })
 
   // Mark intent before the network call so a crash mid-upload is visible.
   const post = await prisma.post.upsert({

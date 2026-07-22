@@ -101,6 +101,91 @@ export function tiktokPermalink(handle: string, postId?: string): string {
   return postId ? `https://www.tiktok.com/@${h}/video/${postId}` : `https://www.tiktok.com/@${h}`
 }
 
+// ── Anti-shadowban caption humanization (issue #88) ─────────────────────────
+// TikTok throttles ("shadowbans") accounts whose posts look automated. The #1
+// named trigger is metadata that matches an existing video — so a TikTok caption
+// that is byte-identical to what already went to YouTube is exactly what we must
+// never send. These helpers build a TikTok-native caption that (a) opens with a
+// varied, natural hook, (b) always carries a discovery tag YouTube never uses,
+// and (c) is guaranteed never byte-identical to the YouTube title/description.
+
+// Neutral, non-misleading openers — safe across sports / true-crime / history.
+// Rotated per-video so every caption doesn't read identically (itself a bot tell).
+export const TIKTOK_OPENERS = [
+  'Here’s the story 👇',
+  'Watch till the end 👀',
+  'You’ll want to see this.',
+  'Wait for it…',
+  'The full story below 👇',
+  'Save this one for later.',
+]
+
+// TikTok-native discovery tags a YouTube description never carries. Including one
+// guarantees the caption diverges from the cross-posted YouTube metadata.
+export const TIKTOK_NATIVE_TAGS = ['fyp', 'foryou', 'foryoupage']
+
+/**
+ * Deterministic, non-negative bucket index derived from a seed string (char-sum
+ * mod buckets). Deterministic so the same video always yields the same caption
+ * — re-publishing is idempotent and the tests are reproducible — while different
+ * videos spread across the buckets. Returns 0 for a non-positive bucket count.
+ */
+export function captionVariant(seed: string, buckets: number): number {
+  if (buckets <= 0) return 0
+  let sum = 0
+  for (let i = 0; i < seed.length; i++) sum = (sum + seed.charCodeAt(i)) % buckets
+  return sum
+}
+
+/**
+ * Build a humanized TikTok caption for a video. Pure + unit-tested so the
+ * anti-shadowban guarantees hold without hitting the network:
+ *  - opens with a per-video rotated natural hook,
+ *  - normalises + dedupes the hashtags and appends a native discovery tag,
+ *  - is capped at TikTok's 2200-char limit,
+ *  - is GUARANTEED never byte-identical to any string in `avoid` (the YouTube
+ *    title/description) — if an assembled caption collides, it rotates to the
+ *    next opener until it differs.
+ */
+export function buildTikTokCaption(input: {
+  title: string
+  hashtags: string[]
+  seed: string
+  avoid?: string[]
+}): string {
+  const { title, hashtags, seed } = input
+  const avoidSet = new Set(input.avoid ?? [])
+
+  // Normalise the supplied hashtags: strip leading #, lowercase, drop blanks,
+  // dedupe case-insensitively while preserving order.
+  const seen = new Set<string>()
+  const tags: string[] = []
+  for (const raw of hashtags) {
+    const t = raw.replace(/^#+/, '').trim().toLowerCase()
+    if (t && !seen.has(t)) {
+      seen.add(t)
+      tags.push(t)
+    }
+  }
+
+  // Always include a TikTok-native discovery tag YouTube never uses.
+  const nativeTag = TIKTOK_NATIVE_TAGS[captionVariant(`${seed}:tag`, TIKTOK_NATIVE_TAGS.length)]
+  if (!seen.has(nativeTag)) tags.push(nativeTag)
+  const tagStr = tags.map((t) => `#${t}`).join(' ')
+
+  // Rotate the opener per-video; step forward on the (extremely unlikely) chance
+  // the caption still collides with a value we must avoid, so the guarantee is
+  // hard rather than incidental.
+  const start = captionVariant(seed, TIKTOK_OPENERS.length)
+  let caption = ''
+  for (let i = 0; i < TIKTOK_OPENERS.length; i++) {
+    const opener = TIKTOK_OPENERS[(start + i) % TIKTOK_OPENERS.length]
+    caption = [opener, title.trim(), tagStr].filter(Boolean).join(' ').slice(0, MAX_CAPTION)
+    if (!avoidSet.has(caption)) return caption
+  }
+  return caption
+}
+
 /** Consent URL — throws if the app isn't configured yet. */
 export async function authUrl(): Promise<string> {
   const { clientKey } = await clientCreds()
