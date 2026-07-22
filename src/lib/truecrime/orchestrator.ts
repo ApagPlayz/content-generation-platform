@@ -3,7 +3,7 @@ import { gateVideoScript } from '../compliance'
 import { discoverCase } from './caseDiscovery'
 import { generateScript } from './script'
 import { resolveBeatFootage } from './footage'
-import { sourceVisuals } from './visuals'
+import { enforceMinUsableImages, sourceVisuals } from './visuals'
 import { synthesizeNarration } from './tts'
 import { generateCaptions } from './captions'
 import { assembleVideo } from './assemble'
@@ -167,6 +167,12 @@ export async function executeTrueCrimeRun(
         mergedVisuals = [...mergedVisuals, ...visuals]
         mergedPaths = [...mergedPaths, ...imagePaths]
       }
+
+      // Hard minimum: refuse to render a starved slideshow. Fewer than
+      // MIN_USABLE_IMAGES distinct usable images (sourcing genuinely came up
+      // short) FAILS the run with a clear error instead of shipping two
+      // pictures held for 30 s each (the owner-reported failure).
+      enforceMinUsableImages(mergedPaths.length, ctx.brief!.caseName)
 
       ctx.visuals = mergedVisuals
       ctx.imagePaths = mergedPaths

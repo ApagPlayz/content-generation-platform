@@ -13,7 +13,7 @@ import { gateVideoScript, HISTORY_PROFILE } from '../compliance'
 import { discoverTopic } from './topicDiscovery'
 import { generateHistoryScript } from './script'
 import { resolveBeatFootage } from '../truecrime/footage'
-import { sourceVisuals } from '../truecrime/visuals'
+import { enforceMinUsableImages, sourceVisuals } from '../truecrime/visuals'
 import { synthesizeNarration } from '../truecrime/tts'
 import { generateCaptions } from '../truecrime/captions'
 import { assembleVideo } from '../truecrime/assemble'
@@ -173,6 +173,12 @@ export async function executeHistoryRun(
         mergedVisuals = [...mergedVisuals, ...visuals]
         mergedPaths = [...mergedPaths, ...imagePaths]
       }
+
+      // Hard minimum: refuse to render a starved slideshow. Fewer than
+      // MIN_USABLE_IMAGES distinct usable images (sourcing genuinely came up
+      // short) FAILS the run with a clear error instead of shipping two
+      // pictures held for 30 s each (the owner-reported failure).
+      enforceMinUsableImages(mergedPaths.length, ctx.brief!.caseName)
 
       ctx.visuals = mergedVisuals
       ctx.imagePaths = mergedPaths
