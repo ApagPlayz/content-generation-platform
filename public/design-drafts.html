@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en" data-style="1" data-mode="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Content Engine — Design Drafts (pick a look)</title>
+<!--
+  THROWAWAY MOCKUP — not wired to the real app. See issue #49.
+  Three visual styles x four redesigned screens, so the owner can pick a
+  direction before anything is rebuilt. Pure HTML/CSS/JS, no dependencies,
+  no network — opens by double-click or at /design-drafts.html.
+-->
+<style>
+  /* ---- Per-style + per-mode design tokens (the whole "switcher" is here) ---- */
+  :root {
+    --bg:#f8fafc; --surface:#ffffff; --surface-2:#f1f5f9; --border:#e2e8f0;
+    --text:#0f172a; --muted:#64748b; --accent:#0f172a; --accent-fg:#ffffff;
+    --accent-soft:#f1f5f9; --accent-soft-text:#0f172a; --radius:10px;
+    --shadow:0 1px 2px rgba(15,23,42,.06); --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --num-weight:700; --header-bg:#ffffff;
+  }
+  /* Style 1 — Clean Studio: neutral, minimal, closest to today */
+  [data-style="1"]{ --accent:#0f172a; --accent-soft:#f1f5f9; --accent-soft-text:#334155; --radius:10px; }
+  [data-style="1"][data-mode="dark"]{ --bg:#020617; --surface:#0f172a; --surface-2:#111c33; --border:#1e293b; --text:#f8fafc; --muted:#94a3b8; --accent:#e2e8f0; --accent-fg:#0f172a; --accent-soft:#111c33; --accent-soft-text:#cbd5e1; --header-bg:#0b1220; --shadow:0 1px 2px rgba(0,0,0,.4); }
+  /* Style 2 — Warm Creator: soft, rounded, indigo/violet accent */
+  [data-style="2"]{ --bg:#faf9f7; --surface:#ffffff; --surface-2:#f5f3ef; --border:#eae7e1; --text:#1c1917; --muted:#78716c; --accent:#6d28d9; --accent-fg:#ffffff; --accent-soft:#f3f0ff; --accent-soft-text:#5b21b6; --radius:18px; --shadow:0 6px 20px rgba(28,25,23,.08); --font:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif; }
+  [data-style="2"][data-mode="dark"]{ --bg:#191614; --surface:#241f1c; --surface-2:#2c2622; --border:#37302b; --text:#f5f3ef; --muted:#a8a29e; --accent:#a78bfa; --accent-fg:#1c1917; --accent-soft:#2a2340; --accent-soft-text:#c4b5fd; --header-bg:#1f1a17; --shadow:0 8px 24px rgba(0,0,0,.5); }
+  /* Style 3 — Bold Focus: high-contrast, condensed, emerald accent, big numbers */
+  [data-style="3"]{ --bg:#f4f6f5; --surface:#ffffff; --surface-2:#eef2f0; --border:#dbe3df; --text:#08110d; --muted:#5b6b64; --accent:#059669; --accent-fg:#ffffff; --accent-soft:#e7f6ef; --accent-soft-text:#047857; --radius:6px; --num-weight:800; --shadow:0 1px 0 rgba(8,17,13,.06); }
+  [data-style="3"][data-mode="dark"]{ --bg:#03110b; --surface:#0a1a12; --surface-2:#0f2118; --border:#14301f; --text:#eafff4; --muted:#7fae94; --accent:#10b981; --accent-fg:#03110b; --accent-soft:#0f2a1c; --accent-soft-text:#6ee7b7; --header-bg:#061510; --shadow:0 1px 0 rgba(0,0,0,.4); }
+
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--font); -webkit-font-smoothing:antialiased; }
+  a{ color:inherit; }
+  .wrap{ max-width:960px; margin:0 auto; padding:0 20px; }
+
+  /* ---- Control bar (the picker the owner uses) ---- */
+  .controls{ position:sticky; top:0; z-index:20; background:var(--header-bg); border-bottom:1px solid var(--border); }
+  .controls .wrap{ display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; padding:12px 20px; }
+  .ctl-group{ display:flex; align-items:center; gap:8px; }
+  .ctl-label{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .pill{ border:1px solid var(--border); background:var(--surface); color:var(--text); padding:6px 12px; border-radius:999px; font-size:13px; font-weight:600; cursor:pointer; }
+  .pill.active{ background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+  .seg{ display:inline-flex; background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:3px; }
+  .seg button{ border:0; background:transparent; color:var(--muted); padding:6px 14px; border-radius:999px; font-size:13px; font-weight:600; cursor:pointer; }
+  .seg button.active{ background:var(--accent); color:var(--accent-fg); }
+  .spacer{ flex:1 1 auto; }
+
+  /* ---- Intro banner ---- */
+  .intro{ background:var(--accent-soft); color:var(--accent-soft-text); border-bottom:1px solid var(--border); }
+  .intro .wrap{ padding:14px 20px; font-size:13.5px; line-height:1.5; }
+  .intro b{ color:var(--text); }
+
+  /* ---- App-shell mock ---- */
+  header.app{ background:var(--header-bg); border-bottom:1px solid var(--border); }
+  header.app .wrap{ display:flex; align-items:center; justify-content:space-between; padding:16px 20px; }
+  .brand{ font-size:20px; font-weight:800; letter-spacing:-.01em; }
+  .nav{ display:flex; gap:4px; }
+  .nav .tab{ padding:9px 16px; border-radius:var(--radius); font-size:14px; font-weight:600; color:var(--muted); cursor:default; }
+  .nav .tab.on{ background:var(--accent-soft); color:var(--accent-soft-text); }
+  .btn{ padding:9px 14px; border-radius:var(--radius); font-size:13px; font-weight:700; background:var(--accent); color:var(--accent-fg); border:0; cursor:default; }
+  .btn.ghost{ background:var(--surface); color:var(--text); border:1px solid var(--border); }
+
+  main{ padding:26px 0 60px; }
+  .screen{ display:none; }
+  .screen.on{ display:block; }
+  .h1{ font-size:22px; font-weight:800; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub{ color:var(--muted); font-size:13.5px; margin:0 0 20px; }
+  .sec-title{ font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; margin:26px 0 12px; }
+
+  .card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); }
+  .pad{ padding:16px; }
+  .grid{ display:grid; gap:14px; }
+  .g4{ grid-template-columns:repeat(4,1fr); }
+  .g3{ grid-template-columns:repeat(3,1fr); }
+  .g2{ grid-template-columns:repeat(2,1fr); }
+  @media(max-width:760px){ .g4{grid-template-columns:repeat(2,1fr);} .g3,.g2{grid-template-columns:1fr;} .nav{display:none;} }
+
+  .stat .label{ font-size:12.5px; color:var(--muted); font-weight:600; }
+  .stat .num{ font-size:30px; font-weight:var(--num-weight); letter-spacing:-.02em; margin-top:6px; }
+  .stat .foot{ font-size:12px; color:var(--muted); margin-top:6px; }
+
+  .row{ display:flex; align-items:center; gap:12px; padding:12px 16px; border-top:1px solid var(--border); }
+  .row:first-child{ border-top:0; }
+  .row .title{ font-weight:600; font-size:14px; }
+  .row .meta{ color:var(--muted); font-size:12.5px; }
+
+  .badge{ font-size:11px; font-weight:800; padding:3px 8px; border-radius:6px; }
+  .b-orange{ background:#ffedd5; color:#9a3412; } .b-purple{ background:#f3e8ff; color:#6b21a8; }
+  .b-blue{ background:#dbeafe; color:#1d4ed8; } .b-green{ background:#dcfce7; color:#15803d; }
+  .b-pink{ background:#fce7f3; color:#9d174d; } .b-cyan{ background:#cffafe; color:#0e7490; }
+
+  .chip{ font-size:11.5px; font-weight:700; padding:3px 9px; border-radius:999px; }
+  .s-draft{ background:#f1f5f9; color:#475569; } .s-queued{ background:#dbeafe; color:#2563eb; }
+  .s-render{ background:#fef3c7; color:#b45309; } .s-review{ background:#fef9c3; color:#a16207; }
+  .s-pub{ background:#dcfce7; color:#15803d; } .s-fail{ background:#fee2e2; color:#dc2626; }
+  .s-sched{ background:#e0f2fe; color:#0369a1; }
+
+  .alert{ display:flex; gap:10px; align-items:flex-start; background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:12px 14px; border-radius:var(--radius); font-size:13px; }
+  [data-mode="dark"] .alert{ background:#2a2103; border-color:#5b4708; color:#fde68a; }
+
+  .dot{ width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .stage{ display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--muted); }
+  .stage .dot.done{ background:#16a34a; } .stage .dot.now{ background:#f59e0b; } .stage .dot.todo{ background:var(--border); }
+
+  .toggle{ width:40px; height:23px; border-radius:999px; background:var(--accent); position:relative; display:inline-block; }
+  .toggle::after{ content:""; position:absolute; top:2px; right:2px; width:19px; height:19px; border-radius:50%; background:#fff; }
+  .toggle.off{ background:var(--border); } .toggle.off::after{ left:2px; right:auto; }
+  .field{ font-size:13px; }
+  .field label{ display:block; font-weight:600; margin-bottom:5px; color:var(--muted); font-size:12px; }
+  .field .input{ background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:9px 11px; color:var(--text); font-size:13px; }
+  .muted{ color:var(--muted); }
+  .footnote{ text-align:center; color:var(--muted); font-size:12px; padding:24px 0 0; }
+</style>
+</head>
+<body>
+
+<!-- ============ THE PICKER ============ -->
+<div class="controls">
+  <div class="wrap">
+    <div class="ctl-group"><span class="ctl-label">Style</span>
+      <button class="pill active" data-set-style="1">1 · Clean Studio</button>
+      <button class="pill" data-set-style="2">2 · Warm Creator</button>
+      <button class="pill" data-set-style="3">3 · Bold Focus</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="ctl-group"><span class="ctl-label">Screen</span>
+      <div class="seg">
+        <button class="active" data-set-screen="home">Home</button>
+        <button data-set-screen="studio">Studio</button>
+        <button data-set-screen="pipeline">Pipeline</button>
+        <button data-set-screen="settings">Settings</button>
+      </div>
+    </div>
+    <div class="ctl-group"><span class="ctl-label">Mode</span>
+      <button class="pill" id="modeBtn" data-toggle-mode>☾ Dark</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ INTRO (plain language for a non-technical owner) ============ -->
+<div class="intro">
+  <div class="wrap">
+    <b>Pick a look.</b> Same app, three coats of paint. Keep one screen open and click
+    <b>Style 1 → 2 → 3</b> to compare — then try <b>☾ Dark</b>.
+    <b>1 · Clean Studio</b> = tidy, neutral, closest to today (safest).
+    <b>2 · Warm Creator</b> = soft, rounded, friendly — easy on the eyes.
+    <b>3 · Bold Focus</b> = high-contrast “it’s working while I sleep” control-room.
+    The old <b>7 tabs are now 3</b> (Home / Studio / Pipeline) + Settings. Nothing is built yet — just reply with the number you like.
+  </div>
+</div>
+
+<!-- ============ MOCK APP ============ -->
+<header class="app">
+  <div class="wrap">
+    <div class="brand">Content Engine</div>
+    <nav class="nav">
+      <span class="tab" data-nav="home">Home</span>
+      <span class="tab" data-nav="studio">Studio</span>
+      <span class="tab" data-nav="pipeline">Pipeline</span>
+      <span class="tab" data-nav="settings">Settings</span>
+    </nav>
+    <button class="btn">+ New Factory</button>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <!-- ===== HOME (was: Overview + Winners) ===== -->
+    <section class="screen on" data-screen="home">
+      <h1 class="h1">Home</h1>
+      <p class="sub">Your channel at a glance — replaces the old <b>Overview</b> &amp; <b>Winners</b> tabs.</p>
+
+      <div class="grid g4">
+        <div class="card pad stat"><div class="label">Total videos</div><div class="num">128</div><div class="foot">all time</div></div>
+        <div class="card pad stat"><div class="label">This month</div><div class="num">34</div><div class="foot">+9 vs last month</div></div>
+        <div class="card pad stat"><div class="label">Published today</div><div class="num">4</div><div class="foot">6 / 10 uploads left</div></div>
+        <div class="card pad stat"><div class="label">Active factories</div><div class="num">5</div><div class="foot">2 on auto-pilot</div></div>
+      </div>
+
+      <div style="margin-top:16px" class="alert">
+        <span>⚠️</span>
+        <div><b>YouTube needs reconnecting.</b> Your Google login expired, so nothing is auto-posting to YouTube. Open <b>Settings → Reconnect</b> to fix it.</div>
+      </div>
+
+      <div class="sec-title">Recent activity</div>
+      <div class="card">
+        <div class="row"><span class="badge b-orange">F1</span><span class="title">Silverstone’s wildest last-lap overtakes</span><span class="spacer"></span><span class="chip s-pub">Published</span><span class="meta">12m ago</span></div>
+        <div class="row"><span class="badge b-purple">F3</span><span class="title">The unsolved case of the lighthouse keeper</span><span class="spacer"></span><span class="chip s-review">Needs review</span><span class="meta">40m ago</span></div>
+        <div class="row"><span class="badge b-cyan">F7</span><span class="title">3 rulers who faked their own deaths</span><span class="spacer"></span><span class="chip s-render">Rendering</span><span class="meta">1h ago</span></div>
+        <div class="row"><span class="badge b-green">F4</span><span class="title">Why this penalty changed the title race</span><span class="spacer"></span><span class="chip s-fail">Failed</span><span class="meta">2h ago</span></div>
+      </div>
+
+      <div class="sec-title">Top performers this week</div>
+      <div class="grid g3">
+        <div class="card pad"><div class="badge b-orange" style="display:inline-block">F1</div><div class="title" style="margin:8px 0 4px">Last-lap chaos in Monaco</div><div class="meta">▶ 214k views · 9.1% saved</div></div>
+        <div class="card pad"><div class="badge b-purple" style="display:inline-block">F3</div><div class="title" style="margin:8px 0 4px">The 40-year-old cold case</div><div class="meta">▶ 168k views · 7.8% saved</div></div>
+        <div class="card pad"><div class="badge b-cyan" style="display:inline-block">F7</div><div class="title" style="margin:8px 0 4px">History’s greatest hoaxes</div><div class="meta">▶ 141k views · 6.9% saved</div></div>
+      </div>
+    </section>
+
+    <!-- ===== STUDIO (was: Factories + Agents) ===== -->
+    <section class="screen" data-screen="studio">
+      <h1 class="h1">Studio</h1>
+      <p class="sub">Where you build &amp; configure — replaces the old <b>Factories</b> &amp; <b>Agents</b> tabs.</p>
+
+      <div class="sec-title">Factories</div>
+      <div class="grid g3">
+        <div class="card pad"><div style="display:flex;justify-content:space-between;align-items:center"><span class="badge b-orange">F1</span><span class="chip s-pub">⚡ Auto</span></div><div class="title" style="margin:10px 0 3px">F1 Race Highlights</div><div class="meta">42 videos · posts daily</div></div>
+        <div class="card pad"><div style="display:flex;justify-content:space-between;align-items:center"><span class="badge b-purple">F3</span><span class="chip s-review">👁 Review</span></div><div class="title" style="margin:10px 0 3px">True-Crime Files</div><div class="meta">28 videos · you approve each</div></div>
+        <div class="card pad"><div style="display:flex;justify-content:space-between;align-items:center"><span class="badge b-cyan">F7</span><span class="chip s-pub">⚡ Auto</span></div><div class="title" style="margin:10px 0 3px">History Mysteries</div><div class="meta">19 videos · posts daily</div></div>
+      </div>
+
+      <div class="sec-title">Agents</div>
+      <div class="grid g2">
+        <div class="card pad"><div class="title">Hook Writer</div><div class="meta" style="margin-top:4px">Writes the first 3 seconds · Claude Opus</div></div>
+        <div class="card pad"><div class="title">Fact Checker</div><div class="meta" style="margin-top:4px">Flags legal-risk claims before render · Claude Opus</div></div>
+      </div>
+
+      <div style="margin-top:18px;display:flex;gap:10px">
+        <button class="btn">+ New factory</button>
+        <button class="btn ghost">+ New agent</button>
+      </div>
+    </section>
+
+    <!-- ===== PIPELINE (was: Inbox + Queue + Schedule) ===== -->
+    <section class="screen" data-screen="pipeline">
+      <h1 class="h1">Pipeline</h1>
+      <p class="sub">Everything in flight — replaces the old <b>Inbox</b>, <b>Queue</b> &amp; <b>Schedule</b> tabs.</p>
+
+      <div class="sec-title">Waiting for your review · 2</div>
+      <div class="grid g2">
+        <div class="card pad"><div style="display:flex;justify-content:space-between"><span class="badge b-purple">F3</span><span class="chip s-review">Review</span></div><div class="title" style="margin:10px 0 4px">The unsolved lighthouse case</div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn">Approve</button><button class="btn ghost">Open</button></div></div>
+        <div class="card pad"><div style="display:flex;justify-content:space-between"><span class="badge b-green">F4</span><span class="chip s-review">Review</span></div><div class="title" style="margin:10px 0 4px">Why that penalty changed the race</div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn">Approve</button><button class="btn ghost">Open</button></div></div>
+      </div>
+
+      <div class="sec-title">In the queue</div>
+      <div class="card">
+        <div class="row"><span class="badge b-cyan">F7</span><span class="title">3 rulers who faked their deaths</span><span class="spacer"></span>
+          <span class="stage"><span class="dot done"></span>Script</span><span class="stage"><span class="dot done"></span>Voice</span><span class="stage"><span class="dot now"></span>Assemble</span><span class="stage"><span class="dot todo"></span>Publish</span></div>
+        <div class="row"><span class="badge b-orange">F1</span><span class="title">Top 5 overtakes of the season</span><span class="spacer"></span>
+          <span class="stage"><span class="dot done"></span>Script</span><span class="stage"><span class="dot now"></span>Voice</span><span class="stage"><span class="dot todo"></span>Assemble</span><span class="stage"><span class="dot todo"></span>Publish</span></div>
+      </div>
+
+      <div class="sec-title">Scheduled next</div>
+      <div class="card">
+        <div class="row"><span class="chip s-sched">Today 6:00pm</span><span class="title">Silverstone last-lap chaos</span><span class="spacer"></span><span class="meta">YouTube · TikTok</span></div>
+        <div class="row"><span class="chip s-sched">Tomorrow 9:00am</span><span class="title">The lighthouse keeper mystery</span><span class="spacer"></span><span class="meta">YouTube · TikTok</span></div>
+      </div>
+    </section>
+
+    <!-- ===== SETTINGS (incl. new TikTok connection card) ===== -->
+    <section class="screen" data-screen="settings">
+      <h1 class="h1">Settings</h1>
+      <p class="sub">Keys, budget and the accounts you post to.</p>
+
+      <div class="grid g2">
+        <div class="card pad">
+          <div class="title" style="margin-bottom:12px">Claude API</div>
+          <div class="field" style="margin-bottom:12px"><label>API key</label><div class="input">sk-ant-••••••••••••••••••••3f9a</div></div>
+          <div class="field"><label>Model</label><div class="input">Claude Opus (best quality)</div></div>
+        </div>
+        <div class="card pad">
+          <div class="title" style="margin-bottom:12px">Budget</div>
+          <div class="field" style="margin-bottom:12px"><label>Monthly ceiling</label><div class="input">$150 / month</div></div>
+          <div class="field"><label>Spent so far</label><div class="input">$61.40 · pauses at the cap</div></div>
+        </div>
+      </div>
+
+      <div class="sec-title">Accounts you post to</div>
+      <div class="grid g3">
+        <!-- YouTube -->
+        <div class="card pad">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b>YouTube Shorts</b><span class="chip s-fail">Reconnect</span></div>
+          <p class="meta" style="margin:8px 0 12px">Login expired — publishing paused.</p>
+          <button class="btn" style="width:100%">Reconnect</button>
+        </div>
+        <!-- TikTok (the new card this issue calls for) -->
+        <div class="card pad">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b>TikTok</b><span class="chip s-pub">Connected</span></div>
+          <p class="meta" style="margin:8px 0 12px">Posting as <b>@yourhandle</b> · private until TikTok approves the app.</p>
+          <div class="field" style="margin-bottom:10px"><label>Client key</label><div class="input">aw••••••••••••</div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px"><span>Auto-post new videos</span><span class="toggle"></span></div>
+        </div>
+        <!-- Instagram -->
+        <div class="card pad">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b>Instagram</b><span class="chip s-draft">Soon</span></div>
+          <p class="meta" style="margin:8px 0 12px">Reels support is on the roadmap.</p>
+          <button class="btn ghost" style="width:100%">Notify me</button>
+        </div>
+      </div>
+    </section>
+
+    <p class="footnote">Design draft for issue #49 · nothing here is live yet · reply with the style number you like.</p>
+  </div>
+</main>
+
+<script>
+  var root = document.documentElement;
+  var KEY = 'ce-design-drafts';
+
+  function save(){ try{ localStorage.setItem(KEY, JSON.stringify({
+    style: root.getAttribute('data-style'),
+    mode: root.getAttribute('data-mode'),
+    screen: current
+  })); }catch(e){} }
+
+  function setStyle(n){
+    root.setAttribute('data-style', n);
+    document.querySelectorAll('[data-set-style]').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-set-style') === n);
+    });
+    save();
+  }
+
+  var current = 'home';
+  function setScreen(name){
+    current = name;
+    document.querySelectorAll('[data-screen]').forEach(function(s){
+      s.classList.toggle('on', s.getAttribute('data-screen') === name);
+    });
+    document.querySelectorAll('[data-set-screen]').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-set-screen') === name);
+    });
+    document.querySelectorAll('[data-nav]').forEach(function(t){
+      t.classList.toggle('on', t.getAttribute('data-nav') === name);
+    });
+    save();
+  }
+
+  function setMode(m){
+    root.setAttribute('data-mode', m);
+    var btn = document.getElementById('modeBtn');
+    btn.textContent = m === 'dark' ? '☀ Light' : '☾ Dark';
+    save();
+  }
+
+  document.querySelectorAll('[data-set-style]').forEach(function(b){
+    b.addEventListener('click', function(){ setStyle(b.getAttribute('data-set-style')); });
+  });
+  document.querySelectorAll('[data-set-screen]').forEach(function(b){
+    b.addEventListener('click', function(){ setScreen(b.getAttribute('data-set-screen')); });
+  });
+  document.querySelectorAll('[data-nav]').forEach(function(t){
+    t.addEventListener('click', function(){ setScreen(t.getAttribute('data-nav')); });
+  });
+  document.querySelector('[data-toggle-mode]').addEventListener('click', function(){
+    setMode(root.getAttribute('data-mode') === 'dark' ? 'light' : 'dark');
+  });
+
+  // Restore the owner's last choice so a refresh keeps their place.
+  try{
+    var saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    if(saved.style) setStyle(saved.style);
+    setMode(saved.mode === 'dark' ? 'dark' : 'light');
+    setScreen(saved.screen || 'home');
+  }catch(e){ setScreen('home'); }
+
+  // Set initial nav highlight even if nothing was saved.
+  document.querySelectorAll('[data-nav]').forEach(function(t){
+    t.classList.toggle('on', t.getAttribute('data-nav') === current);
+  });
+</script>
+</body>
+</html>
