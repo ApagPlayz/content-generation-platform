@@ -66,6 +66,7 @@ export const archiveTier: Tier = async ({ query, archiveQuery, archiveQueries, b
         collections: config.archiveCollections,
         beatIndex,
         maxClips: config.archiveMaxClips,
+        stillsOnly: config.archiveStillsOnly,
       })
       const staged = await stageResult(result, dest, beatIndex)
       if (staged) return staged

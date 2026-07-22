@@ -65,10 +65,24 @@ export async function checkVariation(
   script: TrueCrimeScript,
   profile: ComplianceProfile = TRUE_CRIME_PROFILE
 ): Promise<VariationVerdict> {
-  const priors = await loadRecentSignatures(
-    profile.factoryType,
-    profile.variationWindow ?? RECENT_WINDOW
-  )
+  let priors: PriorSig[]
+  try {
+    priors = await loadRecentSignatures(
+      profile.factoryType,
+      profile.variationWindow ?? RECENT_WINDOW
+    )
+  } catch {
+    // The anti-repetition corpus is the #1 defence against YouTube's
+    // "inauthentic content" strike. If it can't be loaded (DB error, missing/
+    // unmigrated ComplianceReport table), we CANNOT prove this video is varied —
+    // so fail CLOSED and route to a human rather than silently waving it through.
+    return {
+      passed: false,
+      maxSimilarity: 0,
+      visualSimilarity: 0,
+      reasons: ['variation corpus unavailable — routing to review'],
+    }
+  }
   if (priors.length === 0) {
     return {
       passed: true,
@@ -144,42 +158,42 @@ async function loadRecentSignatures(
   factoryType: string = 'F10',
   window: number = RECENT_WINDOW
 ): Promise<PriorSig[]> {
-  try {
-    // Same-factory rows ONLY — comparing an F11 history doc against F10 crime
-    // videos (or vice versa) would poison both corpora. All pre-existing rows
-    // default to 'F10', so the default keeps historical behavior.
-    const rows = await prisma.complianceReport.findMany({
-      where: { factoryType },
-      orderBy: { createdAt: 'desc' },
-      take: window,
-      select: { report: true },
-    })
-    const sigs: PriorSig[] = []
-    for (const r of rows) {
-      try {
-        const parsed = JSON.parse(r.report) as {
-          _scriptSignature?: {
-            structure?: ScriptStructure
-            narration?: string
-            styleProfile?: { visualStyle?: string; editorialAngle?: string; hookPattern?: string }
-            visualSignature?: string[]
-          }
+  // Same-factory rows ONLY — comparing an F11 history doc against F10 crime
+  // videos (or vice versa) would poison both corpora. All pre-existing rows
+  // default to 'F10', so the default keeps historical behavior.
+  //
+  // NOTE: a DB/query error is deliberately allowed to propagate. The caller
+  // (checkVariation) turns it into a fail-CLOSED verdict — "corpus unavailable,
+  // route to review". Swallowing it here (returning []) would make an empty
+  // corpus indistinguishable from a broken one and silently pass every video.
+  const rows = await prisma.complianceReport.findMany({
+    where: { factoryType },
+    orderBy: { createdAt: 'desc' },
+    take: window,
+    select: { report: true },
+  })
+  const sigs: PriorSig[] = []
+  for (const r of rows) {
+    try {
+      const parsed = JSON.parse(r.report) as {
+        _scriptSignature?: {
+          structure?: ScriptStructure
+          narration?: string
+          styleProfile?: { visualStyle?: string; editorialAngle?: string; hookPattern?: string }
+          visualSignature?: string[]
         }
-        const sig = parsed._scriptSignature
-        if (sig?.narration)
-          sigs.push({
-            structure: sig.structure,
-            narration: sig.narration,
-            styleProfile: sig.styleProfile,
-            visualSignature: Array.isArray(sig.visualSignature) ? sig.visualSignature : undefined,
-          })
-      } catch {
-        // skip unparseable rows
       }
+      const sig = parsed._scriptSignature
+      if (sig?.narration)
+        sigs.push({
+          structure: sig.structure,
+          narration: sig.narration,
+          styleProfile: sig.styleProfile,
+          visualSignature: Array.isArray(sig.visualSignature) ? sig.visualSignature : undefined,
+        })
+    } catch {
+      // skip unparseable rows (a corrupt row is not a corpus-wide failure)
     }
-    return sigs
-  } catch {
-    // DB not migrated yet / table missing — variation check is best-effort.
-    return []
   }
+  return sigs
 }

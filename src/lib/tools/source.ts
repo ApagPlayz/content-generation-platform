@@ -1,4 +1,11 @@
 import { getGames, searchPlayers, gameExcitementScore } from '../balldontlie'
+import {
+  nextRotationCursor,
+  normalizeSubject,
+  orderByCoverageAndRotation,
+  recentCoverage,
+  type CoverageEntry,
+} from '../pipeline/coverage'
 import { classifyLeague, type LeaguePolicyConfig } from './leaguePolicy'
 import type { SourceResult, SportsStrategy } from './types'
 
@@ -29,6 +36,13 @@ function recentDates(days: number): string[] {
   return out
 }
 
+/** True when a matchup string appears in any recently-covered F9 subject. */
+function isCovered(text: string, coverage: CoverageEntry[]): boolean {
+  const norm = normalizeSubject(text)
+  if (!norm) return false
+  return coverage.some((e) => e.normalized.includes(norm))
+}
+
 async function trendingGame(config: SportsFactoryConfig): Promise<SourceResult | null> {
   const dates = recentDates(2)
   const games = (await Promise.all(dates.map(getGames))).flat()
@@ -38,7 +52,14 @@ async function trendingGame(config: SportsFactoryConfig): Promise<SourceResult |
   const scored = finished
     .map((g) => ({ game: g, score: gameExcitementScore(g) }))
     .sort((a, b) => b.score - a.score)
-  const best = scored[0]
+
+  // Dedup: prefer the best game whose matchup we haven't already covered, so
+  // two runs in the same window don't both clip the same blowout. Fail-open to
+  // the single best game when every candidate matchup was already covered.
+  const coverage = await recentCoverage({ factoryType: 'F9' })
+  const matchupOf = (x: (typeof scored)[number]) =>
+    `${x.game.visitor_team.full_name} vs ${x.game.home_team.full_name}`
+  const best = scored.find((x) => !isCovered(matchupOf(x), coverage)) ?? scored[0]
   if (best.score < (config.minExcitement ?? 40)) return null
 
   const g = best.game
@@ -64,25 +85,38 @@ async function playerCareer(config: SportsFactoryConfig): Promise<SourceResult |
   const watchlist = config.playerWatchlist ?? []
   if (watchlist.length === 0) return null
 
-  // Rotate deterministically by day so consecutive runs cover different players.
-  const pick = watchlist[new Date().getDate() % watchlist.length]
-  const players = await searchPlayers(pick)
-  const player = players[0]
-  if (!player) return null
+  // Dedup + real rotation: order the watchlist so already-covered players fall
+  // to the back and a persisted cursor advances the start point every run (the
+  // old `getDate() % length` picked the SAME player all day). Then walk the
+  // order and take the first name the API resolves to a real player. Fail-open:
+  // when every player was recently covered we still proceed with the least-
+  // recently-covered one (they lead the tail of `ordered`).
+  const coverage = await recentCoverage({ factoryType: 'F9' })
+  const cursor = await nextRotationCursor('F9:player_career')
+  const { ordered } = orderByCoverageAndRotation(watchlist, (p) => p, coverage, cursor)
 
-  const name = `${player.first_name} ${player.last_name}`
-  return {
-    strategy: 'player_career',
-    triggerReason: `Career highlights feature for ${name} (${player.team.full_name})`,
-    youtubeQuery: `${name} career highlights best plays`,
-    sourceData: { playerId: player.id, name, team: player.team.full_name },
+  for (const pick of ordered) {
+    const players = await searchPlayers(pick)
+    const player = players[0]
+    if (!player) continue
+    const name = `${player.first_name} ${player.last_name}`
+    return {
+      strategy: 'player_career',
+      triggerReason: `Career highlights feature for ${name} (${player.team.full_name})`,
+      youtubeQuery: `${name} career highlights best plays`,
+      sourceData: { playerId: player.id, name, team: player.team.full_name },
+    }
   }
+  return null
 }
 
-function trendingAudio(config: SportsFactoryConfig): SourceResult | null {
+async function trendingAudio(config: SportsFactoryConfig): Promise<SourceResult | null> {
   const audios = config.trendingAudio ?? []
   if (audios.length === 0) return null
-  const audio = audios[new Date().getDate() % audios.length]
+  // Real rotation: advance a persisted cursor so repeat same-day runs cycle
+  // through the curated audio list instead of re-using one track all day.
+  const cursor = await nextRotationCursor('F9:trending_audio')
+  const audio = audios[cursor % audios.length]
   return {
     strategy: 'trending_audio',
     triggerReason: `Beat-synced highlight mix using trending audio "${audio.name}"`,
@@ -107,7 +141,7 @@ export async function runSource(factoryConfig: Record<string, unknown>): Promise
           ? await trendingGame(config)
           : strategy === 'player_career'
             ? await playerCareer(config)
-            : trendingAudio(config)
+            : await trendingAudio(config)
       if (!result) {
         errors.push(`${strategy}: no viable trigger`)
         continue

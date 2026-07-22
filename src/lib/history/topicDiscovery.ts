@@ -17,6 +17,11 @@ import {
   DEFAULT_MIN_TOPIC_YEAR,
   pickMediaRichCandidate,
 } from '../truecrime/caseDiscovery'
+import {
+  nextRotationCursor,
+  orderByCoverageAndRotation,
+  recentCoverage,
+} from '../pipeline/coverage'
 import type { CaseSubject } from '../compliance'
 import type { CuratedTopic, F11FactoryConfig, TopicBrief } from './types'
 
@@ -160,20 +165,39 @@ async function enrichTopic(chosen: CuratedTopic): Promise<TopicBrief> {
   }
 }
 
-export async function discoverTopic(config: F11FactoryConfig): Promise<TopicBrief> {
+export async function discoverTopic(
+  config: F11FactoryConfig,
+  factoryId?: string
+): Promise<TopicBrief> {
   const watchlist = config.topicWatchlist ?? []
   if (watchlist.length === 0) {
     throw new Error('F11 factory has no topicWatchlist — add curated topics to the factory config.')
   }
 
-  // Daily rotation start, then the shared media-richness gate (round 6): each
-  // candidate is enriched (Wikipedia year + facts) and must clear the ERA
-  // floor (default 1900 — pre-photography stories have no real era footage,
-  // whatever a word-overlap search returns) AND the distinct-archive-hits
-  // floor. The first topic that clears both wins — this is what steers F11
-  // toward 1900-1980 newsreel-era stories. Fail-open: when nothing on the
-  // watchlist passes, the plain day-pick proceeds. Enrichments are cached so
-  // the accepted candidate is never fetched twice.
+  // Dedup FIRST, rotation SECOND, media-richness LAST (mirrors F10 discoverCase).
+  // Read what this factory already shipped (ComplianceReport ledger + recent
+  // Video titles), order the watchlist so covered topics fall to the back, and
+  // advance a persisted cursor so repeat same-day runs move forward. THEN the
+  // shared media-richness gate (round 6) walks that order: each candidate is
+  // enriched (Wikipedia year + facts) and must clear the ERA floor (default
+  // 1900 — pre-photography stories have no real era footage) AND the distinct-
+  // archive-hits floor. The first topic that clears both wins. Fail-open on
+  // every axis so the run always produces.
+  const coverage = await recentCoverage({ factoryType: 'F11', factoryId })
+  const cursor = await nextRotationCursor(factoryId ? `F11:${factoryId}` : 'F11')
+  const { ordered, exhausted } = orderByCoverageAndRotation(
+    watchlist,
+    (t) => t.topicName,
+    coverage,
+    cursor
+  )
+  if (exhausted) {
+    console.warn(
+      `[discover/f11] every F11 watchlist topic was recently covered — falling back to the ` +
+        `least-recently-covered topic. Curate more topics to widen the rotation.`
+    )
+  }
+
   const threshold = config.minArchiveHits ?? DEFAULT_MIN_ARCHIVE_HITS
   const briefs = new Map<CuratedTopic, TopicBrief>()
   const enrich = async (t: CuratedTopic) => {
@@ -183,11 +207,9 @@ export async function discoverTopic(config: F11FactoryConfig): Promise<TopicBrie
     briefs.set(t, brief)
     return brief
   }
-  const pick = await pickMediaRichCandidate(
-    watchlist,
-    new Date().getDate() % watchlist.length,
-    threshold,
-    async (t) => briefMediaRichness(await enrich(t), config, threshold)
+  // `ordered` already encodes exclusion + rotation, so walk it from index 0.
+  const pick = await pickMediaRichCandidate(ordered, 0, threshold, async (t) =>
+    briefMediaRichness(await enrich(t), config, threshold)
   )
   if (!pick.passed) {
     console.warn(

@@ -1,6 +1,7 @@
 import { createReadStream, existsSync } from 'fs'
 import { google } from 'googleapis'
 import { prisma } from '../prisma'
+import type { DisclosurePlan } from '../compliance/types'
 import { autoPublishEnabled, tiktokAutoPublishEnabled } from '../settings'
 import {
   authedClient,
@@ -104,6 +105,52 @@ export interface PublishResult {
   alreadyPublished: boolean
 }
 
+// The ONLY video status that may be published. A video reaches 'approved' either
+// by the manual review flow (review → approve) or by an autonomy=auto run whose
+// compliance gate passed (resolveFinalStatus returns 'approved'). Every other
+// status is a hard stop: 'rejected'/'failed' are gate/pipeline blocks that must
+// NEVER go live, and 'draft'/'queued'/'review'/'publishing' simply aren't cleared
+// yet. This is the single choke point both the manual API route and the
+// auto-publish path funnel through, so a compliance-blocked video can't slip out
+// no matter which caller invokes it. (An already-live video returns earlier via
+// the idempotency check, so 'published' never reaches here.)
+const PUBLISHABLE_STATUS = 'approved'
+
+/** Factory types whose videos always run the compliance gate — a missing report
+ *  for one of these is a real gap worth a warning, not the silent norm. */
+const GATED_FACTORY_TYPES = new Set(['F10', 'F11'])
+
+function assertPublishable(status: string): void {
+  if (status !== PUBLISHABLE_STATUS) {
+    throw new Error(
+      `This video is "${status}" — only approved videos can be published. ` +
+        'Approve it in the review inbox first.'
+    )
+  }
+}
+
+/**
+ * Read the AI-disclosure plan from the video's most recent ComplianceReport. The
+ * gate persists the full ComplianceReportJSON (including its `disclosure`
+ * DisclosurePlan) as the row's `report` JSON, linked by videoId. Returns null
+ * when no report exists (e.g. a factory that doesn't run the gate) so the caller
+ * can decide the safe default and warn when a gated factory is missing one.
+ */
+async function loadDisclosurePlan(videoId: string): Promise<DisclosurePlan | null> {
+  const row = await prisma.complianceReport.findFirst({
+    where: { videoId },
+    orderBy: { createdAt: 'desc' },
+    select: { report: true },
+  })
+  if (!row) return null
+  try {
+    const parsed = JSON.parse(row.report) as { disclosure?: DisclosurePlan }
+    return parsed.disclosure ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function publishToYouTube(videoId: string): Promise<PublishResult> {
   const video = await prisma.video.findUniqueOrThrow({
     where: { id: videoId },
@@ -123,6 +170,10 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
     }
   }
 
+  // Gate on the compliance/review decision: never publish a video that hasn't
+  // been approved (rejected, failed, draft, queued, review all stop here).
+  assertPublishable(video.status)
+
   if (!video.localPath || !existsSync(video.localPath)) {
     throw new Error('Rendered MP4 not found for this video — render it before publishing.')
   }
@@ -139,6 +190,23 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
 
   const privacy = await setting('youtube_privacy', DEFAULT_PRIVACY)
   const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
+
+  // YouTube's synthetic-content disclosure: the AI flag must be set when the
+  // compliance gate's DisclosurePlan calls for a visual OR audio AI label (e.g.
+  // realistic AI stills of the real case, or AI music). If a report exists and
+  // asks for neither, we correctly declare no synthetic media. If NO report
+  // exists for a gated factory (true crime / history), we can't prove the video
+  // is AI-free — publish without the flag but warn so the gap is visible.
+  const disclosure = await loadDisclosurePlan(videoId)
+  const containsSyntheticMedia = disclosure
+    ? disclosure.requiresAiVisualLabel || disclosure.requiresAiAudioLabel
+    : false
+  if (!disclosure && GATED_FACTORY_TYPES.has(video.factory.type)) {
+    console.warn(
+      `[publish] No ComplianceReport for ${video.factory.type} video ${videoId}; ` +
+        'publishing to YouTube without the AI-disclosure flag — verify the video has no synthetic media.'
+    )
+  }
 
   // A Short needs vertical ≤60s + "#Shorts" in title/description (PRD §8.1).
   const title = (video.title || 'Untitled').slice(0, 95)
@@ -167,6 +235,7 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
         status: {
           privacyStatus: privacy,
           selfDeclaredMadeForKids: false,
+          containsSyntheticMedia,
         },
       },
       media: { body: createReadStream(video.localPath) },
@@ -253,6 +322,10 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
       alreadyPublished: true,
     }
   }
+
+  // Gate on the compliance/review decision: never publish a video that hasn't
+  // been approved (rejected, failed, draft, queued, review all stop here).
+  assertPublishable(video.status)
 
   if (!video.localPath || !existsSync(video.localPath)) {
     throw new Error('Rendered MP4 not found for this video — render it before publishing.')

@@ -144,6 +144,12 @@ export interface F10FactoryConfig {
   archiveMaxClips?: number
   /** archive.org collections to search (e.g. ['prelinger']). */
   archiveCollections?: string[]
+  /** Restrict the archive.org search to real photographs (`mediatype:image`)
+   *  instead of the default `mediatype:(movies OR image)`. When true, no film
+   *  reels are searched, so no motion-blurred/interlaced poster-frames are
+   *  grabbed — every still is a genuine photograph. Default false/undefined =
+   *  current movies-OR-image behaviour. */
+  archiveStillsOnly?: boolean
   /** Media-richness floor at DISCOVERY (round 6): minimum distinct archive.org
    *  movie/image hits a case/topic must have before it is accepted; poorer
    *  candidates are skipped for the next watchlist entry (an 1637/1720/1882

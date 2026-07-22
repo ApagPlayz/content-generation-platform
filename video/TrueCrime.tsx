@@ -140,10 +140,20 @@ export const TrueCrime: React.FC<TrueCrimeProps> = ({
   )
 }
 
-// A single still with a slow zoom + pan and short fades at both ends. Direction
-// alternates per image so the motion doesn't feel mechanical. If Chromium can't
-// decode the image (corrupt download etc.), `onError` swaps in a styled gradient
-// frame instead of letting <Img> cancel the whole render.
+// A single still, rendered "contained" (the shorts-standard treatment that
+// mirrors the ffmpeg fallback in src/lib/truecrime/kenBurns.ts): a blurred +
+// darkened cover-fit copy of the same image fills the 9:16 frame, and the SHARP
+// original sits on top fit ENTIRELY inside the frame (objectFit:'contain'), so
+// landscape/4:3 archival photos are never center-cropped — faces and on-screen
+// text stay whole. A gentle Ken-Burns zoom/pan drifts the foreground, and short
+// fades bookend the clip. Direction alternates per image so the motion doesn't
+// feel mechanical. Applied UNCONDITIONALLY (no per-image aspect probe): the
+// composition receives only image src strings, not pixel dimensions, and a
+// blurred backdrop behind a contain-fit image looks correct for every aspect —
+// a near-9:16 portrait fills the frame with only a hair of blur at the edges,
+// while a wide still letterboxes cleanly into the blur instead of hard-cropping.
+// If Chromium can't decode the image (corrupt download etc.), `onError` swaps in
+// a styled gradient frame instead of letting <Img> cancel the whole render.
 const KenBurns: React.FC<{ src: string; durationInFrames: number; index: number }> = ({
   src,
   durationInFrames,
@@ -153,10 +163,13 @@ const KenBurns: React.FC<{ src: string; durationInFrames: number; index: number 
   const [failed, setFailed] = useState(false)
   const dir = index % 2 === 0 ? 1 : -1
 
-  const scale = interpolate(frame, [0, durationInFrames], [1.05, 1.18], {
+  // Calm zoom on the sharp foreground — 1.02→1.10 (was 1.05→1.18). A contained
+  // image has visible edges, so an aggressive zoom would swim distractingly;
+  // this reads as a slow, cinematic drift and stays within the letterbox.
+  const scale = interpolate(frame, [0, durationInFrames], [1.02, 1.1], {
     extrapolateRight: 'clamp',
   })
-  const translateX = interpolate(frame, [0, durationInFrames], [0, dir * 40], {
+  const translateX = interpolate(frame, [0, durationInFrames], [0, dir * 20], {
     extrapolateRight: 'clamp',
   })
   const fade = Math.round((durationInFrames || 30) * 0.12)
@@ -179,16 +192,38 @@ const KenBurns: React.FC<{ src: string; durationInFrames: number; index: number 
           }}
         />
       ) : (
-        <Img
-          src={src}
-          onError={() => setFailed(true)}
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            transform: `scale(${scale}) translateX(${translateX}px)`,
-          }}
-        />
+        <>
+          {/* Blurred + darkened cover-fit backdrop fills the frame so the
+              letterbox around a contained image is never bare black. The extra
+              scale() hides the transparent fringe a large blur radius leaves at
+              the edges. */}
+          <Img
+            src={src}
+            onError={() => setFailed(true)}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              transform: 'scale(1.15)',
+              filter: 'blur(28px) brightness(0.55) saturate(0.85)',
+            }}
+          />
+          {/* Sharp foreground fit ENTIRELY inside the frame — never cropped. */}
+          <Img
+            src={src}
+            onError={() => setFailed(true)}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              transform: `scale(${scale}) translateX(${translateX}px)`,
+            }}
+          />
+        </>
       )}
     </AbsoluteFill>
   )

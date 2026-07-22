@@ -334,6 +334,7 @@ export async function resolveBeatFootage(
     ladder.includes('archive') && poolQueries.length
       ? new ArchiveStillPool(poolQueries, {
           collections: config.archiveCollections,
+          stillsOnly: config.archiveStillsOnly,
           // The pool serves one DISTINCT reel per beat (slot 0) and
           // over-fetches 3× that internally so dead items can't force a
           // shortfall. Extra slots reuse the beat's own reel at a different

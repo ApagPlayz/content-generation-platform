@@ -122,6 +122,10 @@ export interface ArchiveFootageOptions {
    *  grabbed from the same reel for the same beat must land on a different
    *  timestamp, so the reuse path passes a distinct seed here. */
   seekSeed?: number
+  /** Restrict the archive.org search to `mediatype:image` (real photographs
+   *  only, no film poster-frames). Mirrors F10FactoryConfig.archiveStillsOnly.
+   *  Default false. */
+  stillsOnly?: boolean
 }
 
 export interface ArchiveFootageResult {
@@ -160,10 +164,18 @@ interface ArchiveMetadata {
 }
 
 /** archive.org Advanced Search, scoped to movies/images (+ optional collection
- *  clause). Whole-request budget + one retry; [] on any failure. Exported as
- *  the ArchivePoolDeps.search default and probe/test seam. */
-export async function archiveSearch(query: string, collections: string[], maxResults: number): Promise<ArchiveDoc[]> {
-  const qParts = [`(${query})`, 'mediatype:(movies OR image)']
+ *  clause). When `stillsOnly` is true the scope narrows to `mediatype:image`
+ *  (real photographs only — no film reels, so no motion-blurred poster-frames).
+ *  Whole-request budget + one retry; [] on any failure. Exported as the
+ *  ArchivePoolDeps.search default and probe/test seam. */
+export async function archiveSearch(
+  query: string,
+  collections: string[],
+  maxResults: number,
+  stillsOnly = false
+): Promise<ArchiveDoc[]> {
+  const mediatypeClause = stillsOnly ? 'mediatype:image' : 'mediatype:(movies OR image)'
+  const qParts = [`(${query})`, mediatypeClause]
   const collClause = collections.map((c) => c.trim()).filter(Boolean)
   if (collClause.length) qParts.push(`collection:(${collClause.join(' OR ')})`)
   const q = qParts.join(' AND ')
@@ -768,7 +780,7 @@ export async function fetchArchiveClipForBeat(
   try {
     const collections = opts.collections?.length ? opts.collections : ['prelinger']
     const maxClips = opts.maxClips && opts.maxClips > 0 ? opts.maxClips : MAX_SEARCH_RESULTS
-    const docs = (await archiveSearch(query, collections, maxClips)).slice(0, maxClips)
+    const docs = (await archiveSearch(query, collections, maxClips, opts.stillsOnly ?? false)).slice(0, maxClips)
 
     for (const doc of docs) {
       const result = await resolveDocStill(doc, opts)
@@ -806,7 +818,7 @@ export function pickNextIdentifier(
 /** Injectable seams for ArchiveStillPool so its distribution/relaxation logic
  *  is unit-testable without the network. Production uses the real helpers. */
 export interface ArchivePoolDeps {
-  search: (query: string, collections: string[], maxResults: number) => Promise<ArchiveDoc[]>
+  search: (query: string, collections: string[], maxResults: number, stillsOnly?: boolean) => Promise<ArchiveDoc[]>
   resolve: (doc: ArchiveDoc, opts: ArchiveFootageOptions, variant?: string) => Promise<ArchiveFootageResult | null>
 }
 
@@ -820,6 +832,9 @@ export interface ArchivePoolOptions {
   maxClips?: number
   /** Passed through to each resolved asset. */
   depictsRealPerson?: boolean
+  /** Restrict the pool's archive.org search to `mediatype:image` (real
+   *  photographs only). Mirrors F10FactoryConfig.archiveStillsOnly. Default false. */
+  stillsOnly?: boolean
 }
 
 /**
@@ -832,7 +847,7 @@ export interface ArchivePoolOptions {
  */
 export async function gatherArchiveDocs(
   queries: string[],
-  opts: { collections?: string[]; need: number; rows: number },
+  opts: { collections?: string[]; need: number; rows: number; stillsOnly?: boolean },
   search: ArchivePoolDeps['search'] = archiveSearch
 ): Promise<ArchiveDoc[]> {
   const collections = opts.collections?.length ? opts.collections : ['prelinger']
@@ -841,7 +856,7 @@ export async function gatherArchiveDocs(
   const gather = async (colls: string[]) => {
     for (const q of queries) {
       if (docs.length >= opts.need) return
-      for (const doc of await search(q, colls, opts.rows)) {
+      for (const doc of await search(q, colls, opts.rows, opts.stillsOnly ?? false)) {
         if (!doc.identifier || seen.has(doc.identifier)) continue
         seen.add(doc.identifier)
         docs.push(doc)
@@ -906,7 +921,7 @@ export class ArchiveStillPool {
     const rows = Math.max(maxClips, this.opts.beatCount * 3)
     this.docs = await gatherArchiveDocs(
       this.queries,
-      { collections: this.opts.collections, need: this.opts.beatCount, rows },
+      { collections: this.opts.collections, need: this.opts.beatCount, rows, stillsOnly: this.opts.stillsOnly },
       this.deps.search
     )
     return this.docs

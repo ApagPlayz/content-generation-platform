@@ -7,6 +7,11 @@
 import { countDistinctArchiveItems } from './archiveFootage'
 import { fetchJsonBudget } from './budget'
 import { archivePoolQueries } from './footage'
+import {
+  nextRotationCursor,
+  orderByCoverageAndRotation,
+  recentCoverage,
+} from '../pipeline/coverage'
 import type { CaseSubject } from '../compliance'
 import type { CaseBrief, CuratedCase, F10FactoryConfig } from './types'
 
@@ -225,17 +230,39 @@ async function enrichCase(chosen: CuratedCase): Promise<CaseBrief> {
   }
 }
 
-export async function discoverCase(config: F10FactoryConfig): Promise<CaseBrief> {
+export async function discoverCase(
+  config: F10FactoryConfig,
+  factoryId?: string
+): Promise<CaseBrief> {
   const watchlist = config.caseWatchlist ?? []
   if (watchlist.length === 0) {
     throw new Error('F10 factory has no caseWatchlist — add curated cases to the factory config.')
   }
 
-  // Daily rotation start, then the media-richness gate (round 6) walks the
-  // watchlist: each candidate is enriched (Wikipedia year + facts) and must
-  // clear the era floor AND the distinct-archive-hits floor; the first that
-  // does wins. Fail-open to the plain day-pick when none do. Enrichments are
-  // cached so the accepted candidate is never fetched twice.
+  // Dedup FIRST, rotation SECOND, media-richness LAST. We read what this factory
+  // has already shipped (ComplianceReport ledger + recent Video titles), then
+  // order the watchlist so already-covered cases fall to the back and a
+  // persisted cursor advances the start point every run (kills the "same case
+  // all day / 5× Wright Brothers" bug). Only THEN does the media-richness gate
+  // (round 6) walk that order: each candidate is enriched (Wikipedia year +
+  // facts) and must clear the era floor AND the distinct-archive-hits floor;
+  // the first that does wins. Fail-open on every axis — exhausted watchlist,
+  // no candidate meeting the floor, or a DB hiccup — the run always produces.
+  const coverage = await recentCoverage({ factoryType: 'F10', factoryId })
+  const cursor = await nextRotationCursor(factoryId ? `F10:${factoryId}` : 'F10')
+  const { ordered, exhausted } = orderByCoverageAndRotation(
+    watchlist,
+    (c) => c.caseName,
+    coverage,
+    cursor
+  )
+  if (exhausted) {
+    console.warn(
+      `[discover] every F10 watchlist case was recently covered — falling back to the ` +
+        `least-recently-covered case. Curate more cases to widen the rotation.`
+    )
+  }
+
   const threshold = config.minArchiveHits ?? DEFAULT_MIN_ARCHIVE_HITS
   const briefs = new Map<CuratedCase, CaseBrief>()
   const enrich = async (c: CuratedCase) => {
@@ -245,11 +272,9 @@ export async function discoverCase(config: F10FactoryConfig): Promise<CaseBrief>
     briefs.set(c, brief)
     return brief
   }
-  const pick = await pickMediaRichCandidate(
-    watchlist,
-    new Date().getDate() % watchlist.length,
-    threshold,
-    async (c) => briefMediaRichness(await enrich(c), config, threshold)
+  // `ordered` already encodes exclusion + rotation, so walk it from index 0.
+  const pick = await pickMediaRichCandidate(ordered, 0, threshold, async (c) =>
+    briefMediaRichness(await enrich(c), config, threshold)
   )
   if (!pick.passed) {
     console.warn(
