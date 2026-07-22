@@ -60,6 +60,22 @@ export interface TrueCrimeProps {
    *  and non-empty it overrides the even imageSrcs slideshow; when empty the
    *  composition renders the imageSrcs slideshow for backward compatibility. */
   beatClips?: BeatClip[]
+  /** HTTP(S) URL of the synthesised background-music bed, played UNDER the
+   *  narration. Absent/empty → the composition renders exactly as before (no
+   *  music), so the bed is purely additive and fully fail-soft. */
+  musicSrc?: string
+  /** Breakpoints of the music-gain automation (linear multiplier vs. absolute
+   *  seconds). The bed's `<Audio volume>` reads this so it swells with the
+   *  beats' musicIntensity curve, identically to the ffmpeg path. */
+  musicEnvelope?: MusicEnvelopePoint[]
+}
+
+/** One breakpoint of the music-gain automation. Mirrors the server-side
+ *  MusicEnvelopePoint in src/lib/truecrime/musicBed.ts (kept as a plain shape
+ *  here so the composition bundle needs no cross-boundary import). */
+export interface MusicEnvelopePoint {
+  atSec: number
+  gain: number
 }
 
 export const DEFAULT_FPS = 30
