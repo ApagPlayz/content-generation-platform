@@ -107,6 +107,87 @@ export function tiktokPermalink(handle: string, postId?: string): string {
   return postId ? `https://www.tiktok.com/@${h}/video/${postId}` : `https://www.tiktok.com/@${h}`
 }
 
+// ── Per-platform caption (issue #88) ────────────────────────────────────────
+// Reusing the same title + hashtags on TikTok that already went to YouTube is
+// the #1 named TikTok shadowban trigger ("unoriginal content / metadata that
+// matches an existing video"). The caption we send to TikTok must therefore
+// never be byte-identical to the YouTube metadata.
+
+// TikTok-native discovery tags YouTube never uses (YouTube's Shorts tag is
+// `#Shorts`). Their presence alone means a cross-posted TikTok caption can't be
+// byte-identical to the reused YouTube title/description.
+export const TIKTOK_NATIVE_TAGS = ['fyp', 'foryou', 'foryoupage'] as const
+
+// Neutral, human-sounding lead-ins rotated per video so a TikTok caption never
+// equals the bare YouTube title. Every line is a NEUTRAL framing — none asserts
+// guilt or names a perpetrator — so injecting one can never trip the true-crime
+// defamation lint, and each still reads naturally for history/sports too.
+export const TIKTOK_OPENERS = [
+  'The full story 👇',
+  "Here's how it actually unfolded:",
+  'The part most people skip:',
+  'This one stuck with me.',
+  'Breaking down what really happened.',
+  'The details worth knowing:',
+  'The story behind the headlines:',
+  'Watch to the end.',
+] as const
+
+// FNV-1a — the same deterministic-pick idiom as truecrime/styleVariation.ts,
+// inlined (not imported) so this pure string helper stays free of that module's
+// prisma dependency. Seeding by videoId makes a re-publish reproduce the same
+// caption, so the (video, platform) idempotency contract still holds.
+function fnv1a(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+/**
+ * Build a TikTok-native caption that is GUARANTEED to differ from the plain
+ * YouTube title/description (issue #88): a per-video rotating human opener +
+ * native discovery tags (#fyp …) + the video's own hashtags, deduped
+ * case-insensitively and clamped to MAX_CAPTION. Pure + seeded by videoId so
+ * it's reproducible. The opener pool is non-empty and the native tags are always
+ * present, so the result can never equal the bare YouTube title even when the
+ * video has no hashtags or no title.
+ */
+export function buildTikTokCaption(input: {
+  title?: string | null
+  hashtags?: string[]
+  videoId: string
+}): string {
+  const title = (input.title || '').trim()
+  const opener = TIKTOK_OPENERS[fnv1a(input.videoId) % TIKTOK_OPENERS.length]
+
+  // Native tags first, then the video's own — deduped case-insensitively so a
+  // hashtag list that already carries "fyp" isn't doubled. Any leading '#' is
+  // stripped before we re-prefix, so a stored "#foo" never becomes "##foo".
+  const seen = new Set<string>()
+  const tags: string[] = []
+  for (const raw of [...TIKTOK_NATIVE_TAGS, ...(input.hashtags || [])]) {
+    const clean = String(raw).replace(/^#+/, '').trim()
+    const key = clean.toLowerCase()
+    if (!clean || seen.has(key)) continue
+    seen.add(key)
+    tags.push(clean)
+  }
+
+  // Keep the opener+title hook first. If the whole thing overruns MAX_CAPTION,
+  // drop trailing tags before the hook (discovery reach degrades before the hook
+  // does), then hard-clamp as a final guard against a pathologically long title.
+  const headline = [opener, title].filter(Boolean).join(' ')
+  for (let kept = tags.length; kept >= 0; kept--) {
+    const tagLine = tags.slice(0, kept).map((t) => `#${t}`).join(' ')
+    const caption = [headline, tagLine].filter(Boolean).join('\n\n')
+    if (caption.length <= MAX_CAPTION) return caption
+  }
+  return headline.slice(0, MAX_CAPTION)
+}
+
 /** Consent URL — throws if the app isn't configured yet. */
 export async function authUrl(): Promise<string> {
   const { clientKey } = await clientCreds()
