@@ -8,10 +8,10 @@
 
 | | |
 |---|---|
-| Pull requests merged | 16 |
+| Pull requests merged | 20 (+4) |
 | Pull requests rejected | 1 |
-| **Merge rate** | **94%** |
-| Waiting on you right now | 16 |
+| **Merge rate** | **95%** |
+| Waiting on you right now | 12 |
 
 ## Is it outrunning you?
 
