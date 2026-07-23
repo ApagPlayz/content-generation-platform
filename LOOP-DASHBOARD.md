@@ -8,16 +8,16 @@
 
 | | |
 |---|---|
-| Pull requests merged | 20 (+4) |
+| Pull requests merged | 21 (+5) |
 | Pull requests rejected | 2 (+1) |
 | **Merge rate** | **91%** |
-| Waiting on you right now | 12 |
+| Waiting on you right now | 11 |
 
 ## Is it outrunning you?
 
 | | |
 |---|---|
-| Typical days to merge | 1 |
+| Typical days to merge | 0.8 |
 | Typical PR size (lines) | 295 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
