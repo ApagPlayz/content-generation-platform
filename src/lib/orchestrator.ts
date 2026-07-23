@@ -195,6 +195,12 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
           reframedVertical: Boolean(ctx.assembled),
           durationSec: ctx.assembled?.durationSec,
           shortClipMaxSec: Number(cfg.copyrightShortClipMaxSec) || undefined,
+          // Anti-repetition inputs (issue #17): the script's spoken/edit "shape",
+          // so the gate can flag a near-duplicate before it publishes.
+          hook: ctx.script?.hook,
+          description: ctx.script?.description,
+          analysis: ctx.script?.analysis,
+          hookStyle: ctx.script?.hookStyle,
         },
         { generatedAt: new Date().toISOString() }
       )

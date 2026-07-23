@@ -15,8 +15,10 @@ export interface ComplianceProfile {
   /** Factory identity, e.g. 'F10' | 'F11'. Persisted on ComplianceReport and
    *  used to scope the variation corpus to same-factory videos only. */
   factoryType: string
-  /** Gates crime-specific checks; hard safety rules apply to every kind. */
-  contentKind: 'crime' | 'history-business'
+  /** Gates crime-specific checks; hard safety rules apply to every kind. The
+   *  variation (anti-repetition) check ignores this — it reads only factoryType
+   *  + variationWindow — so 'sports' enables no crime heuristics for F9. */
+  contentKind: 'crime' | 'history-business' | 'sports'
   /** Below this target duration the gate routes to review (monetization floor). */
   minDurationSec: number
   /** How many recent same-factory reports the variation check compares against.
@@ -37,4 +39,14 @@ export const HISTORY_PROFILE: ComplianceProfile = {
   factoryType: 'F11',
   contentKind: 'history-business',
   minDurationSec: 60,
+}
+
+/** F9 Sports highlights. The full crime/history gate never runs for sports — only
+ *  the anti-repetition (variation) check does, via the copyright gate — so
+ *  contentKind and minDurationSec are inert here and only factoryType (which
+ *  scopes the corpus to F9 rows) and variationWindow are read. */
+export const SPORTS_PROFILE: ComplianceProfile = {
+  factoryType: 'F9',
+  contentKind: 'sports',
+  minDurationSec: 0,
 }
