@@ -9,8 +9,8 @@
 | | |
 |---|---|
 | Pull requests merged | 20 (+4) |
-| Pull requests rejected | 1 |
-| **Merge rate** | **95%** |
+| Pull requests rejected | 2 (+1) |
+| **Merge rate** | **91%** |
 | Waiting on you right now | 12 |
 
 ## Is it outrunning you?
@@ -18,7 +18,7 @@
 | | |
 |---|---|
 | Typical days to merge | 1 |
-| Typical PR size (lines) | 303 |
+| Typical PR size (lines) | 295 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
@@ -27,7 +27,7 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Proposals filed | 33 |
+| Proposals filed | 35 |
 | Proposals you approved | 0 |
 | **Approval rate** | **0%** |
 
