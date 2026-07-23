@@ -54,8 +54,22 @@ const config = {
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
   // keyless Wikimedia floor — so this is safe with zero API keys.
   footageLadder: ['archive'],
-  // Archive footage as stills only (no motion clips) — set for the footage stage.
+  // Archive footage as stills only for the PHOTO tier (no motion-blurred
+  // poster-frames) — the photo backbone comes from Wikipedia/Commons + archive
+  // stills. Real MOVING footage is handled by the separate clip layer below.
   archiveStillsOnly: true,
+
+  // ── Relevant moving-clip layer (2026-07) ──────────────────────────────────
+  //   Photos stay the backbone; these lay SHORT, relevance-filtered excerpts of
+  //   real on-topic footage over a few beats (archive.org movies + YouTube
+  //   fair-use news/press/documentary). Muted, attributed, hard-capped.
+  clipsEnabled: true,
+  clipSources: ['archive', 'youtube'],
+  maxClipBeats: 3,
+  maxClipOnscreenSec: 8,
+  clipRelevanceMinTokens: 1,
+  youtubeClipSearchCount: 6,
+  minClipHeight: 360,
   // Named visual styles rotated across videos for variety.
   styleRotation: ['sepia-archival', 'noir-contrast', 'muted-documentary'],
   // Editorial angles rotated to avoid "inauthentic content" sameness. History
@@ -130,6 +144,114 @@ const config = {
         { name: 'Orville Wright', role: 'investigator', living: false, isMinor: false },
         { name: 'Wilbur Wright', role: 'investigator', living: false, isMinor: false },
       ],
+    },
+    {
+      topicName: 'The Sinking of the Titanic',
+      wikipediaTitle: 'Sinking of the Titanic',
+      angle:
+        'The "unsinkable" ship that met an iceberg on its maiden voyage — 1,500 dead, too few lifeboats, and the hubris of an era that thought it had beaten the sea.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Hindenburg Disaster',
+      wikipediaTitle: 'Hindenburg disaster',
+      angle:
+        'The largest aircraft ever built burst into flame in 34 seconds on live radio — the day the age of the airship died, and why it was doomed before it flew.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Dust Bowl',
+      wikipediaTitle: 'Dust Bowl',
+      angle:
+        'How a decade of plowing the Great Plains turned the soil to dust and buried an entire region in black blizzards — a man-made catastrophe wrapped in the Depression.',
+      subjects: [],
+    },
+    {
+      topicName: 'Building the Empire State Building',
+      wikipediaTitle: 'Empire State Building',
+      angle:
+        'The tallest building on earth, thrown up in 410 days at the bottom of the Great Depression — a race against a rival skyscraper and against the market itself.',
+      subjects: [],
+    },
+    {
+      topicName: 'Building the Hoover Dam',
+      wikipediaTitle: 'Hoover Dam',
+      angle:
+        'To tame the Colorado River, thousands worked in 120-degree canyons for a bankrupt nation — engineering triumph paid for in workers’ lives.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Attack on Pearl Harbor',
+      wikipediaTitle: 'Attack on Pearl Harbor',
+      angle:
+        'The surprise dawn raid that sank a fleet at anchor and pulled America into a world war — "a date which will live in infamy" and the intelligence failures behind it.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Cuban Missile Crisis',
+      wikipediaTitle: 'Cuban Missile Crisis',
+      angle:
+        'Thirteen days in 1962 when two superpowers stood minutes from nuclear war over missiles in Cuba — and the back-channel deal that quietly pulled the world back.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Apollo 11 Moon Landing',
+      wikipediaTitle: 'Apollo 11',
+      angle:
+        'Half a billion people watched a man step onto another world with 1960s computing power weaker than a phone — the race, the risk, and "one small step."',
+      subjects: [
+        { name: 'Neil Armstrong', role: 'other', living: false, isMinor: false },
+        { name: 'Buzz Aldrin', role: 'other', living: true, isMinor: false },
+        { name: 'Michael Collins', role: 'other', living: false, isMinor: false },
+      ],
+    },
+    {
+      topicName: 'Apollo 13: The Successful Failure',
+      wikipediaTitle: 'Apollo 13',
+      angle:
+        '"Houston, we\'ve had a problem" — an oxygen tank explodes 200,000 miles from Earth, and a crippled spacecraft becomes the greatest improvised rescue in history.',
+      subjects: [
+        { name: 'Jim Lovell', role: 'other', living: true, isMinor: false },
+        { name: 'Jack Swigert', role: 'other', living: false, isMinor: false },
+        { name: 'Fred Haise', role: 'other', living: true, isMinor: false },
+      ],
+    },
+    {
+      topicName: 'The Watergate Scandal',
+      wikipediaTitle: 'Watergate scandal',
+      angle:
+        'A "third-rate burglary" unravelled into the cover-up that brought down a president — the tapes, the leaks, and the two reporters who followed the money.',
+      subjects: [
+        { name: 'Richard Nixon', role: 'other', living: false, isMinor: false },
+      ],
+    },
+    {
+      topicName: 'The Space Shuttle Challenger Disaster',
+      wikipediaTitle: 'Space Shuttle Challenger disaster',
+      angle:
+        'Seventy-three seconds after liftoff on live television, a shuttle broke apart — and the engineers who warned about a frozen rubber seal the night before were overruled.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Chernobyl Disaster',
+      wikipediaTitle: 'Chernobyl disaster',
+      angle:
+        'A late-night safety test at a Soviet reactor triggered the worst nuclear accident in history — a botched experiment, a stubborn state, and an exclusion zone that endures.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Concorde',
+      wikipediaTitle: 'Concorde',
+      angle:
+        'The supersonic airliner that crossed the Atlantic in three hours and lost money on every seat — engineering triumph, commercial folly, and the crash that grounded a dream.',
+      subjects: [],
+    },
+    {
+      topicName: 'The 1918 Spanish Flu Pandemic',
+      wikipediaTitle: 'Spanish flu',
+      angle:
+        'A flu that killed more people than the First World War, censored into silence by wartime governments — and named for the one country honest enough to report it.',
+      subjects: [],
     },
   ],
 }

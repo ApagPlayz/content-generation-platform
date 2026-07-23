@@ -3,7 +3,9 @@ import { gateVideoScript } from '../compliance'
 import { discoverCase } from './caseDiscovery'
 import { generateScript } from './script'
 import { resolveBeatFootage } from './footage'
-import { enforceMinUsableImages, sourceVisuals } from './visuals'
+import { resolveBeatClips, enforceMediaFloor, appendAttribution } from './footage/clips'
+import { buildMixedBeatFootage } from './timeline'
+import { sourceVisuals } from './visuals'
 import { synthesizeNarration } from './tts'
 import { generateCaptions } from './captions'
 import { assembleVideo } from './assemble'
@@ -138,6 +140,37 @@ export async function executeTrueCrimeRun(
           },
         })
       }
+
+      // Relevant moving-clip layer (additive): short, relevance-filtered excerpts
+      // of real on-topic footage (archive.org movies + YouTube fair-use) laid over
+      // a subset of beats. Photos stay the backbone; clips are muted and
+      // attributed. Fully fail-soft — no clips found → photos-only render.
+      if (ctx.config.clipsEnabled) {
+        const clipRes = await resolveBeatClips(ctx.videoId, ctx.script!, ctx.brief!, ctx.config)
+        ctx.beatClips = clipRes.beatClips
+        ctx.clipAttributions = clipRes.attributions
+        ctx.visuals = [...(ctx.visuals ?? []), ...clipRes.visuals] // gate lints clips too
+        for (const v of clipRes.visuals) {
+          const bi = v.beatIndex ?? 0
+          await prisma.asset.create({
+            data: {
+              videoId: ctx.videoId,
+              kind: 'clip',
+              provider: `clip-${(v.source || '').includes('youtube') ? 'youtube' : 'archive'}`,
+              localPath: clipRes.beatClips[bi]?.[0],
+              meta: JSON.stringify(v),
+            },
+          })
+        }
+        // Append a footage-credits block to the description (fair-use attribution).
+        if (clipRes.attributions.length && ctx.script) {
+          ctx.script.description = appendAttribution(ctx.script.description ?? '', clipRes.attributions)
+          await prisma.video.update({
+            where: { id: ctx.videoId },
+            data: { description: ctx.script.description },
+          })
+        }
+      }
     })
 
     // Visuals stage — now the guaranteed BACKFILL floor. Tops up any shortfall
@@ -168,11 +201,15 @@ export async function executeTrueCrimeRun(
         mergedPaths = [...mergedPaths, ...imagePaths]
       }
 
-      // Hard minimum: refuse to render a starved slideshow. Fewer than
-      // MIN_USABLE_IMAGES distinct usable images (sourcing genuinely came up
-      // short) FAILS the run with a clear error instead of shipping two
-      // pictures held for 30 s each (the owner-reported failure).
-      enforceMinUsableImages(mergedPaths.length, ctx.brief!.caseName)
+      // Hard media floor: photos remain the backbone (≥ MIN_PHOTOS) AND the
+      // combined usable-asset count (photos + relevant clips) must reach the
+      // minimum — refuse to render a starved slideshow, but let clips count
+      // toward the total now that they're real moving footage.
+      enforceMediaFloor(
+        mergedPaths.length,
+        ctx.clipAttributions?.length ?? 0,
+        ctx.brief!.caseName
+      )
 
       ctx.visuals = mergedVisuals
       ctx.imagePaths = mergedPaths
@@ -229,12 +266,21 @@ export async function executeTrueCrimeRun(
 
     await stage(ctx, 'assemble', async () => {
       await prisma.video.update({ where: { id: ctx.videoId }, data: { status: 'rendering' } })
+      // When relevant clips resolved, merge them with the photo backbone into a
+      // single mixed per-beat timeline (clip on some beats, photos everywhere);
+      // otherwise keep the existing beatFootage (usually empty → even-split
+      // photo slideshow), so the no-clip path is unchanged.
+      const photoPaths = ctx.imagePaths ?? []
+      const beatFootage =
+        ctx.beatClips && Object.keys(ctx.beatClips).length > 0
+          ? buildMixedBeatFootage(ctx.script?.beats ?? [], ctx.beatClips, photoPaths)
+          : ctx.beatFootage
       ctx.render = await assembleVideo(
-        ctx.imagePaths ?? [],
+        photoPaths,
         ctx.tts!.audioPath,
         ctx.tts!.durationSec,
         ctx.captions!,
-        { beats: ctx.script?.beats, beatFootage: ctx.beatFootage }
+        { beats: ctx.script?.beats, beatFootage, maxClipSec: ctx.config.maxClipOnscreenSec }
       )
       // Fail loud: an empty render must never be marked done or published.
       // Throwing lets stage() retry, then the run is marked failed with a

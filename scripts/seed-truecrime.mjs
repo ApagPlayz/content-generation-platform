@@ -41,8 +41,22 @@ const config = {
   // Each tier no-ops without its key/flag, then the visuals stage backfills the
   // keyless Wikimedia floor — so this is safe with zero API keys.
   footageLadder: ['archive'],
-  // Archive footage as stills only (no motion clips) — set for the footage stage.
+  // Archive footage as stills only for the PHOTO tier (no motion-blurred
+  // poster-frames) — the photo backbone comes from Wikipedia/Commons + archive
+  // stills. Real MOVING footage is handled by the separate clip layer below.
   archiveStillsOnly: true,
+
+  // ── Relevant moving-clip layer (2026-07) ──────────────────────────────────
+  //   Photos stay the backbone; these lay SHORT, relevance-filtered excerpts of
+  //   real on-topic footage over a few beats (archive.org movies + YouTube
+  //   fair-use news/court/bodycam/documentary). Muted, attributed, hard-capped.
+  clipsEnabled: true,
+  clipSources: ['archive', 'youtube'],
+  maxClipBeats: 3,
+  maxClipOnscreenSec: 8,
+  clipRelevanceMinTokens: 1,
+  youtubeClipSearchCount: 6,
+  minClipHeight: 360,
   // Named visual styles rotated across videos for variety.
   styleRotation: ['sepia-archival', 'noir-contrast', 'muted-documentary'],
   // Editorial angles rotated to avoid "inauthentic content" sameness.
@@ -82,6 +96,85 @@ const config = {
       subjects: [
         { name: 'Hawley Harvey Crippen', role: 'convicted', living: false, isMinor: false },
       ],
+    },
+    {
+      caseName: 'The D. B. Cooper Hijacking',
+      wikipediaTitle: 'D. B. Cooper',
+      angle: 'The only unsolved skyjacking in US history — a man, a parachute, and $200,000 gone into the night.',
+      subjects: [],
+    },
+    {
+      caseName: 'The Zodiac Killer',
+      wikipediaTitle: 'Zodiac Killer',
+      angle: 'The taunting ciphers of a killer who was never caught — and the codes amateurs still crack decades later.',
+      subjects: [],
+    },
+    {
+      caseName: 'The Black Dahlia',
+      wikipediaTitle: 'Black Dahlia',
+      angle: "Hollywood's most infamous cold case — how a 1947 murder became an unsolvable legend.",
+      subjects: [
+        { name: 'Elizabeth Short', role: 'victim', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'The Golden State Killer',
+      wikipediaTitle: 'Golden State Killer',
+      angle: 'How a genealogy database finally unmasked a serial predator four decades after the crimes went cold.',
+      subjects: [
+        { name: 'Joseph James DeAngelo', role: 'convicted', living: true, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'The Great Train Robbery of 1963',
+      wikipediaTitle: 'Great Train Robbery (1963)',
+      angle: 'The £2.6 million heist that gripped Britain — meticulous planning undone by a single set of fingerprints.',
+      subjects: [
+        { name: 'Ronnie Biggs', role: 'convicted', living: false, isMinor: false },
+        { name: 'Bruce Reynolds', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'The 1962 Alcatraz Escape',
+      wikipediaTitle: 'June 1962 Alcatraz escape',
+      angle: 'Papier-mâché heads, a raft of raincoats, and three men who vanished from the inescapable island.',
+      subjects: [
+        { name: 'Frank Morris', role: 'convicted', living: false, isMinor: false },
+        { name: 'John Anglin', role: 'convicted', living: false, isMinor: false },
+        { name: 'Clarence Anglin', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'Bonnie and Clyde',
+      wikipediaTitle: 'Bonnie and Clyde',
+      angle: 'The Depression-era outlaw couple the public romanticised — and the ambush that ended the legend.',
+      subjects: [
+        { name: 'Bonnie Parker', role: 'accused', living: false, isMinor: false },
+        { name: 'Clyde Barrow', role: 'accused', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'Al Capone',
+      wikipediaTitle: 'Al Capone',
+      angle: 'The most feared mob boss in America, brought down not by murder charges but by his tax returns.',
+      subjects: [
+        { name: 'Al Capone', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'Sacco and Vanzetti',
+      wikipediaTitle: 'Sacco and Vanzetti',
+      angle: 'Whether two immigrant anarchists were convicted on evidence or on politics.',
+      subjects: [
+        { name: 'Nicola Sacco', role: 'convicted', living: false, isMinor: false },
+        { name: 'Bartolomeo Vanzetti', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'Jack the Ripper',
+      wikipediaTitle: 'Jack the Ripper',
+      angle: "London's Whitechapel murders — the unidentified killer whose legend built modern true crime.",
+      subjects: [],
     },
   ],
 }

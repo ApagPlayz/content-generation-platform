@@ -150,20 +150,16 @@ export interface F10FactoryConfig {
    *  grabbed — every still is a genuine photograph. Default false/undefined =
    *  current movies-OR-image behaviour. */
   archiveStillsOnly?: boolean
-  /** Media-richness floor at DISCOVERY (round 6): minimum distinct archive.org
-   *  movie/image hits a case/topic must have before it is accepted; poorer
-   *  candidates are skipped for the next watchlist entry (an 1637/1720/1882
-   *  story with no era footage makes a bad video no matter what the pipeline
-   *  does downstream). Default 8 (DEFAULT_MIN_ARCHIVE_HITS in caseDiscovery);
-   *  set 0 to disable the gate. */
-  minArchiveHits?: number
-  /** Era floor at DISCOVERY (round 6): a story whose Wikipedia-extracted year
-   *  is BEFORE this is skipped — pre-1900 topics predate photography/newsreels
-   *  and cannot be illustrated with real era footage no matter how many
-   *  word-overlap search hits they get. Default 1900 (DEFAULT_MIN_TOPIC_YEAR);
-   *  set 0 to disable. Stories with no detectable year pass this check and are
-   *  judged on media richness alone. */
-  minTopicYear?: number
+  /** Image-viability floor at DISCOVERY: minimum DISTINCT usable images a
+   *  case/topic's Wikipedia article must carry to be accepted — the source the
+   *  render actually draws from (with archiveStillsOnly the archive.org counts
+   *  are ~zero for every topic). A candidate that can't clear this is skipped
+   *  for the next uncovered watchlist entry, and if NONE is viable the run fails
+   *  visibly rather than shipping a starved slideshow. Default MIN_USABLE_IMAGES
+   *  (5, DEFAULT_MIN_USABLE_IMAGES in caseDiscovery). Replaces the retired
+   *  archive.org-hits and era floors — the era guidance now lives only in the
+   *  playbook prompt, since a human curates the watchlist. */
+  minUsableImages?: number
 
   /** AI image model id (e.g. 'gpt-image-1'). */
   aiImageModel?: string
@@ -184,6 +180,46 @@ export interface F10FactoryConfig {
   enableEditorialLayer?: boolean
   /** Enable the mood-bank b-roll layer/tier. Default true (enabled); set false to skip it. */
   moodBankEnabled?: boolean
+
+  // ── Relevant moving-clip layer (rebuilt 2026-07-22) ──────────────────────────
+  //    Photos stay the backbone (Wikipedia/Commons via visuals.ts). This layer
+  //    is ADDITIVE: it lays SHORT, RELEVANCE-FILTERED moving clips over a subset
+  //    of beats — real on-topic footage of the actual story (archive.org
+  //    newsreels/gov film + YouTube news/press/court/bodycam excerpts), never
+  //    generic era mood b-roll. Every clip is a short fair-use excerpt, muted
+  //    (narration + music are the only audio), attributed in the description.
+
+  /** Master switch for the relevant moving-clip layer. Photos remain the
+   *  backbone; clips are additive on at most `maxClipBeats` beats. Default false. */
+  clipsEnabled?: boolean
+  /** Ordered clip providers to try. 'archive' = archive.org movies (keyless);
+   *  'youtube' = short fair-use excerpts via yt-dlp (needs yt-dlp on PATH).
+   *  Default ['archive','youtube']. */
+  clipSources?: string[]
+  /** Max beats that receive a moving clip (keeps photos the visible majority).
+   *  Default 3. */
+  maxClipBeats?: number
+  /** Minimum distinct on-topic tokens a candidate clip's title must match to be
+   *  accepted (the strict relevance floor; the event year alone never counts).
+   *  Default 1. */
+  clipRelevanceMinTokens?: number
+  /** Hard cap (seconds) on any single clip's on-screen time — a genre/fair-use
+   *  convention enforced IN CODE, never a suggestion. Default 8 (never > 10). */
+  maxClipOnscreenSec?: number
+  /** How many YouTube candidates to weigh per topic (yt-dlp ytsearchN). Default 6. */
+  youtubeClipSearchCount?: number
+  /** Minimum decoded video height (px) for a usable clip derivative — rejects
+   *  tiny/awful transcodes. Default 360. */
+  minClipHeight?: number
+}
+
+/** Provenance for one sourced clip — appended to the video description as an
+ *  attribution line and logged as Asset meta (fair-use convention). */
+export interface ClipAttribution {
+  source: 'archive' | 'youtube'
+  title: string
+  channel?: string
+  url: string
 }
 
 /**
@@ -278,6 +314,11 @@ export interface F10Context {
   imagePaths?: string[]
   /** Resolved footage paths per beat index; consumed by the assemble timeline. */
   beatFootage?: Record<number, string[]>
+  /** Relevant moving clips resolved per beat index (paths to trimmed, muted
+   *  .mp4 excerpts). Merged with the photo backbone into the render timeline. */
+  beatClips?: Record<number, string[]>
+  /** Attribution records for every sourced clip (title/channel/url). */
+  clipAttributions?: ClipAttribution[]
   complianceDecision?: 'pass' | 'route_to_review' | 'block'
   tts?: TtsResult
   captions?: CaptionsResult

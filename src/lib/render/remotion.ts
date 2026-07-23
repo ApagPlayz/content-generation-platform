@@ -234,7 +234,7 @@ export async function renderTrueCrime(
   audioPath: string,
   durationSec: number,
   captions: CaptionsResult,
-  opts?: { beats?: ScriptBeat[]; beatFootage?: Record<number, string[]> }
+  opts?: { beats?: ScriptBeat[]; beatFootage?: Record<number, string[]>; maxClipSec?: number }
 ): Promise<RenderResult> {
   const dir = path.dirname(audioPath)
   const outputPath = path.join(dir, 'final.mp4')
@@ -272,7 +272,7 @@ export async function renderTrueCrime(
       inSec: number
     }[] = []
     if (opts?.beats && opts.beats.length > 0 && beatFootage && Object.keys(beatFootage).length > 0) {
-      const segments = buildBeatTimeline(opts.beats, beatFootage, durationSec)
+      const segments = buildBeatTimeline(opts.beats, beatFootage, durationSec, opts.maxClipSec)
       const spans = toCumulativeFrames(segments, FPS)
       beatClips = segments.map((seg, i) => ({
         src: url(seg.assetPath),
