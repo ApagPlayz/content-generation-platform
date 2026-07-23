@@ -326,6 +326,12 @@ export async function renderTrueCrime(
       codec: 'h264',
       outputLocation: outputPath,
       inputProps,
+      // Archive-sourced clips decode slowly in OffthreadVideo (sparse keyframes
+      // in old newsreel encodes); the 30s default timed out at the first clip
+      // frame and silently dropped the whole render to the caption-less ffmpeg
+      // fallback. Clips are also re-encoded at download (footage/clips.ts), so
+      // this is belt-and-braces.
+      timeoutInMilliseconds: 120_000,
     })
   } finally {
     fileServer.close()

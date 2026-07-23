@@ -34,6 +34,40 @@ import { MAX_CLIP_ONSCREEN_SEC } from '../timeline'
 import { MIN_USABLE_IMAGES } from '../visuals'
 import type { VisualAsset } from '../../compliance'
 import type { CaseBrief, ClipAttribution, F10FactoryConfig, F10Script } from '../types'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+import { rename, rm } from 'fs/promises'
+
+const exec = promisify(execFile)
+
+/**
+ * Re-encode a downloaded clip to a renderer-friendly baseline: h264/yuv420p,
+ * 30fps, dense keyframes, no audio (clips are always muted under narration),
+ * faststart. Old archive.org derivatives carry sparse-keyframe encodes that
+ * made Remotion's OffthreadVideo time out per frame and silently drop the
+ * whole render to the caption-less ffmpeg fallback.
+ * Overwrites `dest` in place; returns false (and keeps the original) on error.
+ */
+async function normalizeClip(dest: string): Promise<boolean> {
+  const tmp = dest.replace(/\.mp4$/, '.norm.mp4')
+  try {
+    await exec('ffmpeg', [
+      '-y', '-v', 'error',
+      '-i', dest,
+      '-an',
+      '-vf', "scale='min(1080,iw)':-2,fps=30,format=yuv420p",
+      '-c:v', 'libx264', '-preset', 'fast', '-crf', '20',
+      '-g', '30', '-keyint_min', '30',
+      '-movflags', '+faststart',
+      tmp,
+    ], { timeout: 120_000 })
+    await rename(tmp, dest)
+    return true
+  } catch {
+    await rm(tmp, { force: true }).catch(() => {})
+    return false
+  }
+}
 
 /** Never download more than this many seconds from ONE source (fair-use cap;
  *  the render timeline caps ON-SCREEN time even lower at MAX_CLIP_ONSCREEN_SEC). */
@@ -296,6 +330,9 @@ export async function resolveBeatClips(
       ok = false
     }
     if (!ok) continue
+    // Best-effort: a failed normalize keeps the raw download (the render
+    // timeout bump in render/remotion.ts covers slow-decoding originals).
+    await normalizeClip(dest)
     const attribution: ClipAttribution = {
       source: cand.source,
       title: cand.title,
