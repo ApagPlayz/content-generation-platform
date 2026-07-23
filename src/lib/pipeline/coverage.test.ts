@@ -16,6 +16,7 @@ import {
   selectViableCandidate,
   NoViableCandidateError,
   COVERED_COOLDOWN_DAYS,
+  RECENT_BAND_SIZE,
   type CoverageEntry,
 } from './coverage'
 
@@ -328,5 +329,123 @@ describe('nextRotationCursor', () => {
       },
     }
     expect(await nextRotationCursor('F10', db)).toBe(new Date().getDate())
+  })
+})
+
+// Recency-first ordering (the owner directive "stop picking old topics"): among
+// UNCOVERED candidates, order newest event-year first so modern, footage-rich
+// stories lead; the cursor rotates only WITHIN the newest band (RECENT_BAND_SIZE)
+// so a same-day rerun varies which recent story it opens with WITHOUT ever
+// dropping into the ancient tail while recent candidates remain. Covered
+// candidates keep their LRU fail-open tail — recency never promotes them.
+describe('orderByCoverageAndRotation — recency mode (yearOf)', () => {
+  type Topic = { name: string; year?: number }
+  const t = (name: string, year?: number): Topic => ({ name, year })
+  const nameOf = (c: Topic) => c.name
+  const yearOf = (c: Topic) => c.year
+  // Deliberately NOT in year order in the source list — recency must sort it.
+  const list: Topic[] = [
+    t('Titanic', 1912),
+    t('Fukushima', 2011),
+    t('BerlinWall', 1989),
+    t('Katrina', 2005),
+    t('Dahmer', 1991),
+    t('Concorde', 2000),
+    t('DustBowl', 1934),
+    t('DeepwaterHorizon', 2010),
+    t('Ripper', 1888),
+    t('Columbia', 2003),
+  ]
+  const yearsDesc = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0)).map((c) => c.name)
+
+  it('orders uncovered candidates NEWEST event-year first (old topics fall to the back)', () => {
+    const { ordered } = orderByCoverageAndRotation(list, nameOf, [], 0, { yearOf })
+    expect(ordered.map(nameOf)).toEqual(yearsDesc)
+    // The three most-ancient never lead when recent uncovered candidates exist.
+    expect(ordered.slice(0, 3).map(nameOf)).toEqual(['Fukushima', 'DeepwaterHorizon', 'Katrina'])
+    expect(ordered.slice(-3).map(nameOf)).toEqual(['DustBowl', 'Titanic', 'Ripper'])
+  })
+
+  it('rotates the cursor only WITHIN the newest band, never into the ancient tail', () => {
+    // band = RECENT_BAND_SIZE (8) of 10 uncovered. cursor 1 starts at the 2nd
+    // newest; the two oldest (DustBowl 1934, Titanic 1912, Ripper 1888 — the
+    // beyond-band tail) stay pinned at the back in newest-first order.
+    const band = yearsDesc.slice(0, RECENT_BAND_SIZE)
+    const tail = yearsDesc.slice(RECENT_BAND_SIZE)
+    const { ordered } = orderByCoverageAndRotation(list, nameOf, [], 1, { yearOf })
+    const expected = [...band.slice(1), ...band.slice(0, 1), ...tail]
+    expect(ordered.map(nameOf)).toEqual(expected)
+    // Whatever the cursor, the head is always one of the newest band members…
+    expect(band).toContain(ordered[0].name)
+    // …and the beyond-band tail is never rotated to the front.
+    expect(ordered.map(nameOf).slice(-tail.length)).toEqual(tail)
+  })
+
+  it('a small custom recentBandSize narrows which candidates the cursor cycles', () => {
+    // band = 3 newest (Fukushima, DeepwaterHorizon, Katrina); cursor 2 → 3rd wins.
+    const { ordered } = orderByCoverageAndRotation(list, nameOf, [], 2, {
+      yearOf,
+      recentBandSize: 3,
+    })
+    expect(ordered[0].name).toBe('Katrina')
+    expect(ordered.slice(0, 3).map(nameOf)).toEqual(['Katrina', 'Fukushima', 'DeepwaterHorizon'])
+    // Everything from the 4th newest onward stays in strict newest-first order.
+    expect(ordered.slice(3).map(nameOf)).toEqual(yearsDesc.slice(3))
+  })
+
+  it('keeps COVERED candidates in the LRU tail — recency never promotes them', () => {
+    // Fukushima (the newest) was covered → it must NOT lead; it drops behind every
+    // uncovered candidate, and the uncovered head is still newest-first.
+    const coverage = [cov('Fukushima', '2026-07-20')]
+    const { ordered, exhausted } = orderByCoverageAndRotation(list, nameOf, coverage, 0, { yearOf })
+    expect(exhausted).toBe(false)
+    expect(ordered[0].name).not.toBe('Fukushima')
+    expect(ordered[ordered.length - 1].name).toBe('Fukushima') // covered → tail
+    // The uncovered head, minus Fukushima, is still ordered newest-first.
+    const uncoveredOrder = yearsDesc.filter((n) => n !== 'Fukushima')
+    expect(ordered.slice(0, uncoveredOrder.length).map(nameOf)).toEqual(uncoveredOrder)
+  })
+
+  it('sorts entries with an undefined year LAST (as oldest), keeping known years newest-first', () => {
+    const withMissing: Topic[] = [t('NoYear'), t('Recent', 2020), t('Old', 1950)]
+    const { ordered } = orderByCoverageAndRotation(withMissing, nameOf, [], 0, { yearOf })
+    expect(ordered.map(nameOf)).toEqual(['Recent', 'Old', 'NoYear'])
+  })
+
+  it('is stable for equal years (ties keep original watchlist order)', () => {
+    const ties: Topic[] = [t('A', 1989), t('B', 1989), t('C', 1989)]
+    // Small band so the cursor can start mid-tie; band=3, cursor 1 → B, C, A.
+    const { ordered } = orderByCoverageAndRotation(ties, nameOf, [], 1, { yearOf })
+    expect(ordered.map(nameOf)).toEqual(['B', 'C', 'A'])
+    // cursor 0 preserves the original order exactly.
+    expect(
+      orderByCoverageAndRotation(ties, nameOf, [], 0, { yearOf }).ordered.map(nameOf)
+    ).toEqual(['A', 'B', 'C'])
+  })
+
+  it('the recency ordering feeds selectViableCandidate so the NEWEST viable uncovered case wins', async () => {
+    // End-to-end contract: order by recency, then the existing viability walk
+    // returns the first viable one — i.e. the newest uncovered viable candidate.
+    const { ordered } = orderByCoverageAndRotation(list, nameOf, [], 0, { yearOf })
+    const images: Record<string, number> = {
+      Fukushima: 15,
+      DeepwaterHorizon: 25,
+      Katrina: 19,
+      Columbia: 14,
+      Concorde: 5,
+    }
+    const pick = await selectViableCandidate(ordered, {
+      nameOf,
+      coverage: [],
+      imageCountOf: async (c) => images[c.name] ?? 0,
+      minImages: 5,
+      now: at('2026-07-22').getTime(),
+    })
+    expect(pick.chosen.name).toBe('Fukushima') // newest uncovered viable case
+    expect(pick.wasCovered).toBe(false)
+  })
+
+  it('exposes an 8-topic default recent band', () => {
+    expect(RECENT_BAND_SIZE).toBe(8)
   })
 })

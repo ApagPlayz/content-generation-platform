@@ -33,6 +33,7 @@ import { mkdir, unlink, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
 import { fetchBufferBudget, fetchJsonBudget } from './budget'
+import { judgeVisualCandidates, MAX_JUDGE_CANDIDATES, type JudgeCandidate, type JudgeVerdict } from './visualJudge'
 import type { AssetLicense, VisualAsset } from '../compliance'
 import type { CaseBrief } from './types'
 
@@ -107,6 +108,49 @@ export function enforceMinUsableImages(count: number, topic: string, min = MIN_U
         `not rendering a starved slideshow (need ≥ ${min})`
     )
   }
+}
+
+// ── AI relevance vetting (photos) ───────────────────────────────────────────
+
+/** AI relevance judge over the ranked photo pool. Returns a keep/reject verdict
+ *  per candidate (index into the passed list). Injectable for offline tests. */
+export type PhotoJudge = (
+  topic: string,
+  angle: string,
+  candidates: JudgeCandidate[],
+  videoId: string
+) => Promise<JudgeVerdict[]>
+
+/** Default photo judge: the real Claude judge (keep-all fallback when keyless). */
+const defaultPhotoJudge: PhotoJudge = (topic, angle, cands, videoId) =>
+  judgeVisualCandidates(topic, angle, cands, 'photo', { videoId, model: 'sonnet5' })
+
+/**
+ * Partition a heuristically-ranked photo pool by the AI verdicts and pick up to
+ * `maxImages`, judged-good first. If judging leaves fewer good photos than
+ * `maxImages`, backfill from the unjudged remainder then the judged-rejected set
+ * (best heuristic order) rather than starving the run — `usedFallback` flags
+ * that this happened so the caller can log it. Candidates past the judged window
+ * (index ≥ verdicts.length) are treated as unjudged. Pure; exported for tests.
+ */
+export function selectJudgedPhotos<T>(
+  ranked: T[],
+  verdicts: JudgeVerdict[],
+  maxImages: number
+): { chosen: T[]; usedFallback: boolean } {
+  const keep = new Set(verdicts.filter((v) => v.keep).map((v) => v.index))
+  const kept: T[] = []
+  const unjudged: T[] = []
+  const rejected: T[] = []
+  ranked.forEach((c, i) => {
+    if (i >= verdicts.length) unjudged.push(c)
+    else if (keep.has(i)) kept.push(c)
+    else rejected.push(c)
+  })
+  // Preference: judged-good → unjudged tail → judged-bad (all in heuristic order).
+  const chosen = [...kept, ...unjudged, ...rejected].slice(0, maxImages)
+  const keptUsed = Math.min(kept.length, chosen.length)
+  return { chosen, usedFallback: chosen.length > keptUsed }
 }
 
 /**
@@ -419,7 +463,8 @@ function candidateKey(c: ImageCandidate): string {
 export async function sourceVisuals(
   videoId: string,
   brief: CaseBrief,
-  maxImages = 6
+  maxImages = 6,
+  judge: PhotoJudge = defaultPhotoJudge
 ): Promise<{ visuals: VisualAsset[]; imagePaths: string[] }> {
   const subjectNames = new Set(
     brief.subjects
@@ -466,16 +511,40 @@ export async function sourceVisuals(
   }
 
   // Rank most-relevant first, then public-domain / CC0, then by resolution
-  // (bigger = better upscale), capped at maxImages — so generic template images
-  // are dropped whenever enough on-topic ones exist.
-  const ranked = collected
-    .sort(
-      (a, b) =>
-        b.relevance - a.relevance ||
-        licenseRank(a.license) - licenseRank(b.license) ||
-        (b.width ?? 0) - (a.width ?? 0)
-    )
-    .slice(0, maxImages)
+  // (bigger = better upscale) — so generic template images sink below on-topic
+  // ones.
+  const sorted = collected.sort(
+    (a, b) =>
+      b.relevance - a.relevance ||
+      licenseRank(a.license) - licenseRank(b.license) ||
+      (b.width ?? 0) - (a.width ?? 0)
+  )
+
+  // AI relevance vetting BEFORE download: reject visually-meaningless stills the
+  // quality floor can't catch (book covers, autograph pages, generic objects)
+  // and off-topic keyword matches. Judge the top slice, keep judged-good first,
+  // and backfill heuristically if strictness would starve the >=5/>=3 floor
+  // rather than failing the run. Fail-soft: keeps all on any error / no key.
+  let ranked = sorted.slice(0, maxImages)
+  try {
+    const window = sorted.slice(0, MAX_JUDGE_CANDIDATES)
+    const jc: JudgeCandidate[] = window.map((c) => ({
+      title: c.title.replace(/^file:/i, ''),
+      source: 'wikimedia',
+    }))
+    const verdicts = await judge(brief.caseName, brief.angle ?? '', jc, videoId)
+    const { chosen, usedFallback } = selectJudgedPhotos(sorted, verdicts, maxImages)
+    ranked = chosen
+    if (usedFallback) {
+      console.warn(
+        `[visuals] AI judge kept fewer than ${maxImages} on-topic photos for "${brief.caseName}" — ` +
+          `backfilled with best heuristic remainder to hold the floor`
+      )
+    }
+  } catch (err) {
+    console.warn(`[visuals] photo judging failed (${(err as Error)?.message ?? err}) — heuristic ordering`)
+    ranked = sorted.slice(0, maxImages)
+  }
 
   const dir = path.join(MEDIA_DIR, videoId)
   await mkdir(dir, { recursive: true })

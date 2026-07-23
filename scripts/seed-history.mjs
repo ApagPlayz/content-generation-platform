@@ -1,10 +1,13 @@
 // Seeds the F11 History & Business Mini-Docs factory + its agent. Idempotent.
 // Run with: node scripts/seed-history.mjs
 //
-// Topics are curated pre-1950 historical/business stories — public-record,
-// public-domain-visual, no living principals — the safe profile the compliance
-// gate is built around. Framing is business-story: greed, bubbles, hubris,
-// invention.
+// Topics are curated public-record, public-domain-visual historical/business
+// stories. Every entry has an `eventYear`; discovery prefers the NEWEST years
+// first (modern events — the 2008 crash, Deepwater Horizon, Fukushima, Katrina,
+// 9/11, the fall of the Berlin Wall … — have abundant public video & photos),
+// falling back to the pre-1950 classics only once the recent band is exhausted
+// or on cooldown. Framing is story-arc: greed, bubbles, hubris, invention,
+// disaster.
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -79,135 +82,132 @@ const config = {
   enableEditorialLayer: true,
   // Mood-bank b-roll layer — dormant by default.
   moodBankEnabled: true,
+  // Every entry carries an `eventYear` (the event / founding / collapse). Among
+  // UNCOVERED, image-viable topics, discovery now prefers the NEWEST years first
+  // (modern stories have abundant public video & photos), so the 1979–2011
+  // additions below lead the rotation and the pre-1950 classics fall to the back
+  // until the recent band is exhausted or on cooldown.
   topicWatchlist: [
+    // ── Recent, image-rich modern stories (1979–2011) ────────────────────────
     {
-      topicName: 'The Ponzi Scheme of 1920',
-      wikipediaTitle: 'Charles Ponzi',
+      topicName: 'The 2008 Financial Crisis',
+      wikipediaTitle: 'Financial crisis of 2007–2008',
+      eventYear: 2008,
       angle:
-        'How one man’s 45-day money-doubling promise collapsed in months — and gave every scam since his name. Greed as a business model.',
+        'A market built on subprime mortgages and exotic derivatives seized overnight — Lehman Brothers collapsed, credit froze worldwide, and taxpayers were handed the bill. Greed, leverage, and the meltdown that redrew global finance.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Fukushima Nuclear Disaster',
+      wikipediaTitle: 'Fukushima nuclear accident',
+      eventYear: 2011,
+      angle:
+        'A magnitude-9 earthquake and a 15-metre tsunami knocked out the cooling at a Japanese power plant, and three reactors melted down — the worst nuclear accident since Chernobyl, and the sea wall that was built too short.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Deepwater Horizon Oil Spill',
+      wikipediaTitle: 'Deepwater Horizon oil spill',
+      eventYear: 2010,
+      angle:
+        'A rig explosion killed 11 workers and spewed 4 million barrels of oil into the Gulf of Mexico for 87 days — the largest marine spill in history, and the cut corners that let it happen.',
+      subjects: [],
+    },
+    {
+      topicName: 'Hurricane Katrina',
+      wikipediaTitle: 'Hurricane Katrina',
+      eventYear: 2005,
+      angle:
+        'The storm was survivable; the failure of the levees was not. How engineering shortcuts and a botched response drowned New Orleans and exposed a nation to itself.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Space Shuttle Columbia Disaster',
+      wikipediaTitle: 'Space Shuttle Columbia disaster',
+      eventYear: 2003,
+      angle:
+        'A chunk of foam the size of a briefcase struck a wing at launch — and 16 days later a shuttle disintegrated over Texas on re-entry. The warning that was waved away, seventeen years after Challenger.',
+      subjects: [],
+    },
+    {
+      topicName: 'The September 11 Attacks',
+      wikipediaTitle: 'September 11 attacks',
+      eventYear: 2001,
+      angle:
+        'Four hijacked airliners, 102 minutes, and the day the modern world changed on live television — the intelligence that was missed and the towers that fell.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Concorde Crash',
+      wikipediaTitle: 'Air France Flight 4590',
+      eventYear: 2000,
+      angle:
+        'A strip of metal fallen from another plane on the runway shredded a tyre, ruptured a fuel tank, and brought down the fastest airliner ever built — the crash that began the end of supersonic passenger flight.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Fall of the Berlin Wall',
+      wikipediaTitle: 'Fall of the Berlin Wall',
+      eventYear: 1989,
+      angle:
+        'A bungled press conference, a single misspoken sentence, and a crowd that simply walked through — the night a divided city tore down the Cold War with hammers and bare hands.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Exxon Valdez Oil Spill',
+      wikipediaTitle: 'Exxon Valdez oil spill',
+      eventYear: 1989,
+      angle:
+        'A supertanker ran aground on a charted reef in pristine Alaskan waters and spilled 11 million gallons of crude — a single wrong turn, an absent captain, and a coastline scarred for decades.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Three Mile Island Accident',
+      wikipediaTitle: 'Three Mile Island accident',
+      eventYear: 1979,
+      angle:
+        'A stuck valve and a misread gauge brought a Pennsylvania reactor within hours of catastrophe — the partial meltdown that froze the American nuclear industry for a generation.',
+      subjects: [],
+    },
+    // ── Late-20th-century turning points (1962–1986) ─────────────────────────
+    {
+      topicName: 'The Chernobyl Disaster',
+      wikipediaTitle: 'Chernobyl disaster',
+      eventYear: 1986,
+      angle:
+        'A late-night safety test at a Soviet reactor triggered the worst nuclear accident in history — a botched experiment, a stubborn state, and an exclusion zone that endures.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Space Shuttle Challenger Disaster',
+      wikipediaTitle: 'Space Shuttle Challenger disaster',
+      eventYear: 1986,
+      angle:
+        'Seventy-three seconds after liftoff on live television, a shuttle broke apart — and the engineers who warned about a frozen rubber seal the night before were overruled.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Concorde',
+      wikipediaTitle: 'Concorde',
+      eventYear: 1976,
+      angle:
+        'The supersonic airliner that crossed the Atlantic in three hours and lost money on every seat — engineering triumph, commercial folly, and the dream that never paid for itself.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Watergate Scandal',
+      wikipediaTitle: 'Watergate scandal',
+      eventYear: 1972,
+      angle:
+        'A "third-rate burglary" unravelled into the cover-up that brought down a president — the tapes, the leaks, and the two reporters who followed the money.',
       subjects: [
-        { name: 'Charles Ponzi', role: 'convicted', living: false, isMinor: false },
-      ],
-    },
-    {
-      topicName: 'The South Sea Bubble',
-      wikipediaTitle: 'South Sea Company',
-      angle:
-        'The 1720 stock mania that ruined half of London’s elite — even Isaac Newton lost a fortune. Hubris meets a company with almost no real business.',
-      subjects: [],
-    },
-    {
-      topicName: 'Tulip Mania',
-      wikipediaTitle: 'Tulip mania',
-      angle:
-        'When a single flower bulb traded for the price of a house — history’s most famous speculative bubble and what actually popped it.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Wall Street Crash of 1929',
-      wikipediaTitle: 'Wall Street crash of 1929',
-      angle:
-        'The week the Roaring Twenties died: margin-fueled greed, a market built on borrowed money, and the crash that dragged the world into depression.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Panic of 1907',
-      wikipediaTitle: 'Panic of 1907',
-      angle:
-        'The bank run so severe that one private banker had to bail out America himself — and why it forced the creation of the Federal Reserve.',
-      subjects: [
-        { name: 'J.P. Morgan', role: 'investigator', living: false, isMinor: false },
-      ],
-    },
-    {
-      topicName: 'The Breakup of Standard Oil',
-      wikipediaTitle: 'Standard Oil',
-      angle:
-        'How the world’s richest man built a monopoly so dominant the government shattered it into 34 pieces — and got even richer. Hubris, power, and antitrust.',
-      subjects: [
-        { name: 'John D. Rockefeller', role: 'accused', living: false, isMinor: false },
-      ],
-    },
-    {
-      topicName: 'The Triangle Shirtwaist Factory Fire',
-      wikipediaTitle: 'Triangle Shirtwaist Factory fire',
-      angle:
-        'Locked exit doors, 146 dead workers, and the fire that shamed a nation into rewriting labor law — when cutting costs became a catastrophe.',
-      subjects: [],
-    },
-    {
-      topicName: "The Wright Brothers' First Flight",
-      wikipediaTitle: 'Wright Flyer',
-      angle:
-        'Two bicycle mechanics with no funding beat a government-backed program to the sky — invention, obsession, and 12 seconds that changed everything.',
-      subjects: [
-        { name: 'Orville Wright', role: 'investigator', living: false, isMinor: false },
-        { name: 'Wilbur Wright', role: 'investigator', living: false, isMinor: false },
-      ],
-    },
-    {
-      topicName: 'The Sinking of the Titanic',
-      wikipediaTitle: 'Sinking of the Titanic',
-      angle:
-        'The "unsinkable" ship that met an iceberg on its maiden voyage — 1,500 dead, too few lifeboats, and the hubris of an era that thought it had beaten the sea.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Hindenburg Disaster',
-      wikipediaTitle: 'Hindenburg disaster',
-      angle:
-        'The largest aircraft ever built burst into flame in 34 seconds on live radio — the day the age of the airship died, and why it was doomed before it flew.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Dust Bowl',
-      wikipediaTitle: 'Dust Bowl',
-      angle:
-        'How a decade of plowing the Great Plains turned the soil to dust and buried an entire region in black blizzards — a man-made catastrophe wrapped in the Depression.',
-      subjects: [],
-    },
-    {
-      topicName: 'Building the Empire State Building',
-      wikipediaTitle: 'Empire State Building',
-      angle:
-        'The tallest building on earth, thrown up in 410 days at the bottom of the Great Depression — a race against a rival skyscraper and against the market itself.',
-      subjects: [],
-    },
-    {
-      topicName: 'Building the Hoover Dam',
-      wikipediaTitle: 'Hoover Dam',
-      angle:
-        'To tame the Colorado River, thousands worked in 120-degree canyons for a bankrupt nation — engineering triumph paid for in workers’ lives.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Attack on Pearl Harbor',
-      wikipediaTitle: 'Attack on Pearl Harbor',
-      angle:
-        'The surprise dawn raid that sank a fleet at anchor and pulled America into a world war — "a date which will live in infamy" and the intelligence failures behind it.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Cuban Missile Crisis',
-      wikipediaTitle: 'Cuban Missile Crisis',
-      angle:
-        'Thirteen days in 1962 when two superpowers stood minutes from nuclear war over missiles in Cuba — and the back-channel deal that quietly pulled the world back.',
-      subjects: [],
-    },
-    {
-      topicName: 'The Apollo 11 Moon Landing',
-      wikipediaTitle: 'Apollo 11',
-      angle:
-        'Half a billion people watched a man step onto another world with 1960s computing power weaker than a phone — the race, the risk, and "one small step."',
-      subjects: [
-        { name: 'Neil Armstrong', role: 'other', living: false, isMinor: false },
-        { name: 'Buzz Aldrin', role: 'other', living: true, isMinor: false },
-        { name: 'Michael Collins', role: 'other', living: false, isMinor: false },
+        { name: 'Richard Nixon', role: 'other', living: false, isMinor: false },
       ],
     },
     {
       topicName: 'Apollo 13: The Successful Failure',
       wikipediaTitle: 'Apollo 13',
+      eventYear: 1970,
       angle:
         '"Houston, we\'ve had a problem" — an oxygen tank explodes 200,000 miles from Earth, and a crippled spacecraft becomes the greatest improvised rescue in history.',
       subjects: [
@@ -217,40 +217,153 @@ const config = {
       ],
     },
     {
-      topicName: 'The Watergate Scandal',
-      wikipediaTitle: 'Watergate scandal',
+      topicName: 'The Apollo 11 Moon Landing',
+      wikipediaTitle: 'Apollo 11',
+      eventYear: 1969,
       angle:
-        'A "third-rate burglary" unravelled into the cover-up that brought down a president — the tapes, the leaks, and the two reporters who followed the money.',
+        'Half a billion people watched a man step onto another world with 1960s computing power weaker than a phone — the race, the risk, and "one small step."',
       subjects: [
-        { name: 'Richard Nixon', role: 'other', living: false, isMinor: false },
+        { name: 'Neil Armstrong', role: 'other', living: false, isMinor: false },
+        { name: 'Buzz Aldrin', role: 'other', living: true, isMinor: false },
+        { name: 'Michael Collins', role: 'other', living: false, isMinor: false },
       ],
     },
     {
-      topicName: 'The Space Shuttle Challenger Disaster',
-      wikipediaTitle: 'Space Shuttle Challenger disaster',
+      topicName: 'The Cuban Missile Crisis',
+      wikipediaTitle: 'Cuban Missile Crisis',
+      eventYear: 1962,
       angle:
-        'Seventy-three seconds after liftoff on live television, a shuttle broke apart — and the engineers who warned about a frozen rubber seal the night before were overruled.',
+        'Thirteen days in 1962 when two superpowers stood minutes from nuclear war over missiles in Cuba — and the back-channel deal that quietly pulled the world back.',
+      subjects: [],
+    },
+    // ── Early-20th-century classics (pre-1950) — the deep back-catalogue ──────
+    {
+      topicName: 'The Attack on Pearl Harbor',
+      wikipediaTitle: 'Attack on Pearl Harbor',
+      eventYear: 1941,
+      angle:
+        'The surprise dawn raid that sank a fleet at anchor and pulled America into a world war — "a date which will live in infamy" and the intelligence failures behind it.',
       subjects: [],
     },
     {
-      topicName: 'The Chernobyl Disaster',
-      wikipediaTitle: 'Chernobyl disaster',
+      topicName: 'The Hindenburg Disaster',
+      wikipediaTitle: 'Hindenburg disaster',
+      eventYear: 1937,
       angle:
-        'A late-night safety test at a Soviet reactor triggered the worst nuclear accident in history — a botched experiment, a stubborn state, and an exclusion zone that endures.',
+        'The largest aircraft ever built burst into flame in 34 seconds on live radio — the day the age of the airship died, and why it was doomed before it flew.',
       subjects: [],
     },
     {
-      topicName: 'The Concorde',
-      wikipediaTitle: 'Concorde',
+      topicName: 'Building the Hoover Dam',
+      wikipediaTitle: 'Hoover Dam',
+      eventYear: 1935,
       angle:
-        'The supersonic airliner that crossed the Atlantic in three hours and lost money on every seat — engineering triumph, commercial folly, and the crash that grounded a dream.',
+        'To tame the Colorado River, thousands worked in 120-degree canyons for a bankrupt nation — engineering triumph paid for in workers’ lives.',
       subjects: [],
+    },
+    {
+      topicName: 'The Dust Bowl',
+      wikipediaTitle: 'Dust Bowl',
+      eventYear: 1934,
+      angle:
+        'How a decade of plowing the Great Plains turned the soil to dust and buried an entire region in black blizzards — a man-made catastrophe wrapped in the Depression.',
+      subjects: [],
+    },
+    {
+      topicName: 'Building the Empire State Building',
+      wikipediaTitle: 'Empire State Building',
+      eventYear: 1931,
+      angle:
+        'The tallest building on earth, thrown up in 410 days at the bottom of the Great Depression — a race against a rival skyscraper and against the market itself.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Wall Street Crash of 1929',
+      wikipediaTitle: 'Wall Street crash of 1929',
+      eventYear: 1929,
+      angle:
+        'The week the Roaring Twenties died: margin-fueled greed, a market built on borrowed money, and the crash that dragged the world into depression.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Ponzi Scheme of 1920',
+      wikipediaTitle: 'Charles Ponzi',
+      eventYear: 1920,
+      angle:
+        'How one man’s 45-day money-doubling promise collapsed in months — and gave every scam since his name. Greed as a business model.',
+      subjects: [
+        { name: 'Charles Ponzi', role: 'convicted', living: false, isMinor: false },
+      ],
     },
     {
       topicName: 'The 1918 Spanish Flu Pandemic',
       wikipediaTitle: 'Spanish flu',
+      eventYear: 1918,
       angle:
         'A flu that killed more people than the First World War, censored into silence by wartime governments — and named for the one country honest enough to report it.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Sinking of the Titanic',
+      wikipediaTitle: 'Sinking of the Titanic',
+      eventYear: 1912,
+      angle:
+        'The "unsinkable" ship that met an iceberg on its maiden voyage — 1,500 dead, too few lifeboats, and the hubris of an era that thought it had beaten the sea.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Breakup of Standard Oil',
+      wikipediaTitle: 'Standard Oil',
+      eventYear: 1911,
+      angle:
+        'How the world’s richest man built a monopoly so dominant the government shattered it into 34 pieces — and got even richer. Hubris, power, and antitrust.',
+      subjects: [
+        { name: 'John D. Rockefeller', role: 'accused', living: false, isMinor: false },
+      ],
+    },
+    {
+      topicName: 'The Triangle Shirtwaist Factory Fire',
+      wikipediaTitle: 'Triangle Shirtwaist Factory fire',
+      eventYear: 1911,
+      angle:
+        'Locked exit doors, 146 dead workers, and the fire that shamed a nation into rewriting labor law — when cutting costs became a catastrophe.',
+      subjects: [],
+    },
+    {
+      topicName: 'The Panic of 1907',
+      wikipediaTitle: 'Panic of 1907',
+      eventYear: 1907,
+      angle:
+        'The bank run so severe that one private banker had to bail out America himself — and why it forced the creation of the Federal Reserve.',
+      subjects: [
+        { name: 'J.P. Morgan', role: 'investigator', living: false, isMinor: false },
+      ],
+    },
+    {
+      topicName: "The Wright Brothers' First Flight",
+      wikipediaTitle: 'Wright Flyer',
+      eventYear: 1903,
+      angle:
+        'Two bicycle mechanics with no funding beat a government-backed program to the sky — invention, obsession, and 12 seconds that changed everything.',
+      subjects: [
+        { name: 'Orville Wright', role: 'investigator', living: false, isMinor: false },
+        { name: 'Wilbur Wright', role: 'investigator', living: false, isMinor: false },
+      ],
+    },
+    {
+      topicName: 'The South Sea Bubble',
+      wikipediaTitle: 'South Sea Company',
+      eventYear: 1720,
+      angle:
+        'The 1720 stock mania that ruined half of London’s elite — even Isaac Newton lost a fortune. Hubris meets a company with almost no real business.',
+      subjects: [],
+    },
+    {
+      topicName: 'Tulip Mania',
+      wikipediaTitle: 'Tulip mania',
+      eventYear: 1637,
+      angle:
+        'When a single flower bulb traded for the price of a house — history’s most famous speculative bubble and what actually popped it.',
       subjects: [],
     },
   ],
@@ -259,11 +372,12 @@ const config = {
 const playbook = [
   'You are the History & Business Mini-Docs factory agent. You produce documentary-tone',
   '60–90 second vertical mini-documentaries about historical events and business rises,',
-  'falls, and scandals — bubbles, panics, monopolies, inventions, and reform.',
-  'ERA GUIDANCE: strongly prefer 1900–1980 topics — the newsreel/photojournalism era —',
-  'because they have real public-domain footage and photographs to show. Pre-1900 stories',
-  'have almost no usable visuals and are rejected by the media-richness gate at discovery;',
-  'only propose one when its archival record is demonstrably rich. Your editorial values:',
+  'falls, and scandals — bubbles, panics, monopolies, inventions, disasters, and reform.',
+  'ERA GUIDANCE: strongly prefer RECENT stories (1980s–2020s) — they have abundant modern',
+  'video and photographs to show, which is what drives watch-time. Older topics remain in',
+  'the catalogue as a fallback, but the newest image-viable story should lead. Pre-1900',
+  'stories have almost no usable visuals and are rejected by the image-viability gate at',
+  'discovery; only propose one when its archival record is demonstrably rich. Your editorial values:',
   '- Story-arc focus (greed, hubris, invention, downfall), never sensationalism.',
   '- Hook in the first 2 seconds with the most counterintuitive or highest-stakes fact.',
   '- Every load-bearing fact is sourced and hedged where historians disagree; you cite on-screen and in the description.',

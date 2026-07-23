@@ -257,6 +257,42 @@ describe('resolveBeatClips', () => {
     expect(Object.keys(res.beatClips)).toHaveLength(1)
   })
 
+  it('never downloads a candidate the AI judge rejects (fiction/off-topic)', async () => {
+    const resolvedDocs: string[] = []
+    const docs: ArchiveDoc[] = [
+      { identifier: 'real', title: 'Dust Bowl newsreel', mediatype: 'movies' },
+      { identifier: 'fiction', title: 'The Grapes of Wrath', mediatype: 'movies' },
+    ]
+    const deps: ClipResolveDeps = {
+      searchArchive: async () => docs,
+      resolveArchive: async (doc) => {
+        resolvedDocs.push(doc.identifier!)
+        return true
+      },
+      searchYouTube: async () => [],
+      downloadYouTube: async () => false,
+      // Injected judge: reject any candidate whose title names the fiction film.
+      judge: async (_topic, _angle, cands) =>
+        cands.map((c, i) => ({ index: i, keep: !/grapes of wrath/i.test(c.title) })),
+    }
+    const brief = makeBrief({ caseName: 'The Dust Bowl', wikipediaTitle: 'Dust Bowl', year: 1934 })
+    const res = await resolveBeatClips('v', makeScript(6), brief, config(), deps)
+    expect(resolvedDocs).toEqual(['real']) // the fiction feature was vetted out
+    expect(Object.keys(res.beatClips)).toHaveLength(1)
+  })
+
+  it('is empty (photos-only path) when the judge rejects everything', async () => {
+    const deps: ClipResolveDeps = {
+      searchArchive: async () => [{ identifier: 'a', title: 'Hindenburg disaster', mediatype: 'movies' }],
+      resolveArchive: async () => true,
+      searchYouTube: async () => [],
+      downloadYouTube: async () => false,
+      judge: async (_t, _a, cands) => cands.map((_, i) => ({ index: i, keep: false })),
+    }
+    const res = await resolveBeatClips('v', makeScript(6), makeBrief(), config(), deps)
+    expect(res.beatClips).toEqual({})
+  })
+
   it('is empty (photos-only path) when nothing relevant resolves', async () => {
     const deps: ClipResolveDeps = {
       searchArchive: async () => [{ identifier: 'z', title: 'unrelated travelogue', mediatype: 'movies' }],

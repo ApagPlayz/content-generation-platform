@@ -32,6 +32,7 @@ import {
 } from './youtubeClips'
 import { MAX_CLIP_ONSCREEN_SEC } from '../timeline'
 import { MIN_USABLE_IMAGES } from '../visuals'
+import { judgeVisualCandidates, MAX_JUDGE_CANDIDATES, type JudgeCandidate, type JudgeVerdict } from '../visualJudge'
 import type { VisualAsset } from '../../compliance'
 import type { CaseBrief, ClipAttribution, F10FactoryConfig, F10Script } from '../types'
 import { execFile } from 'child_process'
@@ -95,12 +96,25 @@ interface ClipCandidate {
   download: (clipLenSec: number, dest: string) => Promise<boolean>
 }
 
+/** AI relevance judge over the ranked candidate list. Returns a keep/reject
+ *  verdict per candidate (index into the passed list). Injectable so the
+ *  orchestration is unit-testable offline. */
+export type ClipJudge = (
+  topic: string,
+  angle: string,
+  candidates: JudgeCandidate[],
+  videoId: string
+) => Promise<JudgeVerdict[]>
+
 /** Injectable source seams so the orchestration is unit-testable offline. */
 export interface ClipResolveDeps {
   searchArchive: typeof archiveSearch
   resolveArchive: typeof resolveArchiveClip
   searchYouTube: typeof searchYouTubeClips
   downloadYouTube: typeof downloadYouTubeClip
+  /** AI relevance vetting. Optional — defaults to the real Claude judge, which
+   *  itself falls back to keep-all when no API key is present. */
+  judge?: ClipJudge
 }
 
 const DEFAULT_DEPS: ClipResolveDeps = {
@@ -108,6 +122,38 @@ const DEFAULT_DEPS: ClipResolveDeps = {
   resolveArchive: resolveArchiveClip,
   searchYouTube: searchYouTubeClips,
   downloadYouTube: downloadYouTubeClip,
+}
+
+/**
+ * AI-vet the ranked candidate pool BEFORE the download loop: reject fiction
+ * features, dramatizations, TV series/compilations, and off-topic reels the
+ * title-token filter let through. One batched Claude call. Candidates beyond
+ * MAX_JUDGE_CANDIDATES are left unjudged and appended after the judged-kept set
+ * (heuristic tail). Fully fail-soft: the judge keeps everything on any error or
+ * when no API key is set, so this reduces to the prior heuristic ordering.
+ */
+async function vetClipCandidates(
+  videoId: string,
+  brief: CaseBrief,
+  candidates: ClipCandidate[],
+  judge: ClipJudge
+): Promise<ClipCandidate[]> {
+  if (candidates.length === 0) return candidates
+  const window = candidates.slice(0, MAX_JUDGE_CANDIDATES)
+  const jc: JudgeCandidate[] = window.map((c) => ({
+    title: c.title,
+    description: c.channel,
+    source: c.source === 'youtube' ? 'youtube' : 'archive.org',
+  }))
+  const verdicts = await judge(brief.caseName, brief.angle ?? '', jc, videoId)
+  const keep = new Set(verdicts.filter((v) => v.keep).map((v) => v.index))
+  const kept = window.filter((_, i) => keep.has(i))
+  const tail = candidates.slice(MAX_JUDGE_CANDIDATES) // unjudged remainder
+  const rejected = window.length - kept.length
+  if (rejected > 0) {
+    console.log(`[clips] AI judge rejected ${rejected}/${window.length} candidate(s) for "${brief.caseName}"`)
+  }
+  return [...kept, ...tail]
 }
 
 export interface BeatClipsResult {
@@ -309,7 +355,17 @@ export async function resolveBeatClips(
   const downloadLen = Math.min(MAX_CLIP_DOWNLOAD_SEC, Math.max(4, cap + 2))
   const deadline = Date.now() + DEFAULT_CLIP_BUDGET_SEC * 1000
 
-  const candidates = await gatherCandidates(brief, config, deps)
+  const ranked = await gatherCandidates(brief, config, deps)
+  if (!ranked.length) return EMPTY
+
+  // AI relevance vetting BEFORE the download loop — the strict pass the
+  // title-token filter can't do (fiction features, dramatizations, TV
+  // compilations, off-topic reels). Fail-soft: keeps all on any error / no key.
+  const judge: ClipJudge =
+    deps.judge ??
+    ((topic, angle, cands, vid) =>
+      judgeVisualCandidates(topic, angle, cands, 'clip', { videoId: vid, model: config.scriptModel }))
+  const candidates = await vetClipCandidates(videoId, brief, ranked, judge)
   if (!candidates.length) return EMPTY
 
   const dir = path.join(MEDIA_DIR, videoId)

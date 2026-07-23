@@ -189,9 +189,15 @@ export async function discoverTopic(
   // covered within the cooldown window. If nothing viable remains it THROWS
   // (NoViableCandidateError) so the run fails visibly instead of silently
   // repeating a recent subject. Era guidance now lives only in the playbook.
+  // Recency-first: among UNCOVERED topics, order newest event-year first (modern
+  // stories have abundant public video & photos), and let the cursor rotate only
+  // within the newest band for same-day variety. Covered/cooldown/viability
+  // rules below (selectViableCandidate) are unchanged.
   const coverage = await recentCoverage({ factoryType: 'F11', factoryId })
   const cursor = await nextRotationCursor(factoryId ? `F11:${factoryId}` : 'F11')
-  const { ordered } = orderByCoverageAndRotation(watchlist, (t) => t.topicName, coverage, cursor)
+  const { ordered } = orderByCoverageAndRotation(watchlist, (t) => t.topicName, coverage, cursor, {
+    yearOf: (t) => t.eventYear,
+  })
 
   const minImages = config.minUsableImages ?? DEFAULT_MIN_USABLE_IMAGES
   const pick = await selectViableCandidate(ordered, {

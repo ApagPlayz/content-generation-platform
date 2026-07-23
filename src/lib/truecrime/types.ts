@@ -95,6 +95,11 @@ export interface CuratedCase {
   subjects: CaseSubject[]
   /** Optional operator angle to keep videos varied (anti-"inauthentic content"). */
   angle?: string
+  /** Year the case is set in (crime / arrest / conviction). Drives recency-first
+   *  selection: among uncovered, viable cases discovery prefers the NEWEST years
+   *  (modern cases have abundant public video & photos). Recommended on every
+   *  entry; when absent the case sorts as oldest. */
+  eventYear?: number
 }
 
 export interface F10FactoryConfig {

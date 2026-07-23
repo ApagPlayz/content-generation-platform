@@ -186,9 +186,15 @@ export async function discoverCase(
   // usable images), NEVER re-picking a case covered within the cooldown window.
   // If nothing viable remains it THROWS (NoViableCandidateError) so the run
   // fails visibly instead of silently repeating a recent subject.
+  // Recency-first: among UNCOVERED cases, order newest event-year first (modern
+  // cases have abundant public video & photos), and let the cursor rotate only
+  // within the newest band for same-day variety. Covered/cooldown/viability
+  // rules below (selectViableCandidate) are unchanged.
   const coverage = await recentCoverage({ factoryType: 'F10', factoryId })
   const cursor = await nextRotationCursor(factoryId ? `F10:${factoryId}` : 'F10')
-  const { ordered } = orderByCoverageAndRotation(watchlist, (c) => c.caseName, coverage, cursor)
+  const { ordered } = orderByCoverageAndRotation(watchlist, (c) => c.caseName, coverage, cursor, {
+    yearOf: (c) => c.eventYear,
+  })
 
   const minImages = config.minUsableImages ?? DEFAULT_MIN_USABLE_IMAGES
   const pick = await selectViableCandidate(ordered, {

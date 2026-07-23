@@ -159,29 +159,84 @@ export interface RotationOrder<T> {
   exhausted: boolean
 }
 
+/** How many of the NEWEST uncovered candidates the rotation cursor cycles
+ *  within, in recency mode. Recency wins overall (old topics stay at the back),
+ *  but the cursor still varies WHICH of the top-N newest a same-day rerun picks
+ *  first — so we don't ship the single newest topic on every run, yet never dip
+ *  into the ancient tail while recent, viable stories remain. */
+export const RECENT_BAND_SIZE = 8
+
+/** Optional recency tuning for orderByCoverageAndRotation. When `yearOf` is
+ *  supplied the uncovered candidates are ordered NEWEST-FIRST by event year and
+ *  the cursor rotates only within the `recentBandSize` newest of them. Omitted
+ *  ⇒ the original whole-list rotation (unchanged). */
+export interface RotationTuning<T> {
+  yearOf?: (c: T) => number | undefined
+  recentBandSize?: number
+}
+
 /**
- * Order a watchlist so dedup takes priority over rotation, and rotation takes
- * priority over the fixed list order:
- *   • Uncovered candidates come first, rotated so the cursor advances the start
- *     point each run (kills the "same pick all day" bug).
+ * Order a watchlist so dedup takes priority over recency/rotation, and (in
+ * recency mode) recency takes priority over rotation, which takes priority over
+ * the fixed list order:
+ *   • Uncovered candidates come first. In the DEFAULT (legacy) mode they are
+ *     rotated so the cursor advances the start point each run. In RECENCY mode
+ *     (a `yearOf` is passed) they are ordered NEWEST-event-year first, and the
+ *     cursor rotates only within the `recentBandSize` newest — so the picker
+ *     prefers modern, footage-rich stories while a same-day rerun still varies
+ *     which of the recent band it opens with.
  *   • Covered candidates form the tail, least-recently-covered first — so if the
  *     whole list is exhausted we still fail open to the stalest subject.
  * A candidate is "covered" when its normalized name appears inside any coverage
  * entry's normalized text (handles "Leopold and Loeb" == the F10 caseName and
  * "Jordan" ⊂ the F9 "Career highlights feature for Michael Jordan …" caseName).
+ * The covered/cooldown/viability rules downstream in selectViableCandidate are
+ * untouched — this only reorders the UNCOVERED head it walks first.
  * Pure + deterministic so the media-richness gate and tests can drive it.
  */
 export function orderByCoverageAndRotation<T>(
   candidates: T[],
   nameOf: (c: T) => string,
   coverage: CoverageEntry[],
-  cursor: number
+  cursor: number,
+  tuning: RotationTuning<T> = {}
 ): RotationOrder<T> {
   const n = candidates.length
   if (n === 0) return { ordered: [], exhausted: false }
 
-  // Walk the list starting at the rotation cursor so the start point moves each
-  // run; split into uncovered (kept in rotated order) and covered.
+  if (tuning.yearOf) {
+    // RECENCY MODE — split covered/uncovered from the raw list (order-independent
+    // here because uncovered is re-sorted by year and covered by LRU below).
+    const yearOf = tuning.yearOf
+    const uncovered: T[] = []
+    const covered: { c: T; at: number }[] = []
+    for (const c of candidates) {
+      const at = lastCoveredAt(nameOf(c), coverage)
+      if (at === null) uncovered.push(c)
+      else covered.push({ c, at })
+    }
+    // Newest event-year first; an undefined year sorts last (treated as oldest);
+    // ties keep the original watchlist order (stable) for determinism.
+    const byYearDesc = uncovered
+      .map((c, i) => ({ c, i, y: yearOf(c) ?? Number.NEGATIVE_INFINITY }))
+      .sort((a, b) => b.y - a.y || a.i - b.i)
+      .map((x) => x.c)
+    // Rotate the cursor WITHIN the newest band only — recent stays ahead of old.
+    const band = Math.min(tuning.recentBandSize ?? RECENT_BAND_SIZE, byYearDesc.length)
+    const head = byYearDesc.slice(0, band)
+    const tail = byYearDesc.slice(band)
+    const start = band > 0 ? (((cursor % band) + band) % band) : 0
+    const rotatedHead = [...head.slice(start), ...head.slice(0, start)]
+    covered.sort((a, b) => a.at - b.at) // least-recently-covered first
+    return {
+      ordered: [...rotatedHead, ...tail, ...covered.map((x) => x.c)],
+      exhausted: uncovered.length === 0,
+    }
+  }
+
+  // DEFAULT MODE (unchanged): walk the list starting at the rotation cursor so
+  // the start point moves each run; split into uncovered (kept in rotated order)
+  // and covered.
   const start = ((cursor % n) + n) % n
   const uncovered: T[] = []
   const covered: { c: T; at: number }[] = []
