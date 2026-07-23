@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-22. Do not edit by hand.*
+*Auto-generated 2026-07-23. Do not edit by hand.*
 
 **Healthy.** Most of what the agents build is good enough to keep.
 
@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Pull requests merged | 16 (+4) |
+| Pull requests merged | 16 |
 | Pull requests rejected | 1 |
 | **Merge rate** | **94%** |
 | Waiting on you right now | 16 |
