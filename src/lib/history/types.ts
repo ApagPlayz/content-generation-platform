@@ -25,6 +25,11 @@ export interface CuratedTopic {
   /** Optional era label (e.g. "dot-com boom", "Gilded Age") for framing. */
   era?: string
   subjects: CaseSubject[]
+  /** Year the story is set in (event / founding / collapse). Drives recency-first
+   *  selection: among uncovered, viable topics discovery prefers the NEWEST years
+   *  (modern stories have abundant public video & photos). Recommended on every
+   *  entry; when absent the topic sorts as oldest. */
+  eventYear?: number
 }
 
 /**

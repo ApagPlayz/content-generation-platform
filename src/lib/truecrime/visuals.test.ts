@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   deriveImageQueries,
   enforceMinUsableImages,
+  selectJudgedPhotos,
   isAcceptableImage,
   isJunkImageTitle,
   relevanceScore,
@@ -199,5 +200,43 @@ describe('deriveImageQueries', () => {
     )
     expect(qs.length).toBeLessThanOrEqual(4)
     expect(new Set(qs.map((q) => q.toLowerCase())).size).toBe(qs.length)
+  })
+})
+
+describe('selectJudgedPhotos', () => {
+  const ranked = ['a', 'b', 'c', 'd', 'e'] // heuristic order
+
+  it('keeps judged-good first, dropping rejected when enough good remain', () => {
+    // b and d rejected; want 3 → a, c, e (good, in order), no fallback.
+    const verdicts = [0, 1, 2, 3, 4].map((i) => ({ index: i, keep: i !== 1 && i !== 3 }))
+    const { chosen, usedFallback } = selectJudgedPhotos(ranked, verdicts, 3)
+    expect(chosen).toEqual(['a', 'c', 'e'])
+    expect(usedFallback).toBe(false)
+  })
+
+  it('backfills from the rejected set (best heuristic order) when good < maxImages', () => {
+    // Only 'a' kept; need 3 → a, then the best rejected: b, c. Flagged as fallback.
+    const verdicts = [0, 1, 2, 3, 4].map((i) => ({ index: i, keep: i === 0 }))
+    const { chosen, usedFallback } = selectJudgedPhotos(ranked, verdicts, 3)
+    expect(chosen).toEqual(['a', 'b', 'c'])
+    expect(usedFallback).toBe(true)
+  })
+
+  it('treats candidates past the judged window as unjudged (placed after good)', () => {
+    // Only first two judged: 0 kept, 1 rejected. c/d/e unjudged → after good, before bad.
+    const verdicts = [
+      { index: 0, keep: true },
+      { index: 1, keep: false },
+    ]
+    const { chosen, usedFallback } = selectJudgedPhotos(ranked, verdicts, 4)
+    expect(chosen).toEqual(['a', 'c', 'd', 'e']) // good(a) → unjudged(c,d,e) → bad(b)
+    expect(usedFallback).toBe(true)
+  })
+
+  it('keep-all verdicts reduce to the plain heuristic top-N', () => {
+    const verdicts = [0, 1, 2, 3, 4].map((i) => ({ index: i, keep: true }))
+    const { chosen, usedFallback } = selectJudgedPhotos(ranked, verdicts, 3)
+    expect(chosen).toEqual(['a', 'b', 'c'])
+    expect(usedFallback).toBe(false)
   })
 })

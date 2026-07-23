@@ -1,9 +1,13 @@
 // Seeds the F10 True Crime factory + its agent. Idempotent.
 // Run with: node scripts/seed-truecrime.mjs
 //
-// Cases are curated historical (>100yr), public-record, ADULT principals — the
-// safe profile the compliance gate is built around. One acquitted case (Borden)
-// exercises the hedge path; the rest are convictions.
+// Cases are curated, public-record, CONCLUDED or historically-settled cases with
+// ADULT principals — the safe profile the compliance gate is built around. Every
+// entry has an `eventYear`; discovery prefers the NEWEST years first (modern
+// cases — Unabomber, Oklahoma City, O.J., Waco, Lockerbie, Gacy … — have
+// abundant public video & photos), falling back to the pre-1980 classics only
+// once the recent band is exhausted or on cooldown. Acquitted cases (Borden,
+// O. J. Simpson) exercise the hedge path; the rest are convictions or unsolved.
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -65,69 +69,114 @@ const config = {
   enableEditorialLayer: true,
   // Mood-bank b-roll layer — dormant by default.
   moodBankEnabled: true,
+  // Every entry carries an `eventYear` (the crime / arrest / conviction). Among
+  // UNCOVERED, image-viable cases, discovery now prefers the NEWEST years first
+  // (modern cases have abundant public video & photos), so the ~1980s–2000s
+  // additions below lead the rotation and the old 1888–1947 classics fall to the
+  // back until the recent band is exhausted or on cooldown.
   caseWatchlist: [
+    // ── Recent, concluded / historically-settled cases (1980s–2000s) ──────────
     {
-      caseName: 'The Lindbergh Kidnapping',
-      wikipediaTitle: 'Lindbergh kidnapping',
-      angle: "How the ransom note's handwriting cracked the case.",
+      caseName: 'The Unabomber',
+      wikipediaTitle: 'Ted Kaczynski',
+      eventYear: 1996,
+      angle: "A Berkeley math prodigy waged a 17-year mail-bomb campaign from a Montana cabin — and it was his own brother who recognised the manifesto and turned him in.",
       subjects: [
-        { name: 'Bruno Hauptmann', role: 'convicted', living: false, isMinor: false },
+        { name: 'Ted Kaczynski', role: 'convicted', living: false, isMinor: false },
       ],
     },
     {
-      caseName: 'The Lizzie Borden Case',
-      wikipediaTitle: 'Lizzie Borden',
-      angle: 'Why the evidence never convinced the jury.',
-      subjects: [{ name: 'Lizzie Borden', role: 'acquitted', living: false, isMinor: false }],
-    },
-    {
-      caseName: 'Leopold and Loeb',
-      wikipediaTitle: 'Leopold and Loeb',
-      angle: "The 'perfect crime' that unravelled over a pair of glasses.",
+      caseName: 'The Oklahoma City Bombing',
+      wikipediaTitle: 'Oklahoma City bombing',
+      eventYear: 1995,
+      angle: 'A rented truck full of fertilizer killed 168 people at a federal building — the deadliest act of homegrown terrorism in US history, cracked by a single traffic stop and a vehicle serial number.',
       subjects: [
-        { name: 'Nathan Leopold', role: 'convicted', living: false, isMinor: false },
-        { name: 'Richard Loeb', role: 'convicted', living: false, isMinor: false },
+        { name: 'Timothy McVeigh', role: 'convicted', living: false, isMinor: false },
+        { name: 'Terry Nichols', role: 'convicted', living: true, isMinor: false },
       ],
     },
     {
-      caseName: 'The Crippen Case',
-      wikipediaTitle: 'Hawley Harvey Crippen',
-      angle: 'The wireless telegraph arrest that made legal history.',
+      caseName: 'The O. J. Simpson Trial',
+      wikipediaTitle: 'O. J. Simpson murder case',
+      eventYear: 1994,
+      angle: 'A football icon, a white Bronco chase watched by 95 million, and the most televised trial in history — how "the glove" turned a murder case into a verdict the country still argues over.',
       subjects: [
-        { name: 'Hawley Harvey Crippen', role: 'convicted', living: false, isMinor: false },
+        { name: 'O. J. Simpson', role: 'acquitted', living: false, isMinor: false },
+        { name: 'Nicole Brown Simpson', role: 'victim', living: false, isMinor: false },
+        { name: 'Ron Goldman', role: 'victim', living: false, isMinor: false },
       ],
     },
     {
-      caseName: 'The D. B. Cooper Hijacking',
-      wikipediaTitle: 'D. B. Cooper',
-      angle: 'The only unsolved skyjacking in US history — a man, a parachute, and $200,000 gone into the night.',
+      caseName: 'The Waco Siege',
+      wikipediaTitle: 'Waco siege',
+      eventYear: 1993,
+      angle: 'A 51-day standoff between a doomsday sect and federal agents ended in a fire broadcast live to the world — and the fatal questions about who lit it that fuelled a generation of distrust.',
+      subjects: [
+        { name: 'David Koresh', role: 'accused', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'The Isabella Stewart Gardner Heist',
+      wikipediaTitle: 'Isabella Stewart Gardner Museum theft',
+      eventYear: 1990,
+      angle: 'Two men in police uniforms talked their way into a Boston museum and walked out with half a billion dollars of art — the biggest property theft on record, still unsolved, the empty frames still hanging.',
       subjects: [],
     },
     {
-      caseName: 'The Zodiac Killer',
-      wikipediaTitle: 'Zodiac Killer',
-      angle: 'The taunting ciphers of a killer who was never caught — and the codes amateurs still crack decades later.',
-      subjects: [],
-    },
-    {
-      caseName: 'The Black Dahlia',
-      wikipediaTitle: 'Black Dahlia',
-      angle: "Hollywood's most infamous cold case — how a 1947 murder became an unsolvable legend.",
+      caseName: 'Ted Bundy',
+      wikipediaTitle: 'Ted Bundy',
+      eventYear: 1989,
+      angle: 'A charming law student who confessed to 30 murders and escaped custody twice — the case that put the phrase "serial killer" into the American vocabulary.',
       subjects: [
-        { name: 'Elizabeth Short', role: 'victim', living: false, isMinor: false },
+        { name: 'Ted Bundy', role: 'convicted', living: false, isMinor: false },
       ],
     },
+    {
+      caseName: 'The Lockerbie Bombing',
+      wikipediaTitle: 'Pan Am Flight 103',
+      eventYear: 1988,
+      angle: 'A bomb the size of a cassette recorder brought down a jumbo jet over a Scottish town, killing 270 — the twelve-year investigation and the one conviction that never quite closed the case.',
+      subjects: [
+        { name: 'Abdelbaset al-Megrahi', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'John Wayne Gacy',
+      wikipediaTitle: 'John Wayne Gacy',
+      eventYear: 1980,
+      angle: 'A respected contractor who performed as a clown at charity events buried 33 young men beneath his own house — how a single missing-person report unravelled the "Killer Clown."',
+      subjects: [
+        { name: 'John Wayne Gacy', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    // ── Classic historical cases (pre-1980) — the deep back-catalogue ─────────
     {
       caseName: 'The Golden State Killer',
       wikipediaTitle: 'Golden State Killer',
+      eventYear: 1976,
       angle: 'How a genealogy database finally unmasked a serial predator four decades after the crimes went cold.',
       subjects: [
         { name: 'Joseph James DeAngelo', role: 'convicted', living: true, isMinor: false },
       ],
     },
     {
+      caseName: 'The D. B. Cooper Hijacking',
+      wikipediaTitle: 'D. B. Cooper',
+      eventYear: 1971,
+      angle: 'The only unsolved skyjacking in US history — a man, a parachute, and $200,000 gone into the night.',
+      subjects: [],
+    },
+    {
+      caseName: 'The Zodiac Killer',
+      wikipediaTitle: 'Zodiac Killer',
+      eventYear: 1969,
+      angle: 'The taunting ciphers of a killer who was never caught — and the codes amateurs still crack decades later.',
+      subjects: [],
+    },
+    {
       caseName: 'The Great Train Robbery of 1963',
       wikipediaTitle: 'Great Train Robbery (1963)',
+      eventYear: 1963,
       angle: 'The £2.6 million heist that gripped Britain — meticulous planning undone by a single set of fingerprints.',
       subjects: [
         { name: 'Ronnie Biggs', role: 'convicted', living: false, isMinor: false },
@@ -137,6 +186,7 @@ const config = {
     {
       caseName: 'The 1962 Alcatraz Escape',
       wikipediaTitle: 'June 1962 Alcatraz escape',
+      eventYear: 1962,
       angle: 'Papier-mâché heads, a raft of raincoats, and three men who vanished from the inescapable island.',
       subjects: [
         { name: 'Frank Morris', role: 'convicted', living: false, isMinor: false },
@@ -145,8 +195,18 @@ const config = {
       ],
     },
     {
+      caseName: 'The Black Dahlia',
+      wikipediaTitle: 'Black Dahlia',
+      eventYear: 1947,
+      angle: "Hollywood's most infamous cold case — how a 1947 murder became an unsolvable legend.",
+      subjects: [
+        { name: 'Elizabeth Short', role: 'victim', living: false, isMinor: false },
+      ],
+    },
+    {
       caseName: 'Bonnie and Clyde',
       wikipediaTitle: 'Bonnie and Clyde',
+      eventYear: 1934,
       angle: 'The Depression-era outlaw couple the public romanticised — and the ambush that ended the legend.',
       subjects: [
         { name: 'Bonnie Parker', role: 'accused', living: false, isMinor: false },
@@ -154,16 +214,37 @@ const config = {
       ],
     },
     {
+      caseName: 'The Lindbergh Kidnapping',
+      wikipediaTitle: 'Lindbergh kidnapping',
+      eventYear: 1932,
+      angle: "How the ransom note's handwriting cracked the case.",
+      subjects: [
+        { name: 'Bruno Hauptmann', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
       caseName: 'Al Capone',
       wikipediaTitle: 'Al Capone',
+      eventYear: 1931,
       angle: 'The most feared mob boss in America, brought down not by murder charges but by his tax returns.',
       subjects: [
         { name: 'Al Capone', role: 'convicted', living: false, isMinor: false },
       ],
     },
     {
+      caseName: 'Leopold and Loeb',
+      wikipediaTitle: 'Leopold and Loeb',
+      eventYear: 1924,
+      angle: "The 'perfect crime' that unravelled over a pair of glasses.",
+      subjects: [
+        { name: 'Nathan Leopold', role: 'convicted', living: false, isMinor: false },
+        { name: 'Richard Loeb', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
       caseName: 'Sacco and Vanzetti',
       wikipediaTitle: 'Sacco and Vanzetti',
+      eventYear: 1921,
       angle: 'Whether two immigrant anarchists were convicted on evidence or on politics.',
       subjects: [
         { name: 'Nicola Sacco', role: 'convicted', living: false, isMinor: false },
@@ -171,8 +252,25 @@ const config = {
       ],
     },
     {
+      caseName: 'The Crippen Case',
+      wikipediaTitle: 'Hawley Harvey Crippen',
+      eventYear: 1910,
+      angle: 'The wireless telegraph arrest that made legal history.',
+      subjects: [
+        { name: 'Hawley Harvey Crippen', role: 'convicted', living: false, isMinor: false },
+      ],
+    },
+    {
+      caseName: 'The Lizzie Borden Case',
+      wikipediaTitle: 'Lizzie Borden',
+      eventYear: 1892,
+      angle: 'Why the evidence never convinced the jury.',
+      subjects: [{ name: 'Lizzie Borden', role: 'acquitted', living: false, isMinor: false }],
+    },
+    {
       caseName: 'Jack the Ripper',
       wikipediaTitle: 'Jack the Ripper',
+      eventYear: 1888,
       angle: "London's Whitechapel murders — the unidentified killer whose legend built modern true crime.",
       subjects: [],
     },
