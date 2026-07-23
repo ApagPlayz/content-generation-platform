@@ -2,7 +2,11 @@ import { createReadStream, existsSync } from 'fs'
 import { google } from 'googleapis'
 import { prisma } from '../prisma'
 import type { DisclosurePlan } from '../compliance/types'
-import { autoPublishEnabled, tiktokAutoPublishEnabled } from '../settings'
+import {
+  autoPublishEnabled,
+  facebookAutoPublishEnabled,
+  tiktokAutoPublishEnabled,
+} from '../settings'
 import {
   authedClient,
   connection,
@@ -20,6 +24,15 @@ import {
   tiktokPermalink,
   TIKTOK_RECONNECT_MESSAGE,
 } from '../tiktok'
+import {
+  connection as facebookConnection,
+  facebookReelPermalink,
+  FACEBOOK_RECONNECT_MESSAGE,
+  isAuthError as isFacebookAuthError,
+  markNeedsReconnect as markFacebookNeedsReconnect,
+  PLATFORM as FACEBOOK_PLATFORM,
+  publishReel,
+} from '../meta'
 
 /**
  * Publish tool (PRD §8.1 / Phase 2). Uploads a rendered Short to YouTube via
@@ -399,6 +412,96 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
   }
 }
 
+/**
+ * Publish a rendered Short to Facebook Reels via the Reels Publishing API. Same
+ * shape and guarantees as publishToYouTube/publishToTikTok: idempotent per
+ * (video, platform) — a video already live on Facebook is returned as-is rather
+ * than re-uploaded. Reels always publish to the connected Page (no per-video
+ * privacy setting like YouTube/TikTok have).
+ */
+export async function publishToFacebook(videoId: string): Promise<PublishResult> {
+  const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } })
+
+  // Idempotency: don't re-upload a video that already has a live Facebook post.
+  const existing = await prisma.post.findUnique({
+    where: { videoId_platform: { videoId, platform: FACEBOOK_PLATFORM } },
+  })
+  if (isAlreadyPublished(existing)) {
+    return {
+      postId: existing.id,
+      platformPostId: existing.platformPostId,
+      permalink: existing.permalink || facebookReelPermalink(existing.platformPostId),
+      alreadyPublished: true,
+    }
+  }
+
+  // Gate on the compliance/review decision: never publish a video that hasn't
+  // been approved (rejected, failed, draft, queued, review all stop here).
+  assertPublishable(video.status)
+
+  if (!video.localPath || !existsSync(video.localPath)) {
+    throw new Error('Rendered MP4 not found for this video — render it before publishing.')
+  }
+
+  const conn = await facebookConnection()
+  if (!conn) throw new Error('Facebook is not connected. Connect it in Settings first.')
+
+  const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
+  const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
+    .filter(Boolean)
+    .join(' ')
+
+  // Mark intent before the network call so a crash mid-upload is visible.
+  const post = await prisma.post.upsert({
+    where: { videoId_platform: { videoId, platform: FACEBOOK_PLATFORM } },
+    update: { status: 'publishing', error: null },
+    create: { videoId, platform: FACEBOOK_PLATFORM, status: 'publishing' },
+  })
+
+  try {
+    const { videoId: fbVideoId } = await publishReel({ filePath: video.localPath, caption })
+    const permalink = facebookReelPermalink(fbVideoId)
+
+    const updated = await prisma.post.update({
+      where: { id: post.id },
+      data: {
+        platformPostId: fbVideoId,
+        permalink,
+        status: 'published',
+        publishedAt: new Date(),
+        error: null,
+      },
+    })
+
+    await prisma.video.update({ where: { id: videoId }, data: { status: 'published' } })
+
+    await prisma.costLedger.create({
+      data: { videoId, service: 'facebook_publish', units: 1, unitCost: 0, total: 0 },
+    })
+
+    return { postId: updated.id, platformPostId: fbVideoId, permalink, alreadyPublished: false }
+  } catch (e) {
+    // A dead Facebook login must stop being painted green in Settings. Flip the
+    // connection to needs_reconnect so the UI prompts a re-login and the next
+    // publish short-circuits at the "not connected" gate — and record the reason
+    // in plain language instead of the raw OAuth error. Mirrors publishToTikTok.
+    if (isFacebookAuthError(e)) {
+      await markFacebookNeedsReconnect()
+      await prisma.post.update({
+        where: { id: post.id },
+        data: { status: 'failed', error: FACEBOOK_RECONNECT_MESSAGE },
+      })
+      throw new Error(FACEBOOK_RECONNECT_MESSAGE)
+    }
+    const message = e instanceof Error ? e.message : String(e)
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { status: 'failed', error: message },
+    })
+    throw e
+  }
+}
+
 export type AutoPublishOutcome =
   | { published: true; permalink: string }
   | { published: false; reason: string }
@@ -479,6 +582,14 @@ const PLATFORM_ADAPTERS: PlatformAdapter[] = [
     isAutoEnabled: tiktokAutoPublishEnabled,
     isConnected: async () => !!(await tiktokConnection()),
     publish: async (videoId) => ({ permalink: (await publishToTikTok(videoId)).permalink }),
+  },
+  {
+    platform: FACEBOOK_PLATFORM,
+    label: 'Facebook',
+    isAutoEnabled: facebookAutoPublishEnabled,
+    isConnected: async () => !!(await facebookConnection()),
+    // No preflight: Facebook Reels has no daily upload quota wall like YouTube's.
+    publish: async (videoId) => ({ permalink: (await publishToFacebook(videoId)).permalink }),
   },
 ]
 
