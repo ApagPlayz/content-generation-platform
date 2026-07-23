@@ -25,6 +25,15 @@ const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.
  */
 export const MIN_IMAGE_HOLD_SEC = 5
 
+/**
+ * Hard cap (seconds) on any single moving clip's on-screen time. A relevant
+ * fair-use / archival excerpt is shown ONCE for a calm, capped hold — never
+ * looped, rapid-cut, or dragged past this — then the beat cuts to a photo. This
+ * is a genre convention AND a fair-use safety rail (short excerpts only): it is
+ * enforced in code, never a suggestion, and never exceeds 10s.
+ */
+export const MAX_CLIP_ONSCREEN_SEC = 8
+
 /** Infer whether a resolved asset is a still image (Ken-Burns) or a video clip. */
 function isImageAsset(assetPath: string): boolean {
   const dot = assetPath.lastIndexOf('.')
@@ -51,7 +60,8 @@ function isImageAsset(assetPath: string): boolean {
 export function buildBeatTimeline(
   beats: ScriptBeat[],
   beatFootage: Record<number, string[]>,
-  audioDurationSec: number
+  audioDurationSec: number,
+  maxClipSec: number = MAX_CLIP_ONSCREEN_SEC
 ): TimelineSegment[] {
   const total = Math.max(0.1, audioDurationSec)
 
@@ -80,52 +90,126 @@ export function buildBeatTimeline(
       continue
     }
 
-    // Slicing policy (round 6):
-    // • All-still beats: each still shown AT MOST once, held ≥ MIN_IMAGE_HOLD_SEC
-    //   (a single still absorbs the whole beat when it's short). Extras beyond
-    //   what the beat can hold calmly are DROPPED — never repeated or rushed.
-    // • Beats with any video: the original cutIntervalSec slicing, at least one
-    //   slice per clip so every clip is shown.
-    const allStills = clips.every(isImageAsset)
-    let nSlices: number
-    if (allStills) {
+    // Split the beat's resolved assets into moving clips and stills.
+    const videos = clips.filter((c) => !isImageAsset(c))
+    const stills = clips.filter((c) => isImageAsset(c))
+
+    // Build the ordered "cells" for this beat, each with a target duration.
+    const cells: { assetPath: string; kind: TimelineSegment['kind']; dur: number }[] = []
+
+    if (videos.length === 0) {
+      // ALL-STILL beat (round 6 calm cadence): each still shown AT MOST once,
+      // held ≥ MIN_IMAGE_HOLD_SEC (a single still absorbs a short beat). Extras
+      // beyond what the beat can hold calmly are DROPPED — never repeated/rushed.
       const maxByHold = Math.max(1, Math.floor(beatDur / MIN_IMAGE_HOLD_SEC))
-      nSlices = Math.min(clips.length, maxByHold)
+      const use = stills.slice(0, Math.min(stills.length, maxByHold))
+      const per = beatDur / use.length
+      for (const s of use) cells.push({ assetPath: s, kind: 'image', dur: per })
     } else {
-      const cut = beat.cutIntervalSec > 0 ? beat.cutIntervalSec : beatDur
-      nSlices = Math.round(beatDur / cut)
-      if (!Number.isFinite(nSlices)) nSlices = clips.length
-      nSlices = Math.max(clips.length, nSlices, 1)
+      // MIXED / VIDEO beat (2026-07 relevant-clip layer): a real moving excerpt
+      // is shown ONCE for a CAPPED, calm hold (≤ maxClipSec), then the beat cuts
+      // to the beat's photo(s) for the remainder — no looping, no rapid cutting,
+      // and never a clip dragged past the fair-use on-screen cap. buildMixed-
+      // BeatFootage always attaches a photo to a clip-beat, so a long beat's
+      // leftover after the capped clip lands on a photo, not a stretched clip.
+      const cap = maxClipSec > 0 ? maxClipSec : beatDur
+      // Total time the clip(s) may hold — each capped, summed, never past the
+      // beat. Whatever's left is the still budget.
+      let clipTime = Math.min(beatDur, videos.length * Math.min(cap, beatDur))
+      let stillTime = beatDur - clipTime
+      let nStills = Math.min(stills.length, Math.floor(stillTime / MIN_IMAGE_HOLD_SEC))
+      // If a single capped clip leaves a remainder too small for a photo's min
+      // hold, SHRINK the clip so one photo still gets its hold — better than
+      // dropping the photo and letting the clip overrun its cap.
+      if (nStills === 0 && stills.length > 0 && videos.length === 1 && beatDur > MIN_IMAGE_HOLD_SEC) {
+        nStills = 1
+        stillTime = MIN_IMAGE_HOLD_SEC
+        clipTime = beatDur - stillTime
+      }
+      // No photos to show at all → the clip(s) absorb the whole beat (the only
+      // path that can extend a clip past the cap; buildMixedBeatFootage always
+      // attaches a photo, so the normal path never reaches it).
+      if (nStills === 0) {
+        clipTime = beatDur
+        stillTime = 0
+      }
+      const perVideo = clipTime / videos.length
+      for (const v of videos) cells.push({ assetPath: v, kind: 'video', dur: perVideo })
+      if (nStills > 0) {
+        const use = stills.slice(0, nStills)
+        const perStill = stillTime / use.length
+        for (const s of use) cells.push({ assetPath: s, kind: 'image', dur: perStill })
+      }
     }
 
-    // Track how far we've already trimmed into each reused video clip.
-    const advance: Record<number, number> = {}
+    // Emit the cells as segments; the last cell absorbs float drift so the beat
+    // sums EXACTLY to beatDur. A single capped clip always trims from its start
+    // (inSec 0) — the download step already picked a meaningful in-point.
     let beatCursor = 0
-    for (let s = 0; s < nSlices; s++) {
-      const sliceDur = s === nSlices - 1 ? beatDur - beatCursor : beatDur / nSlices
-      if (sliceDur <= 0) continue
-      const clipIdx = s % clips.length
-      const assetPath = clips[clipIdx]
-      const kind: TimelineSegment['kind'] = isImageAsset(assetPath) ? 'image' : 'video'
+    for (let c = 0; c < cells.length; c++) {
+      const dur = c === cells.length - 1 ? beatDur - beatCursor : cells[c].dur
+      if (dur <= 0) continue
       const seg: TimelineSegment = {
         beatIndex: beat.index,
         startSec: cursor + beatCursor,
-        durationSec: sliceDur,
-        assetPath,
-        kind,
+        durationSec: dur,
+        assetPath: cells[c].assetPath,
+        kind: cells[c].kind,
       }
-      if (kind === 'video') {
-        seg.inSec = advance[clipIdx] ?? 0
-        advance[clipIdx] = seg.inSec + sliceDur
-      }
+      if (cells[c].kind === 'video') seg.inSec = 0
       segments.push(seg)
-      beatCursor += sliceDur
+      beatCursor += dur
     }
 
     cursor += beatDur
   }
 
   return segments
+}
+
+/**
+ * Merge the resolved moving clips with the photo backbone into a single
+ * per-beat footage map the render timeline consumes. Photos (the majority) are
+ * distributed round-robin across every beat in index order so each beat gets a
+ * fair share; a beat that also has a clip lists the CLIP FIRST (shown for its
+ * capped hold) then its photo(s) (which fill the rest of the beat). The result
+ * is a genuine mix — clips where a relevant one exists, photos everywhere — and
+ * because a clip-beat always carries a photo, buildBeatTimeline never has to
+ * stretch a clip past its on-screen cap. Pure; exported for tests.
+ */
+export function buildMixedBeatFootage(
+  beats: ScriptBeat[],
+  clipsByBeat: Record<number, string[]>,
+  photoPaths: string[]
+): Record<number, string[]> {
+  const ordered = [...beats].sort((a, b) => a.index - b.index)
+  const photos = photoPaths.filter(Boolean)
+  const n = ordered.length
+
+  // Prioritise clip-beats when handing out photos so every clip-beat is
+  // guaranteed a photo to fill the time after its capped clip, THEN top up the
+  // remaining beats round-robin. Order within a beat is preserved.
+  const photosByBeat: Record<number, string[]> = {}
+  if (n > 0 && photos.length > 0) {
+    const clipBeatIdx = ordered.filter((b) => (clipsByBeat[b.index] ?? []).some(Boolean)).map((b) => b.index)
+    const restIdx = ordered.filter((b) => !clipBeatIdx.includes(b.index)).map((b) => b.index)
+    const roundRobin = [...clipBeatIdx, ...restIdx]
+    if (roundRobin.length > 0) {
+      photos.forEach((p, i) => {
+        const idx = roundRobin[i % roundRobin.length]
+        ;(photosByBeat[idx] ??= []).push(p)
+      })
+    }
+  }
+
+  const result: Record<number, string[]> = {}
+  for (const beat of ordered) {
+    const clips = (clipsByBeat[beat.index] ?? []).filter(Boolean)
+    const beatPhotos = photosByBeat[beat.index] ?? []
+    const merged = [...clips, ...beatPhotos]
+    if (merged.length > 0) result[beat.index] = merged
+  }
+  return result
 }
 
 /** A segment mapped to an integer frame window on a given fps grid. */

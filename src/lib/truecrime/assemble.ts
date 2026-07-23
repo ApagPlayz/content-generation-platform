@@ -27,6 +27,9 @@ const FPS = 25
 export interface AssembleOpts {
   beats?: ScriptBeat[]
   beatFootage?: Record<number, string[]>
+  /** Hard cap (seconds) on any single clip's on-screen time; forwarded to
+   *  buildBeatTimeline. Omitted → the timeline's MAX_CLIP_ONSCREEN_SEC default. */
+  maxClipSec?: number
 }
 
 async function ffmpegAvailable(): Promise<boolean> {
@@ -183,7 +186,7 @@ export async function assembleVideo(
   // even-split still slideshow below, so nothing breaks when footage is off.
   const timeline: TimelineSegment[] =
     opts?.beats && opts.beats.length > 0 && opts.beatFootage && Object.keys(opts.beatFootage).length > 0
-      ? buildBeatTimeline(opts.beats, opts.beatFootage, audioDurationSec)
+      ? buildBeatTimeline(opts.beats, opts.beatFootage, audioDurationSec, opts.maxClipSec)
       : []
   const useTimeline = timeline.length > 0
 

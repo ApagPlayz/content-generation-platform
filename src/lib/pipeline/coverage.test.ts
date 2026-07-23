@@ -12,6 +12,10 @@ import {
   orderByCoverageAndRotation,
   recentCoverage,
   nextRotationCursor,
+  lastCoveredAt,
+  selectViableCandidate,
+  NoViableCandidateError,
+  COVERED_COOLDOWN_DAYS,
   type CoverageEntry,
 } from './coverage'
 
@@ -92,6 +96,108 @@ describe('orderByCoverageAndRotation', () => {
       ordered: [],
       exhausted: false,
     })
+  })
+})
+
+describe('lastCoveredAt', () => {
+  it('returns the most-recent covered time, matching on substring', () => {
+    const coverage = [
+      cov('Michael Jordan', '2026-07-10'),
+      cov('Career highlights feature for Michael Jordan (Bulls)', '2026-07-20'),
+    ]
+    expect(lastCoveredAt('Michael Jordan', coverage)).toBe(at('2026-07-20').getTime())
+  })
+
+  it('returns null for an uncovered name', () => {
+    expect(lastCoveredAt('Tulip Mania', [cov('Wall Street Crash', '2026-07-20')])).toBeNull()
+  })
+})
+
+describe('selectViableCandidate', () => {
+  type Topic = { name: string }
+  const t = (name: string): Topic => ({ name })
+  const NOW = at('2026-07-22').getTime()
+  // Ordered uncovered-first exactly as orderByCoverageAndRotation would produce.
+  const ordered = [t('Ponzi'), t('Tulip'), t('Triangle'), t('WrightBros'), t('SouthSea')]
+  const imgs: Record<string, number> = {
+    Ponzi: 4, // starved (article alone)
+    Tulip: 10, // viable, uncovered
+    Triangle: 14, // viable, uncovered
+    WrightBros: 30, // viable but covered-recent
+    SouthSea: 8, // viable but covered-recent
+  }
+  const imageCountOf = async (c: Topic) => imgs[c.name] ?? 0
+
+  it('picks the FIRST uncovered VIABLE candidate, skipping starved uncovered ones', async () => {
+    // Ponzi (uncovered) is starved → skipped; Tulip (uncovered, 10) wins BEFORE
+    // any covered topic is even probed. This is the core bug fix.
+    const pick = await selectViableCandidate(ordered, {
+      nameOf: (c) => c.name,
+      coverage: [cov('WrightBros', '2026-07-21'), cov('SouthSea', '2026-07-22')],
+      imageCountOf,
+      minImages: 5,
+      now: NOW,
+    })
+    expect(pick).toEqual({ chosen: t('Tulip'), images: 10, wasCovered: false })
+  })
+
+  it('NEVER picks a candidate covered within the cooldown, even if it is the only viable one', async () => {
+    // All uncovered are starved; the only image-rich topics were covered today →
+    // inside the 7-day cooldown → must THROW, not silently repeat WrightBros.
+    const starvedUncovered = { Ponzi: 2, Tulip: 1, Triangle: 0, WrightBros: 30, SouthSea: 8 }
+    await expect(
+      selectViableCandidate(ordered, {
+        nameOf: (c) => c.name,
+        coverage: [cov('WrightBros', '2026-07-21'), cov('SouthSea', '2026-07-22')],
+        imageCountOf: async (c) => (starvedUncovered as Record<string, number>)[c.name] ?? 0,
+        minImages: 5,
+        now: NOW,
+      })
+    ).rejects.toBeInstanceOf(NoViableCandidateError)
+  })
+
+  it('falls back to a covered VIABLE candidate once it is OUTSIDE the cooldown (LRU tail order)', async () => {
+    // Uncovered all starved; WrightBros was covered 20 days ago (outside cooldown)
+    // and is viable → allowed as the least-recently-covered fallback.
+    const starvedUncovered = { Ponzi: 2, Tulip: 1, Triangle: 0, WrightBros: 30, SouthSea: 8 }
+    const pick = await selectViableCandidate(ordered, {
+      nameOf: (c) => c.name,
+      coverage: [cov('WrightBros', '2026-07-02'), cov('SouthSea', '2026-07-22')],
+      imageCountOf: async (c) => (starvedUncovered as Record<string, number>)[c.name] ?? 0,
+      minImages: 5,
+      now: NOW,
+    })
+    expect(pick).toEqual({ chosen: t('WrightBros'), images: 30, wasCovered: true })
+  })
+
+  it('a throwing image probe counts as non-viable (0) and never dead-ends the walk', async () => {
+    const pick = await selectViableCandidate(ordered, {
+      nameOf: (c) => c.name,
+      coverage: [],
+      imageCountOf: async (c) => {
+        if (c.name === 'Ponzi') throw new Error('wiki down')
+        return imgs[c.name] ?? 0
+      },
+      minImages: 5,
+      now: NOW,
+    })
+    expect(pick.chosen).toEqual(t('Tulip'))
+  })
+
+  it('throws NoViableCandidateError when nothing is viable at all', async () => {
+    await expect(
+      selectViableCandidate(ordered, {
+        nameOf: (c) => c.name,
+        coverage: [],
+        imageCountOf: async () => 0,
+        minImages: 5,
+        now: NOW,
+      })
+    ).rejects.toThrow(/exhausted or non-viable/)
+  })
+
+  it('ships a 7-day default cooldown', () => {
+    expect(COVERED_COOLDOWN_DAYS).toBe(7)
   })
 })
 

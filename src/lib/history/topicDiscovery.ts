@@ -11,16 +11,13 @@
 // truth the compliance gate relies on.
 
 import { fetchJsonBudget } from '../truecrime/budget'
-import {
-  briefMediaRichness,
-  DEFAULT_MIN_ARCHIVE_HITS,
-  DEFAULT_MIN_TOPIC_YEAR,
-  pickMediaRichCandidate,
-} from '../truecrime/caseDiscovery'
+import { DEFAULT_MIN_USABLE_IMAGES } from '../truecrime/caseDiscovery'
+import { countUsableArticleImages } from '../truecrime/visuals'
 import {
   nextRotationCursor,
   orderByCoverageAndRotation,
   recentCoverage,
+  selectViableCandidate,
 } from '../pipeline/coverage'
 import type { CaseSubject } from '../compliance'
 import type { CuratedTopic, F11FactoryConfig, TopicBrief } from './types'
@@ -130,8 +127,17 @@ async function verifyLiving(subjects: CaseSubject[]): Promise<string[]> {
   return warnings
 }
 
-/** The Wikipedia/Wikidata enrichment for ONE curated topic — extracted so the
- *  media-richness gate can enrich candidates while walking the rotation. */
+/** Usable-image count for a curated topic: resolves its Wikipedia title (the
+ *  curated `wikipediaTitle`, or a search) then counts the article's usable
+ *  images with the SAME quality floor the visuals stage applies. 0 when the
+ *  title can't be resolved — treated as non-viable, never throws. */
+function topicImageCount(chosen: CuratedTopic, need: number): Promise<number> {
+  const title = chosen.wikipediaTitle
+  if (title) return countUsableArticleImages(title, need)
+  return resolveTitle(chosen.topicName).then((t) => (t ? countUsableArticleImages(t, need) : 0))
+}
+
+/** The Wikipedia/Wikidata enrichment for ONE curated topic. */
 async function enrichTopic(chosen: CuratedTopic): Promise<TopicBrief> {
   const title = chosen.wikipediaTitle ?? (await resolveTitle(chosen.topicName))
   if (!title) {
@@ -174,49 +180,32 @@ export async function discoverTopic(
     throw new Error('F11 factory has no topicWatchlist — add curated topics to the factory config.')
   }
 
-  // Dedup FIRST, rotation SECOND, media-richness LAST (mirrors F10 discoverCase).
+  // Dedup FIRST, rotation SECOND, image-viability LAST (mirrors F10 discoverCase).
   // Read what this factory already shipped (ComplianceReport ledger + recent
-  // Video titles), order the watchlist so covered topics fall to the back, and
-  // advance a persisted cursor so repeat same-day runs move forward. THEN the
-  // shared media-richness gate (round 6) walks that order: each candidate is
-  // enriched (Wikipedia year + facts) and must clear the ERA floor (default
-  // 1900 — pre-photography stories have no real era footage) AND the distinct-
-  // archive-hits floor. The first topic that clears both wins. Fail-open on
-  // every axis so the run always produces.
+  // Video titles), order the watchlist uncovered-first (a persisted cursor
+  // advances the start point every run). selectViableCandidate then walks that
+  // order and returns the FIRST topic whose Wikipedia article can plausibly fill
+  // the slideshow (≥ minUsableImages usable images), NEVER re-picking a topic
+  // covered within the cooldown window. If nothing viable remains it THROWS
+  // (NoViableCandidateError) so the run fails visibly instead of silently
+  // repeating a recent subject. Era guidance now lives only in the playbook.
   const coverage = await recentCoverage({ factoryType: 'F11', factoryId })
   const cursor = await nextRotationCursor(factoryId ? `F11:${factoryId}` : 'F11')
-  const { ordered, exhausted } = orderByCoverageAndRotation(
-    watchlist,
-    (t) => t.topicName,
-    coverage,
-    cursor
-  )
-  if (exhausted) {
-    console.warn(
-      `[discover/f11] every F11 watchlist topic was recently covered — falling back to the ` +
-        `least-recently-covered topic. Curate more topics to widen the rotation.`
-    )
-  }
+  const { ordered } = orderByCoverageAndRotation(watchlist, (t) => t.topicName, coverage, cursor)
 
-  const threshold = config.minArchiveHits ?? DEFAULT_MIN_ARCHIVE_HITS
-  const briefs = new Map<CuratedTopic, TopicBrief>()
-  const enrich = async (t: CuratedTopic) => {
-    const cached = briefs.get(t)
-    if (cached) return cached
-    const brief = await enrichTopic(t)
-    briefs.set(t, brief)
-    return brief
-  }
-  // `ordered` already encodes exclusion + rotation, so walk it from index 0.
-  const pick = await pickMediaRichCandidate(ordered, 0, threshold, async (t) =>
-    briefMediaRichness(await enrich(t), config, threshold)
-  )
-  if (!pick.passed) {
+  const minImages = config.minUsableImages ?? DEFAULT_MIN_USABLE_IMAGES
+  const pick = await selectViableCandidate(ordered, {
+    nameOf: (t) => t.topicName,
+    coverage,
+    minImages,
+    imageCountOf: (t) => topicImageCount(t, minImages),
+  })
+  if (pick.wasCovered) {
     console.warn(
-      `[discover/f11] no watchlist topic met the media-richness gate (minArchiveHits=${threshold}, ` +
-        `minTopicYear=${config.minTopicYear ?? DEFAULT_MIN_TOPIC_YEAR}); falling back to ` +
-        `"${pick.chosen.topicName}" (${pick.hits} hits). Curate newsreel-era (1900-1980) topics.`
+      `[discover/f11] no UNCOVERED F11 topic was image-viable — falling back to the ` +
+        `least-recently-covered viable topic "${pick.chosen.topicName}" (${pick.images} usable images). ` +
+        `Curate more topics to widen the rotation.`
     )
   }
-  return enrich(pick.chosen)
+  return enrichTopic(pick.chosen)
 }

@@ -5,7 +5,13 @@
 // round(totalSeconds * fps) with no cumulative drift.
 
 import { describe, expect, it } from 'vitest'
-import { buildBeatTimeline, MIN_IMAGE_HOLD_SEC, toCumulativeFrames } from './timeline'
+import {
+  buildBeatTimeline,
+  buildMixedBeatFootage,
+  MAX_CLIP_ONSCREEN_SEC,
+  MIN_IMAGE_HOLD_SEC,
+  toCumulativeFrames,
+} from './timeline'
 import type { ScriptBeat, TimelineSegment } from './types'
 
 function makeBeat(overrides: Partial<ScriptBeat> = {}): ScriptBeat {
@@ -101,46 +107,47 @@ describe('buildBeatTimeline', () => {
     expect(sumDurations(segments)).toBeCloseTo(20, 9)
   })
 
-  it('reuses a single video clip across multiple slices and advances inSec each time', () => {
+  it('shows a lone clip ONCE (no fast re-cutting); with no photo it covers the beat, inSec 0', () => {
     const beats = [makeBeat({ index: 0, targetSeconds: 9, cutIntervalSec: 3 })]
     const beatFootage = { 0: ['clip.mp4'] }
     const segments = buildBeatTimeline(beats, beatFootage, 9)
 
-    // beatDur=9, cutIntervalSec=3 -> nSlices = round(9/3) = 3, all from the one clip.
-    expect(segments).toHaveLength(3)
-    for (const s of segments) {
-      expect(s.kind).toBe('video')
-      expect(s.assetPath).toBe('clip.mp4')
-    }
+    // A moving excerpt is shown once (calm), not sliced by cutIntervalSec. With
+    // no accompanying photo it absorbs the beat since there is nothing to cut to.
+    expect(segments).toHaveLength(1)
+    expect(segments[0].kind).toBe('video')
+    expect(segments[0].assetPath).toBe('clip.mp4')
     expect(segments[0].inSec).toBe(0)
-    expect(segments[1].inSec).toBeCloseTo(3, 9)
-    expect(segments[2].inSec).toBeCloseTo(6, 9)
     expect(sumDurations(segments)).toBeCloseTo(9, 9)
   })
 
-  it('round-robins slices across multiple clips within a beat', () => {
-    const beats = [makeBeat({ index: 0, targetSeconds: 6, cutIntervalSec: 2 })]
-    const beatFootage = { 0: ['a.mp4', 'b.mp4'] }
-    const segments = buildBeatTimeline(beats, beatFootage, 6)
+  it('mixes a clip + photo in one beat: clip first (capped), then the photo fills the rest', () => {
+    const beats = [makeBeat({ index: 0, targetSeconds: 20 })]
+    const beatFootage = { 0: ['clip.mp4', 'photo.jpg'] }
+    const segments = buildBeatTimeline(beats, beatFootage, 20, 8)
 
-    // nSlices = round(6/2) = 3, clips round-robin: a, b, a.
-    expect(segments.map((s) => s.assetPath)).toEqual(['a.mp4', 'b.mp4', 'a.mp4'])
-    // Clip "a" is used at slice 0 and slice 2; its inSec should advance between uses.
+    expect(segments).toHaveLength(2)
+    expect(segments[0].kind).toBe('video')
+    expect(segments[0].assetPath).toBe('clip.mp4')
+    expect(segments[0].durationSec).toBeCloseTo(8, 9) // capped on-screen time
     expect(segments[0].inSec).toBe(0)
-    expect(segments[2].inSec).toBeCloseTo(2, 9)
-    // Clip "b" is only used once, so it starts at 0.
-    expect(segments[1].inSec).toBe(0)
+    expect(segments[1].kind).toBe('image')
+    expect(segments[1].assetPath).toBe('photo.jpg')
+    expect(segments[1].durationSec).toBeCloseTo(12, 9) // remainder
+    expect(sumDurations(segments)).toBeCloseTo(20, 9)
   })
 
-  it('ensures every VIDEO clip gets at least one slice even when cutIntervalSec is very long', () => {
-    const beats = [makeBeat({ index: 0, targetSeconds: 10, cutIntervalSec: 1000 })]
-    const beatFootage = { 0: ['a.mp4', 'b.mp4', 'c.mp4'] }
-    const segments = buildBeatTimeline(beats, beatFootage, 10)
+  it('caps the clip even on a long beat and fills the remainder across multiple photos', () => {
+    const beats = [makeBeat({ index: 0, targetSeconds: 30 })]
+    const beatFootage = { 0: ['clip.mp4', 'p1.jpg', 'p2.jpg'] }
+    const segments = buildBeatTimeline(beats, beatFootage, 30, 6)
 
-    // nSlices = round(10/1000) = 0, but clips.length=3 forces at least 3 slices.
-    expect(segments).toHaveLength(3)
-    expect(new Set(segments.map((s) => s.assetPath))).toEqual(new Set(['a.mp4', 'b.mp4', 'c.mp4']))
-    expect(sumDurations(segments)).toBeCloseTo(10, 9)
+    expect(segments[0].kind).toBe('video')
+    expect(segments[0].durationSec).toBeCloseTo(6, 9) // clip capped at 6
+    const stills = segments.filter((s) => s.kind === 'image')
+    expect(stills).toHaveLength(2) // remaining 24s → 2 photos, 12s each
+    for (const s of stills) expect(s.durationSec).toBeGreaterThanOrEqual(MIN_IMAGE_HOLD_SEC)
+    expect(sumDurations(segments)).toBeCloseTo(30, 9)
   })
 
   describe('still-image pacing (round 6 — calm documentary cadence)', () => {
@@ -212,27 +219,32 @@ describe('buildBeatTimeline', () => {
       expect(segments[0].durationSec).toBeCloseTo(4, 9)
     })
 
-    it('video beats keep their cutIntervalSec pacing — only stills are slowed', () => {
+    it('a moving clip is capped at MAX_CLIP_ONSCREEN_SEC, then the beat cuts to a photo', () => {
       const beats = [makeBeat({ index: 0, targetSeconds: 12, cutIntervalSec: 1.5 })]
-      const beatFootage = { 0: ['reel.mp4'] }
+      const beatFootage = { 0: ['reel.mp4', 'photo.jpg'] }
       const segments = buildBeatTimeline(beats, beatFootage, 12)
 
-      // round(12/1.5) = 8 fast video slices — a moving shot sustains fast cuts.
-      expect(segments).toHaveLength(8)
-      expect(segments.every((s) => s.kind === 'video')).toBe(true)
+      // No fast re-cutting: one clip (≤ MAX_CLIP_ONSCREEN_SEC) then a photo that
+      // still gets its min hold (a 12s beat shrinks the clip to 7 so the photo
+      // holds 5 rather than flashing).
+      expect(segments).toHaveLength(2)
+      expect(segments[0].kind).toBe('video')
+      expect(segments[0].durationSec).toBeLessThanOrEqual(MAX_CLIP_ONSCREEN_SEC + 1e-9)
+      expect(segments[1].kind).toBe('image')
+      expect(segments[1].durationSec).toBeGreaterThanOrEqual(MIN_IMAGE_HOLD_SEC - 1e-9)
+      expect(sumDurations(segments)).toBeCloseTo(12, 9)
     })
   })
 
-  it('handles rounding edge cases where the duration does not divide evenly by cutIntervalSec', () => {
-    // beatDur=10, cutIntervalSec=3 -> nSlices = round(10/3) = 3, each 10/3 = 3.333...
-    const beats = [makeBeat({ index: 0, targetSeconds: 10, cutIntervalSec: 3 })]
-    const beatFootage = { 0: ['a.mp4'] }
-    const segments = buildBeatTimeline(beats, beatFootage, 10)
+  it('a mixed beat sums EXACTLY to the beat duration (clip cap + photo remainder)', () => {
+    const beats = [makeBeat({ index: 0, targetSeconds: 10 })]
+    const beatFootage = { 0: ['a.mp4', 'b.jpg'] }
+    const segments = buildBeatTimeline(beats, beatFootage, 10, 8)
 
-    expect(segments).toHaveLength(3)
+    expect(segments).toHaveLength(2)
     expect(sumDurations(segments)).toBeCloseTo(10, 9)
-    // The last slice absorbs whatever remainder the repeated division left.
-    expect(segments[2].durationSec).toBeCloseTo(10 - segments[0].durationSec - segments[1].durationSec, 9)
+    // The photo (last cell) absorbs whatever remainder the clip cap left.
+    expect(segments[1].durationSec).toBeCloseTo(10 - segments[0].durationSec, 9)
   })
 
   it('handles an audioDurationSec that does not divide evenly across many beats', () => {
@@ -246,6 +258,60 @@ describe('buildBeatTimeline', () => {
 
     expect(segments).toHaveLength(7)
     expect(sumDurations(segments)).toBeCloseTo(audioDurationSec, 6)
+  })
+})
+
+describe('buildMixedBeatFootage', () => {
+  const beats = [
+    makeBeat({ index: 0 }),
+    makeBeat({ index: 1 }),
+    makeBeat({ index: 2 }),
+    makeBeat({ index: 3 }),
+  ]
+
+  it('distributes photos across every beat and puts the clip FIRST on a clip-beat', () => {
+    const clips = { 2: ['clip.mp4'] }
+    const photos = ['p0.jpg', 'p1.jpg', 'p2.jpg', 'p3.jpg']
+    const mixed = buildMixedBeatFootage(beats, clips, photos)
+
+    // Every beat gets footage; the clip-beat lists the clip before its photo.
+    for (const b of beats) expect(mixed[b.index]?.length).toBeGreaterThan(0)
+    expect(mixed[2][0]).toBe('clip.mp4')
+    expect(mixed[2].slice(1).every((p) => p.endsWith('.jpg'))).toBe(true)
+    // Every photo is placed somewhere, none dropped.
+    const placed = Object.values(mixed).flat().filter((p) => p.endsWith('.jpg'))
+    expect(new Set(placed)).toEqual(new Set(photos))
+  })
+
+  it('guarantees a clip-beat gets at least one photo to fill after its capped clip', () => {
+    // Fewer photos than beats: the clip-beat must still receive a photo.
+    const clips = { 1: ['clip.mp4'] }
+    const photos = ['p0.jpg', 'p1.jpg']
+    const mixed = buildMixedBeatFootage(beats, clips, photos)
+
+    expect(mixed[1][0]).toBe('clip.mp4')
+    expect(mixed[1].some((p) => p.endsWith('.jpg'))).toBe(true)
+  })
+
+  it('is photos-only (no clips) → each beat just carries its photos', () => {
+    const mixed = buildMixedBeatFootage(beats, {}, ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'])
+    for (const b of beats) {
+      expect(mixed[b.index]).toHaveLength(1)
+      expect(mixed[b.index][0].endsWith('.jpg')).toBe(true)
+    }
+  })
+
+  it('feeds buildBeatTimeline a genuine clip+photo mix', () => {
+    const clips = { 1: ['clip.mp4'] }
+    const photos = ['p0.jpg', 'p1.jpg', 'p2.jpg', 'p3.jpg']
+    const mixed = buildMixedBeatFootage(beats, clips, photos)
+    const segments = buildBeatTimeline(beats, mixed, 60, 8)
+
+    expect(segments.some((s) => s.kind === 'video')).toBe(true)
+    expect(segments.some((s) => s.kind === 'image')).toBe(true)
+    expect(segments.reduce((a, s) => a + s.durationSec, 0)).toBeCloseTo(60, 6)
+    // No clip segment exceeds the on-screen cap.
+    for (const s of segments) if (s.kind === 'video') expect(s.durationSec).toBeLessThanOrEqual(8 + 1e-6)
   })
 })
 

@@ -130,6 +130,26 @@ export async function recentCoverage(opts: CoverageOptions): Promise<CoverageEnt
   }
 }
 
+/**
+ * The most-recent time (ms epoch) a candidate name was covered, or null if never.
+ * A candidate is "covered" when its normalized name appears inside any coverage
+ * entry's normalized text — handles "Leopold and Loeb" == the F10 caseName and
+ * "Jordan" ⊂ the F9 "Career highlights feature for Michael Jordan …" caseName.
+ * Pure; exported so discovery's viability walk can apply the covered-cooldown.
+ */
+export function lastCoveredAt(name: string, coverage: CoverageEntry[]): number | null {
+  const norm = normalizeSubject(name)
+  if (!norm) return null
+  let latest: number | null = null
+  for (const e of coverage) {
+    if (e.normalized.includes(norm)) {
+      const t = e.coveredAt.getTime()
+      if (latest === null || t > latest) latest = t
+    }
+  }
+  return latest
+}
+
 /** Result of ordering a watchlist by coverage + rotation. */
 export interface RotationOrder<T> {
   /** Candidates in try-order: uncovered first (rotated by the cursor), then
@@ -160,19 +180,6 @@ export function orderByCoverageAndRotation<T>(
   const n = candidates.length
   if (n === 0) return { ordered: [], exhausted: false }
 
-  const lastCoveredAt = (c: T): number | null => {
-    const name = normalizeSubject(nameOf(c))
-    if (!name) return null
-    let latest: number | null = null
-    for (const e of coverage) {
-      if (e.normalized.includes(name)) {
-        const t = e.coveredAt.getTime()
-        if (latest === null || t > latest) latest = t
-      }
-    }
-    return latest
-  }
-
   // Walk the list starting at the rotation cursor so the start point moves each
   // run; split into uncovered (kept in rotated order) and covered.
   const start = ((cursor % n) + n) % n
@@ -180,7 +187,7 @@ export function orderByCoverageAndRotation<T>(
   const covered: { c: T; at: number }[] = []
   for (let i = 0; i < n; i++) {
     const c = candidates[(start + i) % n]
-    const at = lastCoveredAt(c)
+    const at = lastCoveredAt(nameOf(c), coverage)
     if (at === null) uncovered.push(c)
     else covered.push({ c, at })
   }
@@ -190,6 +197,83 @@ export function orderByCoverageAndRotation<T>(
     ordered: [...uncovered, ...covered.map((x) => x.c)],
     exhausted: uncovered.length === 0,
   }
+}
+
+/** A candidate covered within this many days is NEVER re-picked — the run
+ *  fails visibly rather than silently repeating a subject we just shipped. */
+export const COVERED_COOLDOWN_DAYS = 7
+
+/** Thrown when no watchlist candidate is pickable (every uncovered one is
+ *  non-viable AND every covered one is either inside the cooldown or non-viable).
+ *  A visible failure the operator can act on, not a silent duplicate. */
+export class NoViableCandidateError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NoViableCandidateError'
+  }
+}
+
+export interface ViablePick<T> {
+  chosen: T
+  /** Usable images confirmed for the winner (≥ minImages). */
+  images: number
+  /** True when the winner was already covered (all uncovered were non-viable). */
+  wasCovered: boolean
+}
+
+export interface ViabilityOptions<T> {
+  /** Name used for coverage matching (case/topic name). */
+  nameOf: (c: T) => string
+  /** Recent coverage ledger (from recentCoverage). */
+  coverage: CoverageEntry[]
+  /** Async usable-image probe; a throw counts as 0 (non-viable), never dead-ends. */
+  imageCountOf: (c: T) => Promise<number>
+  /** Minimum usable images for a candidate to be viable. */
+  minImages: number
+  /** Days a covered subject stays off-limits. Default COVERED_COOLDOWN_DAYS. */
+  cooldownDays?: number
+  /** Injected clock for tests. */
+  now?: number
+}
+
+/**
+ * Walk an already-ordered (uncovered-first, covered-LRU-tail — the output of
+ * orderByCoverageAndRotation) candidate list and return the FIRST viable one,
+ * enforcing the fixed picker contract:
+ *   • UNCOVERED-FIRST — uncovered candidates lead `ordered`, so an uncovered
+ *     viable candidate always wins before ANY covered one is even probed.
+ *   • COOLDOWN — a candidate covered within `cooldownDays` is skipped outright
+ *     and can never be picked (kills the "re-covered the same day" bug).
+ *   • LRU FALLBACK — only once every uncovered candidate is non-viable are the
+ *     covered ones considered, least-recently-covered first (the tail order).
+ * "Viable" = imageCountOf(c) ≥ minImages (a throwing probe = 0 = non-viable).
+ * Throws NoViableCandidateError when nothing pickable remains, so the run fails
+ * visibly instead of silently repeating a recent subject.
+ */
+export async function selectViableCandidate<T>(
+  ordered: T[],
+  opts: ViabilityOptions<T>
+): Promise<ViablePick<T>> {
+  const now = opts.now ?? Date.now()
+  const cooldownDays = opts.cooldownDays ?? COVERED_COOLDOWN_DAYS
+  const cooldownMs = cooldownDays * 86_400_000
+  for (const c of ordered) {
+    const covAt = lastCoveredAt(opts.nameOf(c), opts.coverage)
+    const wasCovered = covAt !== null
+    // Recently covered → never pick, whatever its image pool looks like.
+    if (wasCovered && now - covAt < cooldownMs) continue
+    let images = 0
+    try {
+      images = await opts.imageCountOf(c)
+    } catch {
+      images = 0 // a flaky probe must never dead-end discovery
+    }
+    if (images >= opts.minImages) return { chosen: c, images, wasCovered }
+  }
+  throw new NoViableCandidateError(
+    `all watchlist topics exhausted or non-viable — no candidate has ≥${opts.minImages} ` +
+      `usable images outside the ${cooldownDays}-day coverage cooldown. Curate more topics.`
+  )
 }
 
 /**

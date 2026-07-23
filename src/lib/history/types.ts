@@ -76,6 +76,11 @@ export interface F11Context {
   imagePaths?: string[]
   /** Resolved footage paths per beat index; consumed by the assemble timeline. */
   beatFootage?: Record<number, string[]>
+  /** Relevant moving clips resolved per beat index (paths to trimmed, muted
+   *  .mp4 excerpts). Merged with the photo backbone into the render timeline. */
+  beatClips?: Record<number, string[]>
+  /** Attribution records for every sourced clip (title/channel/url). */
+  clipAttributions?: import('../truecrime/types').ClipAttribution[]
   complianceDecision?: 'pass' | 'route_to_review' | 'block'
   tts?: import('../truecrime/types').TtsResult
   captions?: import('../truecrime/types').CaptionsResult

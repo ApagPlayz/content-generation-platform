@@ -1,16 +1,16 @@
-// Discover stage. Picks one curated case (rotated by day, gated on MEDIA
-// RICHNESS — see pickMediaRichCandidate) and enriches it with real facts from
-// Wikipedia (REST summary) and a Wikidata sanity-check on each subject's
-// living status. Never invents subjects — the operator's curated metadata is
-// the source of truth the compliance gate relies on.
+// Discover stage. Picks one curated case (uncovered-first, gated on IMAGE
+// VIABILITY — can the Wikimedia sourcing plausibly deliver a full slideshow?)
+// and enriches it with real facts from Wikipedia (REST summary) and a Wikidata
+// sanity-check on each subject's living status. Never invents subjects — the
+// operator's curated metadata is the source of truth the compliance gate relies on.
 
-import { countDistinctArchiveItems } from './archiveFootage'
 import { fetchJsonBudget } from './budget'
-import { archivePoolQueries } from './footage'
+import { countUsableArticleImages, MIN_USABLE_IMAGES } from './visuals'
 import {
   nextRotationCursor,
   orderByCoverageAndRotation,
   recentCoverage,
+  selectViableCandidate,
 } from '../pipeline/coverage'
 import type { CaseSubject } from '../compliance'
 import type { CaseBrief, CuratedCase, F10FactoryConfig } from './types'
@@ -118,88 +118,26 @@ async function verifyLiving(subjects: CaseSubject[]): Promise<string[]> {
   return warnings
 }
 
-/** Default media-richness floor: a case/topic needs at least this many
- *  DISTINCT archive.org movie/image hits to be accepted at discovery.
- *  Owner-tunable per factory via config.minArchiveHits (0 disables). */
-export const DEFAULT_MIN_ARCHIVE_HITS = 8
+/** Default image-viability floor: a case/topic is viable only if its Wikipedia
+ *  article carries at least this many DISTINCT usable images (the source the
+ *  render actually draws from). Replaces the obsolete archive.org-hits + era
+ *  floors — with archiveStillsOnly the archive counts are ~zero for every
+ *  topic, and a human curated the watchlist so the era guidance lives in the
+ *  playbook prompt, not a hard gate. Owner-tunable per factory via
+ *  config.minUsableImages. Defaults to MIN_USABLE_IMAGES (5) from visuals.ts. */
+export const DEFAULT_MIN_USABLE_IMAGES = MIN_USABLE_IMAGES
 
-export interface MediaRichPick<T> {
-  chosen: T
-  /** Distinct archive hits counted for the chosen candidate (capped at the threshold). */
-  hits: number
-  /** False when NO candidate met the floor and we fell back to the day-pick. */
-  passed: boolean
+/** Usable-image count for a curated case: resolves its Wikipedia title (the
+ *  curated `wikipediaTitle`, or a search) then counts the article's usable
+ *  images with the SAME quality floor the visuals stage applies. 0 when the
+ *  title can't be resolved — treated as non-viable, never throws. */
+function caseImageCount(chosen: CuratedCase, need: number): Promise<number> {
+  const title = chosen.wikipediaTitle
+  if (title) return countUsableArticleImages(title, need)
+  return resolveTitle(chosen.caseName).then((t) => (t ? countUsableArticleImages(t, need) : 0))
 }
 
-/**
- * Media-richness selection (round 6): starting from the daily-rotation index,
- * walk the watchlist and pick the FIRST candidate with at least `threshold`
- * distinct archive.org hits — so the factory naturally lands on
- * well-documented (newsreel-era) stories instead of an 1637/1720/1882 topic
- * with no usable era footage. threshold ≤ 0 disables the gate (plain
- * day-pick). FAIL-OPEN: when no candidate passes, the original day-pick is
- * returned with passed=false — the factory keeps producing, it just can't do
- * better than its watchlist. Generic + injectable counter so both F10 and F11
- * discovery share it and tests can fake the archive.
- */
-export async function pickMediaRichCandidate<T>(
-  candidates: T[],
-  startIndex: number,
-  threshold: number,
-  countHits: (candidate: T) => Promise<number>
-): Promise<MediaRichPick<T>> {
-  const dayPick = candidates[startIndex % candidates.length]
-  if (threshold <= 0) return { chosen: dayPick, hits: 0, passed: true }
-  let dayPickHits = 0
-  for (let i = 0; i < candidates.length; i++) {
-    const cand = candidates[(startIndex + i) % candidates.length]
-    let hits = 0
-    try {
-      hits = await countHits(cand)
-    } catch {
-      hits = 0 // a flaky probe must never dead-end discovery
-    }
-    if (i === 0) dayPickHits = hits
-    if (hits >= threshold) return { chosen: cand, hits, passed: true }
-  }
-  return { chosen: dayPick, hits: dayPickHits, passed: false }
-}
-
-/** Default era floor: stories set before this year predate photography and
- *  newsreels — no real era footage exists for them, whatever a word-overlap
- *  search returns ("south sea" finds tropical travelogues, not the 1720
- *  bubble). Owner-tunable per factory via config.minTopicYear (0 disables). */
-export const DEFAULT_MIN_TOPIC_YEAR = 1900
-
-/** Pure era check for an enriched brief's year: unknown years pass (we can't
- *  judge them — the media-richness count is then the only gate). */
-export function passesEraFloor(year: number | undefined, minYear: number): boolean {
-  if (minYear <= 0 || year == null) return true
-  return year >= minYear
-}
-
-/**
- * Count an ENRICHED brief's distinct archive.org inventory with the SAME
- * topic-anchored pool queries the footage stage will later run (the brief's
- * Wikipedia-extracted year sharpens the search), era-gated first: a story
- * older than the era floor scores 0 outright — pre-photography topics can
- * only match on word overlap, never on real era footage.
- */
-export function briefMediaRichness(
-  brief: CaseBrief,
-  config: F10FactoryConfig,
-  threshold: number
-): Promise<number> {
-  const minYear = config.minTopicYear ?? DEFAULT_MIN_TOPIC_YEAR
-  if (!passesEraFloor(brief.year, minYear)) return Promise.resolve(0)
-  return countDistinctArchiveItems(archivePoolQueries(brief), {
-    collections: config.archiveCollections,
-    need: threshold,
-  })
-}
-
-/** The Wikipedia/Wikidata enrichment for ONE curated case — extracted so the
- *  media-richness gate can enrich candidates while walking the rotation. */
+/** The Wikipedia/Wikidata enrichment for ONE curated case. */
 async function enrichCase(chosen: CuratedCase): Promise<CaseBrief> {
   const title = chosen.wikipediaTitle ?? (await resolveTitle(chosen.caseName))
   if (!title) {
@@ -239,49 +177,32 @@ export async function discoverCase(
     throw new Error('F10 factory has no caseWatchlist — add curated cases to the factory config.')
   }
 
-  // Dedup FIRST, rotation SECOND, media-richness LAST. We read what this factory
-  // has already shipped (ComplianceReport ledger + recent Video titles), then
-  // order the watchlist so already-covered cases fall to the back and a
-  // persisted cursor advances the start point every run (kills the "same case
-  // all day / 5× Wright Brothers" bug). Only THEN does the media-richness gate
-  // (round 6) walk that order: each candidate is enriched (Wikipedia year +
-  // facts) and must clear the era floor AND the distinct-archive-hits floor;
-  // the first that does wins. Fail-open on every axis — exhausted watchlist,
-  // no candidate meeting the floor, or a DB hiccup — the run always produces.
+  // Dedup FIRST, rotation SECOND, image-viability LAST. We read what this
+  // factory has already shipped (ComplianceReport ledger + recent Video titles),
+  // then order the watchlist uncovered-first (a persisted cursor advances the
+  // start point every run — kills the "same case all day / 5× Wright Brothers"
+  // bug). selectViableCandidate then walks that order and returns the FIRST case
+  // whose Wikipedia article can plausibly fill the slideshow (≥ minUsableImages
+  // usable images), NEVER re-picking a case covered within the cooldown window.
+  // If nothing viable remains it THROWS (NoViableCandidateError) so the run
+  // fails visibly instead of silently repeating a recent subject.
   const coverage = await recentCoverage({ factoryType: 'F10', factoryId })
   const cursor = await nextRotationCursor(factoryId ? `F10:${factoryId}` : 'F10')
-  const { ordered, exhausted } = orderByCoverageAndRotation(
-    watchlist,
-    (c) => c.caseName,
-    coverage,
-    cursor
-  )
-  if (exhausted) {
-    console.warn(
-      `[discover] every F10 watchlist case was recently covered — falling back to the ` +
-        `least-recently-covered case. Curate more cases to widen the rotation.`
-    )
-  }
+  const { ordered } = orderByCoverageAndRotation(watchlist, (c) => c.caseName, coverage, cursor)
 
-  const threshold = config.minArchiveHits ?? DEFAULT_MIN_ARCHIVE_HITS
-  const briefs = new Map<CuratedCase, CaseBrief>()
-  const enrich = async (c: CuratedCase) => {
-    const cached = briefs.get(c)
-    if (cached) return cached
-    const brief = await enrichCase(c)
-    briefs.set(c, brief)
-    return brief
-  }
-  // `ordered` already encodes exclusion + rotation, so walk it from index 0.
-  const pick = await pickMediaRichCandidate(ordered, 0, threshold, async (c) =>
-    briefMediaRichness(await enrich(c), config, threshold)
-  )
-  if (!pick.passed) {
+  const minImages = config.minUsableImages ?? DEFAULT_MIN_USABLE_IMAGES
+  const pick = await selectViableCandidate(ordered, {
+    nameOf: (c) => c.caseName,
+    coverage,
+    minImages,
+    imageCountOf: (c) => caseImageCount(c, minImages),
+  })
+  if (pick.wasCovered) {
     console.warn(
-      `[discover] no watchlist case met the media-richness gate (minArchiveHits=${threshold}, ` +
-        `minTopicYear=${config.minTopicYear ?? DEFAULT_MIN_TOPIC_YEAR}); falling back to ` +
-        `"${pick.chosen.caseName}" (${pick.hits} hits). Curate better-documented, newsreel-era cases.`
+      `[discover] no UNCOVERED F10 case was image-viable — falling back to the ` +
+        `least-recently-covered viable case "${pick.chosen.caseName}" (${pick.images} usable images). ` +
+        `Curate more cases to widen the rotation.`
     )
   }
-  return enrich(pick.chosen)
+  return enrichCase(pick.chosen)
 }

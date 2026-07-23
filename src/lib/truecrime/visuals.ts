@@ -314,6 +314,41 @@ async function articleImageCandidates(brief: CaseBrief): Promise<ImageCandidate[
   return imageInfoForTitles(titles)
 }
 
+/**
+ * Discovery viability probe: how many DISTINCT usable images the topic's own
+ * Wikipedia article carries — counted with EXACTLY the machinery source #1 of
+ * sourceVisuals uses (prop=images list → junk-title pre-filter → imageinfo
+ * quality floor → isAcceptableImage). This is the real gate that replaced the
+ * obsolete archive.org-hits floor: with `archiveStillsOnly` the archive counts
+ * are ~zero for every topic, but the Wikimedia article images are the workhorse
+ * the render actually draws from. Article images are a conservative LOWER bound
+ * (the Commons per-query search adds more at render time), so a topic clearing
+ * `need` here can plausibly fill a ≥ MIN_USABLE_IMAGES slideshow. Best-effort:
+ * returns 0 on any fetch error so the caller treats it as non-viable, never
+ * throws. Exported for the discover stage and tests.
+ */
+export async function countUsableArticleImages(
+  articleTitle: string,
+  need = MIN_USABLE_IMAGES
+): Promise<number> {
+  if (!articleTitle) return 0
+  try {
+    const titles = (await articleImageTitles(articleTitle)).filter((t) => !isJunkImageTitle(t))
+    if (!titles.length) return 0
+    const candidates = await imageInfoForTitles(titles)
+    let usable = 0
+    for (const c of candidates) {
+      if (isAcceptableImage({ title: c.title, width: c.width, height: c.height, bytes: c.bytes })) {
+        usable++
+        if (usable >= need) break // early-stop once viability is proven
+      }
+    }
+    return usable
+  } catch {
+    return 0
+  }
+}
+
 async function reencodeToBaselineJpeg(buf: Buffer, dest: string): Promise<boolean> {
   // archive.org / Commons serve stills in formats headless Chromium can't always
   // decode (progressive/CMYK JPEG, some PNGs); ffmpeg re-encodes to a baseline

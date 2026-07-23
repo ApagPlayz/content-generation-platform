@@ -57,6 +57,19 @@ const VALIDATE_TIMEOUT_MS = 20_000
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024 // 15MB — stills only, never a full video download
 const MAX_SEARCH_RESULTS = 5
 
+// ── Moving-clip layer (relevant footage, 2026-07) ───────────────────────────
+/** Minimum decoded video height (px) for a usable clip derivative — rejects
+ *  tiny/awful transcodes. archive.org often omits per-file dimensions, so a
+ *  derivative with NO reported height is accepted (and ranked by size). */
+export const MIN_CLIP_HEIGHT = 360
+/** Whole-request budget for a single trimmed clip download (ffmpeg HTTP-seeks
+ *  the reel and transcodes only the short window, never the full film). */
+const CLIP_DOWNLOAD_TIMEOUT_MS = 120_000
+/** ffmpeg filter that normalises any source reel to a muted 1080×1920 cover
+ *  frame with a light denoise (archive transcodes are often low-res). */
+const CLIP_NORMALIZE_VF =
+  'hqdn3d=1.5:1.5:6:6,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p'
+
 /** Minimum byte size for a usable still — anything smaller is a thumbnail or a truncated download. */
 export const MIN_STILL_BYTES = 10 * 1024
 /** Minimum width/height (px) for a usable still — rejects icon-sized junk. */
@@ -137,6 +150,7 @@ export interface ArchiveFootageResult {
 export interface ArchiveDoc {
   identifier?: string
   title?: string
+  description?: string | string[]
   mediatype?: string
   licenseurl?: string
   rights?: string
@@ -148,6 +162,9 @@ export interface ArchiveFile {
   name: string
   format?: string
   size?: string
+  /** Decoded pixel dimensions, when archive.org reports them (video derivatives). */
+  width?: string
+  height?: string
   /** Duration as reported by archive.org — seconds ("571.32") or "M:SS" / "H:MM:SS". */
   length?: string
 }
@@ -182,7 +199,7 @@ export async function archiveSearch(
   const url =
     'https://archive.org/advancedsearch.php?' +
     `q=${encodeURIComponent(q)}` +
-    '&fl[]=identifier&fl[]=title&fl[]=mediatype&fl[]=licenseurl&fl[]=rights' +
+    '&fl[]=identifier&fl[]=title&fl[]=description&fl[]=mediatype&fl[]=licenseurl&fl[]=rights' +
     '&fl[]=possible-copyright-status&fl[]=collection' +
     `&sort[]=downloads+desc&rows=${maxResults}&page=1&output=json`
   const data = (await fetchJsonBudget(url, { timeoutMs: SEARCH_TIMEOUT_MS, headers: { 'User-Agent': UA } })) as
@@ -254,8 +271,96 @@ export function pickBestFile(meta: ArchiveMetadata, mediatype: string | undefine
   return candidates.sort((a, b) => (Number(a.size) || Infinity) - (Number(b.size) || Infinity))[0]
 }
 
+/**
+ * Pick the best MP4 video derivative for a MOVING-CLIP download (not a poster
+ * grab). Prefers the tallest derivative that clears `minHeight`; when no
+ * derivative reports a height that clears the floor (archive.org frequently
+ * omits per-file dimensions), falls back to the largest file with an UNKNOWN
+ * height — usually the full-resolution transcode. Returns null only when every
+ * derivative reports a KNOWN height below the floor (all genuinely tiny), so a
+ * junk-only item is skipped. Pure; exported for tests.
+ */
+export function pickBestVideoDerivative(meta: ArchiveMetadata, minHeight: number = MIN_CLIP_HEIGHT): ArchiveFile | null {
+  const files = meta.files ?? []
+  const cands = files.filter(
+    (f) => ['mp4', 'm4v'].includes(extOf(f.name)) && !/_thumb|__ia_thumb|sample/i.test(f.name)
+  )
+  if (!cands.length) return null
+  const h = (f: ArchiveFile) => Number(f.height) || 0
+  const sz = (f: ArchiveFile) => Number(f.size) || 0
+  const meetsFloor = cands.filter((f) => h(f) >= minHeight)
+  if (meetsFloor.length) return meetsFloor.sort((a, b) => h(b) - h(a) || sz(b) - sz(a))[0]
+  const unknownHeight = cands.filter((f) => h(f) === 0)
+  if (unknownHeight.length) return unknownHeight.sort((a, b) => sz(b) - sz(a))[0]
+  return null // every derivative reports a known height below the floor
+}
+
 function fileUrl(identifier: string, name: string): string {
   return `https://archive.org/download/${encodeURIComponent(identifier)}/${encodeURIComponent(name)}`
+}
+
+/** Deterministic in-point (seconds) for a clip grab: ~25% into the reel to skip
+ *  title cards / leaders, clamped so the whole clip window stays inside the
+ *  reel. Falls back to a fixed post-titles offset when the duration is unknown.
+ *  Pure; exported for tests. */
+export function clipInPoint(durationSec: number | null, clipLenSec: number): number {
+  if (durationSec == null || durationSec <= 0) return FALLBACK_SEEK_SEC
+  const latest = Math.max(RETRY_SEEK_SEC, durationSec - clipLenSec - 1)
+  return Math.min(Math.max(RETRY_SEEK_SEC, durationSec * 0.25), latest)
+}
+
+/**
+ * Download a SHORT, muted, normalised moving-clip excerpt from a remote reel
+ * URL. ffmpeg HTTP-seeks to a post-titles in-point and transcodes only the
+ * `clipLenSec` window (never the whole film) to a 1080×1920 cover-framed,
+ * audio-stripped MP4 the render can consume directly. Best-effort: returns
+ * false (never throws) when ffmpeg is missing, the seek fails, or nothing is
+ * written — the caller then tries the next candidate.
+ */
+export async function downloadArchiveClip(
+  reelUrl: string,
+  clipLenSec: number,
+  destPath: string
+): Promise<boolean> {
+  if (!(await ffmpegAvailable())) return false
+  try {
+    const duration = await probeDurationSec(reelUrl)
+    const inSec = clipInPoint(duration, clipLenSec)
+    await exec(
+      'ffmpeg',
+      ['-y', '-ss', inSec.toFixed(2), '-i', reelUrl, '-t', String(Math.max(1, clipLenSec)),
+        '-vf', CLIP_NORMALIZE_VF, '-r', '30', '-an',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart', destPath],
+      { timeout: CLIP_DOWNLOAD_TIMEOUT_MS }
+    )
+    return existsSync(destPath)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Transcode an already-downloaded local clip file to the same muted 1080×1920
+ * cover-framed MP4 downloadArchiveClip produces, so a clip fetched by another
+ * tool (e.g. the yt-dlp YouTube source) enters the render on identical terms —
+ * no embedded audio (narration + music are the only bed), uniform dimensions.
+ * Best-effort: false (never throws) when ffmpeg is missing or nothing writes.
+ */
+export async function normalizeClipFile(srcPath: string, destPath: string): Promise<boolean> {
+  if (!existsSync(srcPath) || !(await ffmpegAvailable())) return false
+  try {
+    await exec(
+      'ffmpeg',
+      ['-y', '-i', srcPath, '-vf', CLIP_NORMALIZE_VF, '-r', '30', '-an',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart', destPath],
+      { timeout: CLIP_DOWNLOAD_TIMEOUT_MS }
+    )
+    return existsSync(destPath)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -645,6 +750,32 @@ async function downloadImageFile(url: string, destPath: string): Promise<boolean
     } finally {
       await unlink(rawPath).catch(() => {})
     }
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve ONE archive.org movie doc to a downloaded, normalised moving-clip
+ * excerpt: item metadata → best MP4 derivative (≥ minHeight) → short muted
+ * 1080×1920 grab. Encapsulates the archive internals (metadata fetch, derivative
+ * pick, download URL) so the clip orchestrator stays source-agnostic. Returns
+ * false (never throws) on any miss. Exported as the ClipResolveDeps default.
+ */
+export async function resolveArchiveClip(
+  doc: ArchiveDoc,
+  clipLenSec: number,
+  destPath: string,
+  minHeight: number = MIN_CLIP_HEIGHT
+): Promise<boolean> {
+  const id = doc.identifier
+  if (!id) return false
+  try {
+    const meta = await fetchItemMetadata(id)
+    if (!meta) return false
+    const file = pickBestVideoDerivative(meta, minHeight)
+    if (!file) return false
+    return await downloadArchiveClip(fileUrl(id, file.name), clipLenSec, destPath)
   } catch {
     return false
   }
