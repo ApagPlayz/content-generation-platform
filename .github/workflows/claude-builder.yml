@@ -78,14 +78,21 @@ jobs:
           open_prs=$(gh pr list --state open --json headRefName \
             --jq '[.[] | select(.headRefName | startswith("claude/"))] | length')
 
-          # Issues that an OPEN agent PR already claims (via "Closes #N" in its body).
-          # Without this the Builder rebuilds an issue it is already building: on
-          # 2026-07-14 two runs both picked issue #15, both spent ~14 minutes, and
-          # produced two PRs for one feature. Telling the agent "I've started this" in
-          # an issue comment is NOT protection — the next run never reads it. This is.
-          claimed=$(gh pr list --state open --json headRefName,body \
+          # Issues that an OPEN agent PR already claims. Without this the Builder rebuilds
+          # an issue it is already building: on 2026-07-14 two runs both picked issue #15,
+          # both spent ~14 minutes, and produced two PRs for one feature. Telling the agent
+          # "I've started this" in an issue comment is NOT protection — the next run never
+          # reads it. This is.
+          # Detected three ways: "Closes #N" in the body, "(#N)" in the PR title, and an
+          # issue number embedded in the branch name itself (e.g. `claude/issue-15-foo` or
+          # `claude/foo-15`) — the body scan alone misses PRs that only recorded the issue
+          # number in the title or branch.
+          claimed=$(gh pr list --state open --json headRefName,title,body \
             --jq '[.[] | select(.headRefName | startswith("claude/"))
-                       | (.body // "") | scan("(?i)closes #([0-9]+)") | .[0]]
+                       | ( (.body // "") | scan("(?i)closes #([0-9]+)") | .[0] ),
+                         ( (.title // "") | scan("\\(#([0-9]+)\\)") | .[0] ),
+                         ( (.headRefName // "") | scan("issue-([0-9]+)(?:-|$)") | .[0] ),
+                         ( (.headRefName // "") | scan("-([0-9]+)$") | .[0] )]
                   | unique | join(", ")')
           [ -z "$claimed" ] && claimed="(none)"
 
