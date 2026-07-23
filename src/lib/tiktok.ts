@@ -18,6 +18,12 @@ import { prisma } from './prisma'
 
 export const PLATFORM = 'tiktok'
 
+// Plain-language reason shown to the owner wherever a video didn't post because
+// the TikTok login lapsed — never the raw invalid_grant / 401 OAuth jargon.
+// Mirrors youtube.ts's YT_RECONNECT_MESSAGE so both platforms read the same.
+export const TIKTOK_RECONNECT_MESSAGE =
+  'TikTok disconnected — your login expired. Reconnect in Settings to resume publishing.'
+
 // user.info.basic → read the creator handle for the Settings pill.
 // video.publish   → Direct Post (upload straight to the profile).
 export const SCOPES = ['user.info.basic', 'video.publish']
@@ -169,6 +175,75 @@ export async function connection() {
   })
 }
 
+/** Tri-state for the Settings UI. 'none' = never connected / disconnected. */
+export type TikTokConnState = 'active' | 'needs_reconnect' | 'none'
+
+/**
+ * True when a TikTok failure means the stored grant is dead and the owner must
+ * reconnect — the refresh token was revoked or hit its fixed expiry (TikTok's
+ * OAuth token endpoint answers with `invalid_grant`/`invalid_token`, HTTP < 500),
+ * or a Content Posting API call came back 401. Deliberately conservative: a 5xx,
+ * a rate-limit (429) or a network error (no numeric status) do NOT match, so a
+ * healthy login is never wrongly flagged. Pure — unit-testable with no DB or
+ * network. The `status`/`tiktokError` fields are tagged onto the errors thrown in
+ * accessToken()/directPost() so this can read structured signal, not brittle text.
+ */
+export function isAuthError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false
+  const err = e as { message?: unknown; status?: unknown; tiktokError?: unknown }
+  const status = Number(err.status)
+  // A 401 from an authenticated API call — the access token was rejected.
+  if (status === 401) return true
+  // OAuth refresh refusal for a revoked/expired refresh token. Guard on < 500 so
+  // a transient server blip that happens to echo an error code is never treated
+  // as a dead grant.
+  if (
+    (err.tiktokError === 'invalid_grant' || err.tiktokError === 'invalid_token') &&
+    status < 500
+  ) {
+    return true
+  }
+  // Fallback for the plain-message shapes our own code throws once it has already
+  // decided the login is dead (accessToken's reconnect throw / "session expired").
+  const msg = typeof err.message === 'string' ? err.message : ''
+  return /invalid_grant|invalid_token|session expired|reconnect in settings/i.test(msg)
+}
+
+/**
+ * Flip the live TikTok connection from active → needs_reconnect after an auth
+ * failure, so Settings and auto-publish stop treating a dead grant as healthy.
+ * Idempotent (the `status: 'active'` guard makes a repeat call, or a call after a
+ * manual Disconnect, a no-op) and swallows its own errors — this health
+ * bookkeeping must never mask the original error the caller is handling.
+ */
+export async function markNeedsReconnect(): Promise<void> {
+  try {
+    await prisma.platformAuth.updateMany({
+      where: { platform: PLATFORM, status: 'active' },
+      data: { status: 'needs_reconnect' },
+    })
+  } catch {
+    // A status-flip hiccup must not fail the run that's already handling an error.
+  }
+}
+
+/**
+ * Connection state for the UI. Unlike connection() (active-only, used to GATE
+ * publishing), this also surfaces a needs_reconnect row so the owner is told the
+ * login went stale — "Reconnect needed" — instead of a bare "Not connected".
+ */
+export async function connectionState(): Promise<{ state: TikTokConnState; handle?: string }> {
+  const row = await prisma.platformAuth.findFirst({
+    where: { platform: PLATFORM, status: { in: ['active', 'needs_reconnect'] } },
+    orderBy: { updatedAt: 'desc' },
+  })
+  if (!row) return { state: 'none' }
+  return {
+    state: row.status === 'active' ? 'active' : 'needs_reconnect',
+    handle: row.accountHandle,
+  }
+}
+
 /**
  * A valid access token, refreshing (and persisting the rotation) when the stored
  * one is expired or about to expire. Mirrors youtube.ts's authedClient, but for
@@ -186,7 +261,11 @@ export async function accessToken(): Promise<string> {
   if (stillFresh) return tokens.access_token as string
 
   if (!tokens.refresh_token) {
-    throw new Error('TikTok session expired. Reconnect it in Settings.')
+    // No refresh token stored means this grant can never be renewed — it's dead.
+    // Flip the connection so Settings stops painting it green, then report it in
+    // plain language instead of leaving the channel to silently go dark.
+    await markNeedsReconnect()
+    throw new Error(TIKTOK_RECONNECT_MESSAGE)
   }
   const { clientKey, clientSecret } = await clientCreds()
   const res = await fetch(TOKEN_URL, {
@@ -201,7 +280,17 @@ export async function accessToken(): Promise<string> {
   })
   const data = (await res.json()) as TikTokTokens & Record<string, unknown>
   if (!res.ok || tiktokError(data) || !data.access_token) {
-    throw new Error(tiktokError(data) || 'TikTok token refresh failed')
+    // Tag the failure with structured signal so isAuthError can tell a dead
+    // refresh token (needs reconnect) from a transient 5xx (safe to retry later).
+    const failure = Object.assign(
+      new Error(tiktokError(data) || 'TikTok token refresh failed'),
+      { status: res.status, tiktokError: typeof data.error === 'string' ? data.error : undefined }
+    )
+    if (isAuthError(failure)) {
+      await markNeedsReconnect()
+      throw new Error(TIKTOK_RECONNECT_MESSAGE)
+    }
+    throw failure
   }
   const merged = { ...tokens, ...data }
   await prisma.platformAuth.update({
@@ -269,7 +358,13 @@ export async function directPost(input: DirectPostInput): Promise<DirectPostResu
     data?: { publish_id?: string; upload_url?: string }
   }
   if (!initRes.ok || tiktokError(initData)) {
-    throw new Error(tiktokError(initData) || 'TikTok upload could not be started')
+    // Tag the HTTP status: a 401 here means a revoked grant that was still
+    // clock-fresh (so the refresh path above never ran) — isAuthError catches it
+    // in the publish layer and flips the connection to needs_reconnect.
+    throw Object.assign(
+      new Error(tiktokError(initData) || 'TikTok upload could not be started'),
+      { status: initRes.status }
+    )
   }
   const publishId = initData.data?.publish_id
   const uploadUrl = initData.data?.upload_url

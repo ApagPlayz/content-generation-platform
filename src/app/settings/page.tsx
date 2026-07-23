@@ -40,7 +40,7 @@ export default function Settings() {
   const [yt, setYt] = useState<PlatformStatus>({ connected: false, state: 'none' })
   const [quota, setQuota] = useState<{ used: number; cap: number; remaining: number } | null>(null)
   const [ytNotice, setYtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
-  const [tt, setTt] = useState<PlatformStatus>({ connected: false })
+  const [tt, setTt] = useState<PlatformStatus>({ connected: false, state: 'none' })
   const [ttNotice, setTtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   function refreshYouTube() {
@@ -473,7 +473,11 @@ export default function Settings() {
                   Content Posting API · highest revenue-per-view target
                 </p>
               </div>
-              {tt.connected ? (
+              {tt.state === 'needs_reconnect' ? (
+                <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-medium">
+                  <AlertTriangle className="w-3.5 h-3.5" /> Reconnect needed
+                </span>
+              ) : tt.connected ? (
                 <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">
                   <Check className="w-3.5 h-3.5" /> {tt.handle}
                 </span>
@@ -483,6 +487,18 @@ export default function Settings() {
                 </span>
               )}
             </div>
+
+            {tt.state === 'needs_reconnect' && (
+              <div className="flex items-start gap-2 text-xs px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+                <span>
+                  <strong>TikTok disconnected.</strong> Your login with TikTok expired, so
+                  auto-publish is paused and new videos aren&apos;t going out. Click{' '}
+                  <strong>Reconnect</strong> below to sign in again and resume publishing —
+                  nothing else is lost.
+                </span>
+              </div>
+            )}
 
             {ttNotice && (
               <p
@@ -549,7 +565,7 @@ export default function Settings() {
 
             <div className="flex items-center justify-end pt-1">
               <div className="flex items-center gap-2">
-                {tt.connected && (
+                {tt.state !== 'none' && (
                   <button
                     onClick={disconnectTikTok}
                     className="px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
@@ -563,9 +579,13 @@ export default function Settings() {
                     window.location.href = '/api/auth/tiktok/start'
                   }}
                   disabled={saving}
-                  className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 ${
+                    tt.state === 'needs_reconnect'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-gray-900 hover:bg-gray-800'
+                  }`}
                 >
-                  {tt.connected ? 'Reconnect' : 'Save & Connect'}
+                  {tt.state === 'none' ? 'Save & Connect' : 'Reconnect'}
                 </button>
               </div>
             </div>

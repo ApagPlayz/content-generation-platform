@@ -14,8 +14,11 @@ import {
 import {
   connection as tiktokConnection,
   directPost,
+  isAuthError as isTikTokAuthError,
+  markNeedsReconnect as markTikTokNeedsReconnect,
   PLATFORM as TIKTOK_PLATFORM,
   tiktokPermalink,
+  TIKTOK_RECONNECT_MESSAGE,
 } from '../tiktok'
 
 /**
@@ -375,6 +378,18 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
 
     return { postId: updated.id, platformPostId, permalink, alreadyPublished: false }
   } catch (e) {
+    // A dead TikTok login must stop being painted green in Settings. Flip the
+    // connection to needs_reconnect so the UI prompts a re-login and the next
+    // publish short-circuits at the "not connected" gate — and record the reason
+    // in plain language instead of the raw OAuth error. Mirrors publishToYouTube.
+    if (isTikTokAuthError(e)) {
+      await markTikTokNeedsReconnect()
+      await prisma.post.update({
+        where: { id: post.id },
+        data: { status: 'failed', error: TIKTOK_RECONNECT_MESSAGE },
+      })
+      throw new Error(TIKTOK_RECONNECT_MESSAGE)
+    }
     const message = e instanceof Error ? e.message : String(e)
     await prisma.post.update({
       where: { id: post.id },
