@@ -24,6 +24,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: read
       id-token: write
     steps:
       - uses: actions/checkout@v6
@@ -58,6 +59,34 @@ jobs:
           echo "pool=$pool" >> "$GITHUB_OUTPUT"
           # Actions expressions have no arithmetic — do the subtraction here.
           echo "room=$((CAP - pool))" >> "$GITHUB_OUTPUT"
+
+          # Also surface work that's already in flight elsewhere, so the agent doesn't
+          # propose something an open PR is already building, or something already
+          # approved and just waiting on the Builder. Best-effort: an empty list or a
+          # transient gh error must never fail this step.
+          open_prs=$(gh pr list --state open --json number,title,headRefName \
+            --jq '.[] | "#\(.number) \(.title) (branch: \(.headRefName))"' 2>/dev/null || true)
+          [ -z "$open_prs" ] && open_prs="(none)"
+
+          approved_ideas=$(gh issue list --state open --label approved --json number,title \
+            --jq '.[] | "#\(.number) \(.title)"' 2>/dev/null || true)
+          [ -z "$approved_ideas" ] && approved_ideas="(none)"
+
+          echo "Open PRs in flight:"
+          echo "$open_prs"
+          echo "Approved ideas awaiting build:"
+          echo "$approved_ideas"
+
+          {
+            echo "open_prs<<PREOF"
+            echo "$open_prs"
+            echo "PREOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "approved_ideas<<APPEOF"
+            echo "$approved_ideas"
+            echo "APPEOF"
+          } >> "$GITHUB_OUTPUT"
 
       - if: steps.gate.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
@@ -109,6 +138,19 @@ jobs:
                ignores. This is how you get better at your job.
             3. Read every open issue already labeled `proposal`
                (`gh issue list --state open --label proposal`). NEVER duplicate one.
+
+               Before proposing, also review these OPEN PULL REQUESTS and APPROVED ideas —
+               both are work already in flight, not just the `proposal` pool:
+
+               Open pull requests:
+               ${{ steps.gate.outputs.open_prs }}
+
+               Approved ideas (approved but not yet built):
+               ${{ steps.gate.outputs.approved_ideas }}
+
+               NEVER propose something already covered by an open PR or an already-approved
+               idea — it is already in flight. Your proposals must be genuinely NEW work not
+               represented anywhere in: open proposals, open PRs, or approved ideas.
             4. Spawn FOUR researchers with the Task tool, in ONE message, each with
                `run_in_background: false` so you block until all four have returned:
                - Competitors: who else does this, what do they have that we don't.
