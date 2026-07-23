@@ -9,6 +9,7 @@ import { gateSportsCopyright } from './tools/copyrightGate'
 import { maybeAutoPublish } from './tools/publish'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
 import { withTimeout } from './truecrime/budget'
+import { enforceStageBudget } from './pipeline/budget'
 import type { AssetLicense } from './compliance/types'
 import type { LeagueTolerance } from './tools/leaguePolicy'
 import type { ToolContext, PipelineStage } from './tools/types'
@@ -45,6 +46,7 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     runId: run.id,
     factoryConfig: JSON.parse(agent.factory.config || '{}'),
     playbook: agent.playbook,
+    budget: agent.budget,
   }
 
   try {
@@ -247,6 +249,8 @@ export async function stage(ctx: ToolContext, name: PipelineStage, fn: () => Pro
   const job = await prisma.job.create({
     data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 0, startedAt: new Date() },
   })
+  // Stop before spending more once this run has hit its budget cap (issue #26).
+  await enforceStageBudget(ctx.videoId, ctx.budget, job.id)
   const timeoutMs = STAGE_TIMEOUT_MS[name] ?? DEFAULT_STAGE_TIMEOUT_MS
   let lastErr: unknown
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt++) {

@@ -31,6 +31,7 @@ import {
   TRUNCATED_RENDER_REASON,
 } from '../pipeline/finalize'
 import { withTimeout } from '../truecrime/budget'
+import { enforceStageBudget } from '../pipeline/budget'
 import type { F11Context, F11FactoryConfig, F11Stage } from './types'
 
 /**
@@ -67,6 +68,7 @@ export async function executeHistoryRun(
     runId: run.id,
     config: JSON.parse(agent.factory.config || '{}') as F11FactoryConfig,
     playbook: agent.playbook,
+    budget: agent.budget,
   }
 
   try {
@@ -398,6 +400,8 @@ async function stage(ctx: F11Context, name: F11Stage, fn: () => Promise<void>): 
   const job = await prisma.job.create({
     data: { videoId: ctx.videoId, stage: name, status: 'running', attempts: 0, startedAt: new Date() },
   })
+  // Stop before spending more once this run has hit its budget cap (issue #26).
+  await enforceStageBudget(ctx.videoId, ctx.budget, job.id)
   const timeoutMs = STAGE_TIMEOUT_MS[name] ?? DEFAULT_STAGE_TIMEOUT_MS
   let lastErr: unknown
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt++) {

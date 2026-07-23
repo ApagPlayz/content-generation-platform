@@ -312,6 +312,8 @@ export interface F10Context {
   runId: string
   config: F10FactoryConfig
   playbook: string
+  /** Per-run cost cap (USD) from Agent.budget; null/undefined means no cap. */
+  budget?: number | null
   brief?: CaseBrief
   script?: F10Script
   visuals?: VisualAsset[]
