@@ -199,14 +199,17 @@
     "date": "2026-07-27",
     "prs_opened": 41,
     "prs_merged": 21,
-    "prs_rejected": 9,
-    "prs_open_now": 11,
-    "merge_rate_pct": 70,
+    "prs_rejected": 10,
+    "prs_open_now": 10,
+    "merge_rate_pct": 68,
     "median_pr_size_lines": 303,
     "median_days_to_merge": 0.8,
     "prs_needing_changes": 1,
-    "proposals_filed": 35,
-    "proposals_approved": 0,
-    "proposal_approval_rate_pct": 0
+    "proposals_filed": 53,
+    "proposals_approved": 18,
+    "proposals_declined": 0,
+    "proposals_open": 25,
+    "proposals_ignored_7d": 15,
+    "proposal_approval_rate_pct": 34
   }
 ]
