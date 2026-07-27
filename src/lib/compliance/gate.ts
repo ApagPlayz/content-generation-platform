@@ -67,7 +67,9 @@ export async function runComplianceGate(
     corroborateClaims(script.caseName, claims),
     checkVariation(script, profile),
   ])
-  const defamation = defamationLint(script.narration, script.subjects, legalStatus)
+  const defamation = defamationLint(script.narration, script.subjects, legalStatus, {
+    caseName: script.caseName,
+  })
   const visualFlags = visualLint(visuals)
 
   // ── 4. Combine into a decision ──

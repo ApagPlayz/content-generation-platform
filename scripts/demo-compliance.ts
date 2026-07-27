@@ -71,6 +71,31 @@ const cases: { label: string; expect: string; script: TrueCrimeScript }[] = [
       targetDurationSec: 90,
     },
   },
+  {
+    label: 'E. Guilt asserted using the surname only',
+    expect: 'block (defamation) — used to slip through, see issue #45',
+    script: {
+      caseName: 'State v. Smith',
+      narration: 'Smith killed her in the kitchen. The jury never heard about the letters.',
+      subjects: [
+        { name: 'John Smith', role: 'acquitted', living: true, isMinor: false },
+        { name: 'Mary Smith', role: 'victim', living: false, isMinor: false },
+      ],
+      claims: [],
+      targetDurationSec: 90,
+    },
+  },
+  {
+    label: 'F. Narration names someone who is not in the subject list',
+    expect: 'route_to_review (defamation) — used to pass silently, see issue #45',
+    script: {
+      caseName: 'The Garage Murder',
+      narration: 'Marcus Webb strangled her in the garage. Investigators never found the weapon.',
+      subjects: [{ name: 'Anna Reed', role: 'victim', living: false, isMinor: false }],
+      claims: [],
+      targetDurationSec: 90,
+    },
+  },
 ]
 
 async function main() {
