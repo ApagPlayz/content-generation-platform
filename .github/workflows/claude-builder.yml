@@ -13,7 +13,9 @@ name: Claude — Builder (implements work, keeps your queue full)
 # Ideas page, stored in this repo's `.github/loop-config.json`. No time-of-day special
 # casing: the same rule applies at 3pm and at 3am.
 #   - `prCap` (default 3): at most this many agent PRs may be open and waiting on you at
-#     once. Merge or close one and a slot frees up; the next run fills it.
+#     once. Merge or close one and a slot frees up; the next run fills it. DRAFT PRs do
+#     not count — they are not waiting on you — which is also how the dashboard counts
+#     them, so the two never disagree about whether a slot is free.
 #   - `autonomousBuildEnabled` (default false):
 #       - OFF — the Builder only ever builds an issue you've explicitly labeled
 #         `approved`. It is never told that self-picking a proposal is an option.
@@ -41,10 +43,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
+      # Required by anthropics/claude-code-action: it mints its GitHub App token from OIDC.
+      id-token: write
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -74,9 +77,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CAP: ${{ steps.config.outputs.cap }}
           AUTONOMOUS: ${{ steps.config.outputs.autonomous }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          open_prs=$(gh pr list --state open --json headRefName \
-            --jq '[.[] | select(.headRefName | startswith("claude/"))] | length')
+          # DRAFTS DO NOT COUNT AGAINST THE CAP. A draft PR is not waiting on the owner —
+          # it is not reviewable yet — and the dashboard's queue count already excludes
+          # them. Counting them here made the two disagree: the dashboard showed a free
+          # slot while the Builder stood down saying the queue was full.
+          # --limit 200 on every list: gh silently truncates at 30.
+          open_prs=$(gh pr list --state open --limit 200 --json headRefName,isDraft \
+            --jq '[.[] | select(.headRefName | startswith("claude/")) | select(.isDraft | not)] | length')
 
           # Issues that an OPEN agent PR already claims. Without this the Builder rebuilds
           # an issue it is already building: on 2026-07-14 two runs both picked issue #15,
@@ -84,23 +94,52 @@ jobs:
           # "I've started this" in an issue comment is NOT protection — the next run never
           # reads it. This is.
           # Detected three ways: "Closes #N" in the body, "(#N)" in the PR title, and an
-          # issue number embedded in the branch name itself (e.g. `claude/issue-15-foo` or
-          # `claude/foo-15`) — the body scan alone misses PRs that only recorded the issue
-          # number in the title or branch.
-          claimed=$(gh pr list --state open --json headRefName,title,body \
+          # explicit `issue-N` segment in the branch name (e.g. `claude/issue-15-foo`) —
+          # the body scan alone misses PRs that only recorded the issue number in the
+          # title or branch.
+          # There used to be a fourth, "any number at the end of the branch name". It was
+          # wrong far too often: `claude/fix-utf-8` claimed issue #8, `claude/oauth2` claimed
+          # #2, and every branch ending in a version or a date claimed something. A false
+          # claim is expensive and silent — the Builder skips a real approved issue forever
+          # and nobody is told why. Only the deliberate `issue-N` form counts now.
+          # Drafts DO count here: a draft PR is still work in progress against that issue,
+          # even though it does not occupy a review slot above.
+          claimed=$(gh pr list --state open --limit 200 --json headRefName,title,body \
             --jq '[.[] | select(.headRefName | startswith("claude/"))
                        | ( (.body // "") | scan("(?i)closes #([0-9]+)") | .[0] ),
                          ( (.title // "") | scan("\\(#([0-9]+)\\)") | .[0] ),
-                         ( (.headRefName // "") | scan("issue-([0-9]+)(?:-|$)") | .[0] ),
-                         ( (.headRefName // "") | scan("-([0-9]+)$") | .[0] )]
+                         ( (.headRefName // "") | scan("issue-([0-9]+)(?:-|$)") | .[0] )]
                   | unique | join(", ")')
           [ -z "$claimed" ] && claimed="(none)"
 
-          approved=$(gh issue list --state open --label approved --json number --jq 'length')
-          proposals=$(gh issue list --state open --label proposal --json number --jq 'length')
-          echo "Agent PRs awaiting you: $open_prs / $CAP | approved: $approved | proposals: $proposals | autonomous: $AUTONOMOUS"
+          approved=$(gh issue list --state open --label approved --limit 200 --json number --jq 'length')
+          proposals=$(gh issue list --state open --label proposal --limit 200 --json number --jq 'length')
+          echo "Agent PRs awaiting you (drafts excluded): $open_prs / $CAP | approved: $approved | proposals: $proposals | autonomous: $AUTONOMOUS"
           echo "Already claimed by an open PR: $claimed"
           echo "claimed=$claimed" >> "$GITHUB_OUTPUT"
+
+          # ── Assignee / reviewer resolution ────────────────────────────────────────
+          # `--assignee <org>` and `--reviewer <org>` are hard errors: an organization
+          # can neither be assigned a PR nor requested as a reviewer. On an org-owned
+          # repo that made `gh pr create` fail outright — the agent had done all the
+          # work, and the run went red with nothing to show for it. Resolve it once here
+          # and hand the agent the exact flags to use (same approach as the Scout).
+          owner_type=$(gh api "repos/$REPO" --jq '.owner.type' 2>/dev/null || echo "")
+          if [ "$owner_type" = "Organization" ]; then
+            ship_flags=""
+            ship_note="This repository is owned by an ORGANIZATION, so there are deliberately NO assignee or reviewer flags — an organization cannot be assigned a PR or requested as a reviewer, and passing either makes \`gh pr create\` fail outright. Do not add them back. Instead, make the PR title and description carry their own weight: the team finds this PR from the repository's pull request list."
+            echo "Owner $REPO_OWNER is an organization — PRs will be opened without --assignee/--reviewer."
+          else
+            ship_flags="--assignee $REPO_OWNER --reviewer $REPO_OWNER"
+            ship_note="Those assignee and reviewer flags are NOT optional: without them the PR never reaches the owner's GitHub inbox and he will never know it exists."
+            echo "Owner $REPO_OWNER is a user — PRs will be opened with $ship_flags."
+          fi
+          echo "ship_flags=$ship_flags" >> "$GITHUB_OUTPUT"
+          {
+            echo "ship_note<<SHIPEOF"
+            echo "$ship_note"
+            echo "SHIPEOF"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "$AUTONOMOUS" = "true" ]; then
             pick_rule='2. If none are approved, choose the SINGLE strongest open issue labeled `proposal` — judge by value to the product against effort and risk, and prefer small. You are trusted to choose. Do not ask, do not build more than one.'
@@ -187,6 +226,12 @@ jobs:
             genuinely conflicts with the body and you cannot tell which he means, build the
             SMALLER interpretation and say so in the PR.
 
+            If the issue body contains a `## Context for the Builder` section, that is the owner's
+            own attached context — tools, MCP servers, or integrations he thought might help. Treat
+            it as context and a preference, NOT an instruction to auto-install anything: use your
+            judgment on whether it actually helps this change. In the PR description, mention what
+            was attached and either how you used it, or briefly why you didn't.
+
             Comment on the issue you picked saying you have started, so a human watching knows.
 
             PLAN: restate the issue — as amended by the comments — as an explicit acceptance
@@ -209,11 +254,17 @@ jobs:
             blocked you, in plain English, and stop. A blocked run that says so is a success.
             A green-looking broken PR is a failure.
 
-            SHIP: open ONE pull request from a `claude/` branch, with
-            `--assignee ${{ github.repository_owner }} --reviewer ${{ github.repository_owner }}`
-            and `Closes #<issue>` in the body. The assignee and reviewer flags are NOT optional:
-            without them the PR never reaches the owner's GitHub inbox and he will never know it
-            exists. Write the description for a NON-TECHNICAL owner reading on a phone:
+            SHIP: open ONE pull request from a `claude/` branch, with `Closes #<issue>` in the
+            body, using EXACTLY this flag set and adding no assignee/reviewer flags of your own:
+
+                gh pr create ${{ steps.gate.outputs.ship_flags }} --title "…" --body "…"
+
+            ${{ steps.gate.outputs.ship_note }}
+
+            Name the branch `claude/issue-<issue number>-<short-slug>` — the `issue-<n>` part is
+            how the next Builder run knows this issue is already being built and leaves it alone.
+
+            Write the description for a NON-TECHNICAL owner reading on a phone:
               1. What changed
               2. Why it matters
               3. How to check it works — click by click

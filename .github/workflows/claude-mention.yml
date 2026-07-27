@@ -20,10 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
+      # Required by anthropics/claude-code-action: it mints its GitHub App token from OIDC.
+      id-token: write
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
       actions: write
     steps:
       - uses: actions/checkout@v6

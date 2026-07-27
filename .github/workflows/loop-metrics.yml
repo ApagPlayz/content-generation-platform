@@ -6,10 +6,22 @@ name: Loop — Metrics
 
 on:
   schedule:
-    - cron: "0 11 * * *" # 07:00 America/New_York, before you look at your phone
+    # GitHub cron is UTC only and does not follow daylight saving. 11:00 UTC is
+    # 07:00 America/New_York in summer (EDT) and 06:00 in winter (EST) — either way,
+    # before you look at your phone.
+    - cron: "0 11 * * *"
   pull_request:
     types: [closed]
   workflow_dispatch:
+
+# A burst of PR merges fires this workflow several times at once. Without a concurrency
+# group they race on the same `git push` and all but one fail non-fast-forward — exactly
+# when the loop is busiest and the numbers matter most. Cancelling in progress is safe
+# here: the job is a pure recompute from GitHub's current state, so the survivor produces
+# the same (or fresher) answer than the run it cancelled.
+concurrency:
+  group: loop-metrics-${{ github.repository }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -40,5 +52,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add metrics/loop-metrics.json LOOP-DASHBOARD.md
           git diff --staged --quiet && echo "No change." && exit 0
-          git commit -m "chore(loop): update metrics dashboard [skip ci]"
-          git push
+          git commit -m "chore(loop): update metrics dashboard"
+
+          # Something else may have landed on main between checkout and now (an agent PR
+          # merging is the common case, and it is the very event that triggered this run).
+          # Rebase and retry rather than failing the run over a race.
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt) — rebasing on the latest main and retrying."
+            git pull --rebase origin main || true
+            sleep $(( attempt * 5 ))
+          done
+          echo "::error::Could not push the metrics update after 3 attempts."
+          exit 1

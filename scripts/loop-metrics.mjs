@@ -7,9 +7,19 @@
  * honest signals are: did the owner merge it, did he close it, did he ignore it.
  *
  * Writes metrics/loop-metrics.json (full history) and LOOP-DASHBOARD.md (phone-readable).
+ *
+ * LOOP-DASHBOARD.md is not just a scorecard — it is the Scout's only prescribed learning
+ * input. Every Scout run is told to read it and "propose more of what he approves". That
+ * instruction was dead for months because the file contained no idea titles, only
+ * numbers. It now carries three explicit ledgers — approved, declined, ignored — so
+ * there is something in it that can actually be learned from.
+ *
+ * Dependency-free Node. Runs as `node scripts/loop-metrics.mjs` inside the target repo,
+ * with `gh` authenticated via GH_TOKEN.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 const HISTORY = "metrics/loop-metrics.json";
 const DASHBOARD = "LOOP-DASHBOARD.md";
@@ -33,12 +43,40 @@ const prs = gh([
 
 const issues = gh([
   "issue", "list", "--state", "all", "--limit", "300",
-  "--json", "number,title,state,labels,createdAt,closedAt",
+  "--json", "number,title,state,labels,createdAt,updatedAt,closedAt",
 ]);
 
-const labelled = (i, name) => i.labels.some((l) => l.name === name);
-const proposals = issues.filter((i) => labelled(i, "proposal"));
-const approved = proposals.filter((i) => labelled(i, "approved"));
+const labelled = (i, name) => (i.labels ?? []).some((l) => l.name === name);
+
+// ── The counting rule ───────────────────────────────────────────────────────────
+// Approving an idea SWAPS its labels: the dashboard adds `approved` and removes
+// `proposal`. So `approved` is NOT a subset of `proposal` — it is a disjoint set.
+// The original script computed `proposals.filter(approved)`, which is structurally
+// always empty, and reported a 0% approval rate every single day while the real rate
+// was 35%. That one line told a healthy Scout it was failing completely.
+//
+// Correct model: an "idea issue" is any issue carrying `proposal`, `approved` or
+// `declined`. Those three are the states of one thing, not nested sets.
+const ideaIssues = issues.filter(
+  (i) => labelled(i, "proposal") || labelled(i, "approved") || labelled(i, "declined"),
+);
+
+// An idea can briefly carry two labels while the dashboard writes them one at a time,
+// so rank the states rather than double-counting: approved beats declined beats open.
+const stateOf = (i) =>
+  labelled(i, "approved") ? "approved" : labelled(i, "declined") ? "declined" : "open";
+
+const approvedIdeas = ideaIssues.filter((i) => stateOf(i) === "approved");
+const declinedIdeas = ideaIssues.filter((i) => stateOf(i) === "declined");
+const openIdeas = ideaIssues.filter((i) => stateOf(i) === "open" && i.state === "OPEN");
+
+// Ignored: still on the shelf, still open, and nobody has touched it in over a week.
+// This is the closest thing the loop has to a silent "no", and the Scout has never
+// been shown it.
+const now = Date.now();
+const ignoredIdeas = openIdeas
+  .filter((i) => days(now - new Date(i.updatedAt ?? i.createdAt)) > 7)
+  .sort((a, b) => new Date(a.updatedAt ?? a.createdAt) - new Date(b.updatedAt ?? b.createdAt));
 
 const merged = prs.filter((p) => p.mergedAt);
 const rejected = prs.filter((p) => p.state === "CLOSED" && !p.mergedAt);
@@ -67,15 +105,22 @@ const snapshot = {
   median_days_to_merge: median(cycleTimes),
   // Owner review load: PRs he had to send back rather than merge as-is.
   prs_needing_changes: merged.filter((p) => (p.reviews?.length ?? 0) > 0).length,
-  proposals_filed: proposals.length,
-  proposals_approved: approved.length,
-  proposal_approval_rate_pct: pct(approved.length, proposals.length),
+  // Denominator is the UNION of the three idea states, not the open shelf.
+  proposals_filed: ideaIssues.length,
+  proposals_approved: approvedIdeas.length,
+  proposals_declined: declinedIdeas.length,
+  proposals_open: openIdeas.length,
+  proposals_ignored_7d: ignoredIdeas.length,
+  proposal_approval_rate_pct: pct(approvedIdeas.length, ideaIssues.length),
 };
 
 const history = existsSync(HISTORY) ? JSON.parse(readFileSync(HISTORY, "utf8")) : [];
 const idx = history.findIndex((h) => h.date === snapshot.date);
 if (idx >= 0) history[idx] = snapshot;
 else history.push(snapshot);
+// The very first run in a fresh repo has no metrics/ folder, and writeFileSync does not
+// create one — it threw ENOENT and the whole metrics job went red on day one.
+mkdirSync(dirname(HISTORY), { recursive: true });
 writeFileSync(HISTORY, JSON.stringify(history, null, 2) + "\n");
 
 // A markdown dashboard, not a web app: it renders natively in the GitHub phone app,
@@ -87,6 +132,16 @@ const delta = (k) => {
   return d === 0 ? "" : ` (${d > 0 ? "+" : ""}${d})`;
 };
 const show = (v, suffix = "") => (v == null ? "—" : `${v}${suffix}`);
+
+const MAX_LIST = 40;
+const bullets = (list, empty) => {
+  if (!list.length) return `_${empty}_`;
+  const shown = list.slice(0, MAX_LIST).map((i) => `- #${i.number} ${i.title}`);
+  if (list.length > MAX_LIST) shown.push(`- …and ${list.length - MAX_LIST} more`);
+  return shown.join("\n");
+};
+
+const byNewest = (a, b) => new Date(b.createdAt) - new Date(a.createdAt);
 
 const health =
   snapshot.merge_rate_pct == null
@@ -128,12 +183,36 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Proposals filed | ${show(snapshot.proposals_filed)} |
-| Proposals you approved | ${show(snapshot.proposals_approved)} |
+| Ideas filed (all time) | ${show(snapshot.proposals_filed)} |
+| You approved | ${show(snapshot.proposals_approved)}${delta("proposals_approved")} |
+| You declined | ${show(snapshot.proposals_declined)}${delta("proposals_declined")} |
+| Still waiting on you | ${show(snapshot.proposals_open)} |
+| Untouched for over a week | ${show(snapshot.proposals_ignored_7d)} |
 | **Approval rate** | **${show(snapshot.proposal_approval_rate_pct, "%")}** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
 it is written up in the weekly retro issue.
+
+---
+
+## Learning ledger — read this before proposing anything
+
+*This section exists for the Scout. The three lists below are the owner's actual
+revealed preferences: what he said yes to, what he said no to, and what he could not be
+bothered to answer. Propose more like the first list, nothing like the second, and less
+like the third.*
+
+### ✅ Approved ideas — more like these
+
+${bullets([...approvedIdeas].sort(byNewest), "Nothing approved yet.")}
+
+### ❌ Declined ideas — never propose these or near-variants of them
+
+${bullets([...declinedIdeas].sort(byNewest), "Nothing declined yet. No idea has ever been explicitly rejected, so there is no negative signal to learn from.")}
+
+### 😴 Ignored for more than 7 days — a silent no
+
+${bullets(ignoredIdeas, "Nothing is going stale. The queue is being triaged.")}
 `,
 );
 

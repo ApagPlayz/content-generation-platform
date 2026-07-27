@@ -2,7 +2,16 @@ name: Repo — Tests (plain CI, no agent)
 
 # Ordinary continuous integration: install, lint, test, build. No Claude agent, no tokens.
 # Runs on every PR and can be kicked off by hand (the dashboard dispatches this to check a
-# branch is green). Only uses scripts that actually exist in package.json.
+# branch is green).
+#
+# STACK-AWARE BY DESIGN. This file is a TEMPLATE copied into every project, so it must not
+# assume a stack. A detection step works out what this repo actually is — Node at the root or
+# in a subfolder (`frontend/`, `web/`, …)? Python (`pyproject.toml` / `requirements*.txt` /
+# `pytest.ini`) at the root or in `backend/`? Prisma? — and every step after it is conditional.
+# Node scripts are run with `npm run <script> --if-present`, so a repo without a `lint` or
+# `test` script is not failed for lacking one; it is skipped with a log line. Same for Prisma
+# and for the Python path. A repo that matches nothing at all ends green with a clear
+# "nothing to run" notice rather than a confusing red tick.
 
 on:
   workflow_dispatch:
@@ -18,30 +27,166 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    env:
-      # schema.prisma reads env("DATABASE_URL"); a throwaway SQLite file is enough for CI.
-      DATABASE_URL: "file:./ci.db"
     steps:
       - uses: actions/checkout@v6
 
+      # WHAT IS THIS REPO? Everything below branches on this step.
+      - name: Detect the project's stack
+        id: stack
+        run: |
+          # Where does the Node project live (if anywhere)? Root first, then monorepo folders.
+          node_dir=""
+          for d in . frontend web app client ui packages/web apps/web; do
+            if [ -f "$d/package.json" ]; then
+              node_dir="$d"
+              break
+            fi
+          done
+
+          # Where does the Python project live (if anywhere)?
+          py_dir=""
+          for d in . backend api server src; do
+            if [ -f "$d/pyproject.toml" ] || [ -f "$d/requirements.txt" ] || [ -f "$d/pytest.ini" ]; then
+              py_dir="$d"
+              break
+            fi
+          done
+
+          # Only ask setup-node to cache when there is actually a lockfile to key on —
+          # otherwise the cache step hard-fails with "dependencies lock file is not found".
+          npm_cache=""
+          prisma=false
+          if [ -n "$node_dir" ]; then
+            if [ -f "$node_dir/package-lock.json" ]; then
+              npm_cache="npm"
+            fi
+            if [ -f "$node_dir/prisma/schema.prisma" ] \
+              || jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("prisma") or has("@prisma/client")' "$node_dir/package.json" >/dev/null 2>&1; then
+              prisma=true
+            fi
+          fi
+
+          echo "Node project dir:   ${node_dir:-(none found)}"
+          echo "Python project dir: ${py_dir:-(none found)}"
+          echo "Prisma:             $prisma"
+          echo "npm cache:          ${npm_cache:-(off — no package-lock.json)}"
+
+          {
+            echo "node_dir=$node_dir"
+            echo "py_dir=$py_dir"
+            echo "npm_cache=$npm_cache"
+            echo "prisma=$prisma"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Node path ───────────────────────────────────────────────────────────────────────
       - uses: actions/setup-node@v4
+        if: steps.stack.outputs.node_dir != ''
         with:
           node-version: "20"
-          cache: "npm"
+          cache: ${{ steps.stack.outputs.npm_cache }}
+          cache-dependency-path: ${{ steps.stack.outputs.node_dir }}/package-lock.json
 
-      - name: Install dependencies
+      - name: Install dependencies (Node)
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
         run: npm ci || npm install
 
+      # Only on repos that actually use Prisma. DATABASE_URL is set here rather than as a
+      # job-level env so non-Prisma repos are never handed a bogus database URL.
+      #
+      # BEST-EFFORT ON PURPOSE. The throwaway SQLite file only works for repos whose
+      # schema.prisma declares provider = "sqlite"; a postgres/mysql schema will refuse it.
+      # That is a local-setup mismatch, not a broken pull request, so it warns and carries on —
+      # the real lint/test/build steps below are what decide whether this run is red or green.
       - name: Prisma client + database
+        if: steps.stack.outputs.prisma == 'true'
+        working-directory: ${{ steps.stack.outputs.node_dir }}
         run: |
-          npm run prisma:generate
-          npm run prisma:push
+          set +e
+          if [ -z "${DATABASE_URL:-}" ]; then
+            export DATABASE_URL="file:./ci.db"
+            echo "DATABASE_URL=file:./ci.db" >> "$GITHUB_ENV"
+            echo "DATABASE_URL not set — using a throwaway SQLite file for this run."
+          fi
+          ok=1
+          if jq -e '.scripts["prisma:generate"]' package.json >/dev/null 2>&1; then
+            npm run prisma:generate || ok=0
+          else
+            npx --yes prisma generate || ok=0
+          fi
+          if jq -e '.scripts["prisma:push"]' package.json >/dev/null 2>&1; then
+            npm run prisma:push || ok=0
+          else
+            npx --yes prisma db push --skip-generate || ok=0
+          fi
+          if [ "$ok" = "0" ]; then
+            echo "::warning::Prisma setup did not complete (most often the schema's provider is postgres/mysql and the throwaway SQLite file does not fit it). Continuing — set a real DATABASE_URL secret for this repo if the tests below need a live database."
+          fi
+          exit 0
 
-      - name: Lint
-        run: npm run lint
+      - name: Lint (Node)
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
+        run: npm run lint --if-present
 
-      - name: Test
-        run: npm run test
+      - name: Test (Node)
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
+        run: npm run test --if-present
 
-      - name: Build
-        run: npm run build
+      - name: Build (Node)
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
+        run: npm run build --if-present
+
+      # ── Python path ─────────────────────────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        if: steps.stack.outputs.py_dir != ''
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies (Python)
+        if: steps.stack.outputs.py_dir != ''
+        working-directory: ${{ steps.stack.outputs.py_dir }}
+        run: |
+          python -m pip install --upgrade pip
+          shopt -s nullglob
+          installed=0
+          for f in requirements*.txt; do
+            echo "pip install -r $f"
+            python -m pip install -r "$f"
+            installed=1
+          done
+          if [ "$installed" = "0" ]; then
+            if [ -f pyproject.toml ]; then
+              python -m pip install -e ".[dev,test]" || python -m pip install -e . || python -m pip install .
+            else
+              echo "No requirements*.txt and no pyproject.toml to install from — continuing."
+            fi
+          fi
+
+      - name: Test (Python)
+        if: steps.stack.outputs.py_dir != ''
+        working-directory: ${{ steps.stack.outputs.py_dir }}
+        run: |
+          if python -m pytest --version >/dev/null 2>&1; then
+            # pytest exits 5 when it collected no tests at all. On a fresh Python repo that
+            # is "there is nothing to run yet", not a failure — anything else is passed through.
+            set +e
+            python -m pytest -q
+            rc=$?
+            set -e
+            if [ "$rc" -eq 5 ]; then
+              echo "::notice::pytest ran but collected no tests — nothing to check yet, so this is not a failure. Add tests under tests/ (or test_*.py) and they will run here."
+              exit 0
+            fi
+            exit "$rc"
+          else
+            echo "::notice::pytest is not installed in this environment — skipping Python tests rather than failing the run. Add pytest to requirements*.txt (or pyproject.toml) to have CI run them."
+          fi
+
+      # ── Nothing recognised ──────────────────────────────────────────────────────────────
+      - name: Nothing to run
+        if: steps.stack.outputs.node_dir == '' && steps.stack.outputs.py_dir == ''
+        run: |
+          echo "::notice::No package.json and no Python project were found at the root or in the usual subfolders (frontend/, web/, backend/, api/, …), so there is nothing for plain CI to install, lint, test or build. Passing rather than failing — but if this repo does have a test suite, add it here or point this workflow at the right directory."

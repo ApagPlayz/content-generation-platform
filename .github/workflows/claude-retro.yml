@@ -1,16 +1,23 @@
 name: Claude — Retro (the loop improves itself)
 
-# Sundays 6pm ET. Reads the week's ACTUAL outcomes — what you merged, what you threw
-# away, what you ignored — and proposes changes to how the agents work.
+# Weekly. Reads the week's ACTUAL outcomes — what you merged, what you threw away, what you
+# ignored, and what the Scout proposed — and proposes changes to how the agents work.
 #
 # This is the self-improvement loop, and it is deliberately kept on a leash: the retro
-# can only PROPOSE. It opens a PR against LEARNINGS.md and the workflow prompts; you
-# merge it or you don't. An agent allowed to silently rewrite its own instructions can
-# silently delete the guardrail that was protecting you.
+# can only PROPOSE. It opens a PR against LEARNINGS.md and writes its workflow-prompt
+# suggestions into docs/loop-suggestions.md; you apply them or you don't. An agent allowed to
+# silently rewrite its own instructions can silently delete the guardrail that was protecting
+# you. (It also *cannot* rewrite them: GITHUB_TOKEN has no `workflow` scope, so any push
+# touching .github/workflows/ is rejected outright — see the prompt below.)
+#
+# A cheap bash gate runs first: if the week had no PRs and no idea activity at all, we log
+# that and skip without booting an Opus agent. A retro on an empty week is invented content.
 
 on:
   schedule:
-    - cron: "0 22 * * 0" # Sundays 18:00 America/New_York
+    # 22:00 UTC every Sunday. GitHub cron has NO timezone support, so this drifts with DST:
+    # that is 18:00 in New York during EDT (Mar–Nov) and 17:00 during EST (Nov–Mar).
+    - cron: "0 22 * * 0"
   workflow_dispatch:
 
 jobs:
@@ -18,16 +25,66 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: write
+      # Required by anthropics/claude-code-action: it mints its GitHub App token from OIDC.
+      id-token: write
+      contents: write # opens a branch/PR against LEARNINGS.md + docs/loop-suggestions.md
       pull-requests: write
       issues: write
-      id-token: write
+      actions: read # the prompt runs `gh run list` to read this loop's own run history
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      # Cheap pre-flight in plain bash so we never boot an expensive agent for a week in
+      # which nothing happened. Every query is best-effort: a transient `gh` error must
+      # never fail the run, and when in doubt we run the retro rather than skip it.
+      - name: Was there anything to reflect on?
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SINCE=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          export SINCE
+          echo "Looking at everything since $SINCE"
+
+          # PRs opened or closed in the window (any state, so merges and closes both count).
+          prs=$(gh pr list --state all --limit 200 --json createdAt,closedAt \
+            --jq '[.[] | select(.createdAt >= env.SINCE or ((.closedAt // "") >= env.SINCE))] | length' \
+            2>/dev/null || echo "")
+          case "$prs" in '' | *[!0-9]*) prs=-1 ;; esac
+
+          # Closed PRs specifically — the strongest "the owner made a call" signal.
+          closed=$(gh pr list --state closed --limit 200 --json closedAt \
+            --jq '[.[] | select((.closedAt // "") >= env.SINCE)] | length' \
+            2>/dev/null || echo "")
+          case "$closed" in '' | *[!0-9]*) closed=-1 ;; esac
+
+          # Idea issues created or touched in the window, across every queue label.
+          ideas=0
+          for label in proposal approved redraft declined; do
+            n=$(gh issue list --state all --label "$label" --limit 200 --json createdAt,updatedAt \
+              --jq '[.[] | select(.createdAt >= env.SINCE or .updatedAt >= env.SINCE)] | length' \
+              2>/dev/null || echo 0)
+            case "$n" in '' | *[!0-9]*) n=0 ;; esac
+            ideas=$((ideas + n))
+          done
+
+          echo "Last 7 days — PRs touched: $prs, PRs closed: $closed, idea issues touched: $ideas"
+
+          # -1 means the query itself failed; in that case do NOT skip on bad data.
+          if [ "$prs" = "0" ] && [ "$closed" = "0" ] && [ "$ideas" = "0" ]; then
+            echo "::notice::Nothing happened this week — no PRs opened or closed, no idea issues created or updated. Skipping the retro instead of booting an Opus agent to write about an empty week. A retro that always finds something to say is worthless."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "prs=$prs" >> "$GITHUB_OUTPUT"
+          echo "closed=$closed" >> "$GITHUB_OUTPUT"
+          echo "ideas=$ideas" >> "$GITHUB_OUTPUT"
+
+      - if: steps.gate.outputs.go == 'true'
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
@@ -37,6 +94,13 @@ jobs:
           prompt: |
             You are the RETRO for ${{ github.repository }}'s autonomous improvement loop.
             You improve the loop itself. You do not touch product code.
+
+            A pre-flight check already confirmed this week was not empty: in the last 7 days
+            ${{ steps.gate.outputs.prs }} pull request(s) were opened or closed
+            (${{ steps.gate.outputs.closed }} closed) and ${{ steps.gate.outputs.ideas }} idea
+            issue(s) were created or updated. Use `--limit 200` on every `gh issue list` /
+            `gh pr list` you run — without it `gh` silently truncates at 30 and your numbers
+            will be wrong.
 
             LOOK AT WHAT ACTUALLY HAPPENED in the last 7 days. Use `gh`:
             - PRs from `claude/` branches: which merged, which the owner closed unmerged,
@@ -56,20 +120,91 @@ jobs:
             If the loop did nothing useful this week, SAY THAT. A retro that always finds
             things going well is worthless.
 
+            ────────────────────────────────────────────────────────────────────────
+            IDEA QUALITY IS HALF YOUR JOB — DO NOT SKIP THIS
+
+            Historically every lesson this retro produced was about CI mechanics, so the Scout
+            has learned NOTHING about *what to propose*. Fix that this week. Compute, with real
+            numbers you can cite:
+
+            1. DUPLICATE-PROPOSAL RATE. List every idea issue created this week
+               (`gh issue list --state all --label proposal --limit 200 --json number,title,createdAt`)
+               and compare each against the ideas, open PRs and approved items that already
+               existed when it was filed. Count how many were substantially the same work as
+               something already in flight. Report it as `N of M (X%)`, and name the specific
+               offending pairs by issue number — "#102 duplicated #96 / PR #99" is a lesson,
+               "some duplication was observed" is not.
+            2. APPROVAL BY CATEGORY. Sort this week's ideas into a handful of honest categories
+               (your own, drawn from what you see — e.g. existential/compliance risk, a promise
+               the product makes that the code doesn't keep, revenue from work already done,
+               measurement/dashboards, format polish, new surface area). For each category give
+               approved / declined / still-ignored counts. Then state plainly which categories
+               the owner says yes to and which he never touches. "Ignored for >7 days" counts as
+               a no — treat it as one.
+            3. ONE DATED IDEA-QUALITY LESSON. Append EXACTLY ONE new line to LEARNINGS.md this
+               week about idea quality (in addition to any CI/mechanics lesson you were going to
+               write). Shape it so the Scout can act on it, dated, with the evidence inline:
+                 `2026-07-27 — Ideas in category X were 0/6 approved while Y was 4/5; stop
+                  proposing X-type work (evidence: #41, #47, #52 all ignored >7 days).`
+               It must be concrete and evidence-cited. If the week genuinely gives you nothing
+               to say about idea quality, write ONE line saying exactly that and why (e.g. "too
+               few ideas filed to judge"). Do not invent a pattern from two data points.
+            ────────────────────────────────────────────────────────────────────────
+
             THEN DO TWO THINGS:
 
             1. Open ONE issue titled "[retro] Week of <date>":
                - 5 lines, plain English, what the loop actually accomplished (or didn't)
                - The single biggest problem with the loop right now
+               - The duplicate-proposal rate and the approval-by-category table from above
                - At most 3 concrete fixes
+               - If you wrote to docs/loop-suggestions.md (see below), say so and summarise the
+                 suggestion in one line, so the owner knows there is something to apply.
 
             2. If — and only if — the week produced a real, repeated lesson (a PR closed for
                a reason that will recur, a mistake made twice), open ONE pull request that:
-               - appends 1–3 dated lines to LEARNINGS.md, and/or
-               - edits the prompt inside a .github/workflows/claude-*.yml file
+               - appends 1–3 dated lines to LEARNINGS.md (including the one idea-quality line
+                 described above), and/or
+               - appends a workflow-prompt SUGGESTION to `docs/loop-suggestions.md` (see the
+                 next block — create the file with a `# Loop suggestions` heading if missing)
                Keep LEARNINGS.md under 50 lines. Prune stale entries in the same PR. Learn
                ONLY from failures and corrections — a file full of self-congratulation is
                worse than no file, because it dilutes the context every future agent loads.
 
+            ────────────────────────────────────────────────────────────────────────
+            YOU CANNOT EDIT THE WORKFLOW FILES — WRITE PROPOSALS INSTEAD
+
+            Do NOT edit, create or delete anything under `.github/workflows/`. The token this
+            job runs with has no `workflow` scope, so any push touching those files is rejected
+            by GitHub and the whole PR fails. Retros have silently lost their best suggestions
+            this way. There is also a second reason: these workflows are copies of a shared
+            template owned by the dashboard, so an edit made here would be overwritten and would
+            never reach any other project.
+
+            Instead, APPEND your workflow-prompt improvements to `docs/loop-suggestions.md`, in
+            the same PR, using exactly this shape (newest entry at the bottom):
+
+              ## 2026-07-27 — claude-scout.yml
+              **Problem:** 4 of this week's 11 proposals duplicated open PRs (#102/#96, #79/#27)
+              even though both lists were injected into the prompt.
+              **Suggested prompt change:**
+              ```diff
+              -   NEVER duplicate one.
+              +   NEVER duplicate one. Before filing, restate in one line why each idea is NOT
+              +   covered by any listed open proposal, open PR, or approved idea.
+              ```
+              **Why it should work:** forcing an explicit per-idea dedup statement turns a
+              passive instruction into a check the agent must actually perform.
+
+            Rules for these entries: name the workflow file, quote the EXACT current wording you
+            want changed, give the replacement as a diff, and say what evidence from this week
+            makes you think it will help. One or two entries maximum — this is a proposal to a
+            human, not a wishlist. The owner applies template changes from the dashboard.
+            ────────────────────────────────────────────────────────────────────────
+
             If there is no real lesson, open no PR. Most weeks should produce no PR. Inventing
             a lesson to look useful is the failure this retro exists to catch.
+
+      - name: Nothing to retro on
+        if: steps.gate.outputs.go != 'true'
+        run: echo "Skipped — no PR or idea activity in the last 7 days. No agent was booted."

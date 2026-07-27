@@ -9,9 +9,14 @@ name: Claude — Demo (captures PROOF the feature works)
 # without changing it there): the artifact is named EXACTLY  demo-evidence-pr-<PR_NUMBER>.
 # The dashboard looks it up by that name. Deviating breaks the dashboard silently.
 #
-# If the feature is backend-only and there is nothing to see in a browser, the agent
-# captures proof another way (test output, before/after CLI, DB state) into the same
-# evidence/manifest.json shape — it never fails silently with no evidence.
+# STACK-AWARE BY DESIGN. This file is a TEMPLATE copied into every project, so it must not
+# assume any particular stack. A detection step works out what this repo actually is (Node?
+# Python? app in a subfolder? Prisma? which npm scripts exist? which port?) and every setup
+# step afterwards is conditional on that. When something does not apply, it is SKIPPED with a
+# clear log line — never failed. The agent is told what did and did not come up, and captures
+# proof another way if the browser route is unavailable.
+#
+# Per-repo knob: `.github/loop-config.json` → `demoPort` (defaults to 3000).
 
 on:
   pull_request:
@@ -36,25 +41,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
+      # Required by anthropics/claude-code-action: it mints its GitHub App token from OIDC.
+      id-token: write
       contents: read
       pull-requests: write
-      id-token: write
     env:
-      # SQLite lives in a throwaway file for this run — schema.prisma reads env("DATABASE_URL").
-      DATABASE_URL: "file:./ci-demo.db"
+      # ONE absolute location for the evidence, shared by the agent, the upload and the
+      # verify step. The agent is told to run npm/node commands from the app subfolder, so a
+      # relative `evidence/` would land in the wrong place; everything below uses this path.
+      EVIDENCE_DIR: ${{ github.workspace }}/evidence
     steps:
       # 1. Work out which PR we're on and get onto its branch. Works for both the
       #    pull_request trigger and a manual workflow_dispatch re-run.
+      #    Every `${{ }}` goes through `env:` and is referenced quoted — a dispatch input is
+      #    free text and must never be pasted into the shell as code.
       - name: Resolve PR number
         id: meta
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            pr="${{ github.event.inputs.pr_number }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            pr="$INPUT_PR"
           else
-            pr="${{ github.event.pull_request.number }}"
+            pr="$EVENT_PR"
           fi
+          case "$pr" in
+            '' | *[!0-9]*)
+              echo "::error::Refusing to run — '$pr' is not a plain PR number."
+              exit 1
+              ;;
+          esac
           echo "PR under test: #$pr"
           echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
 
@@ -62,69 +81,248 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Create the evidence folder
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          echo "Evidence for this run goes in: $EVIDENCE_DIR"
+
       - name: Check out the PR branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr checkout ${{ steps.meta.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.meta.outputs.pr_number }}
+        run: gh pr checkout "$PR_NUMBER"
 
+      # 2. WHAT IS THIS REPO? Everything below branches on this step. Nothing here fails the
+      #    run — an undetectable stack just means less automated setup and a louder log.
+      - name: Detect the project's stack
+        id: stack
+        run: |
+          # Where does the Node app live (if there is one)? Root first, then the usual
+          # monorepo folders.
+          node_dir=""
+          for d in . frontend web app client ui packages/web apps/web; do
+            if [ -f "$d/package.json" ]; then
+              node_dir="$d"
+              break
+            fi
+          done
+
+          # Where does the Python app live (if there is one)?
+          py_dir=""
+          for d in . backend api server src; do
+            if [ -f "$d/pyproject.toml" ] || [ -f "$d/requirements.txt" ] || [ -f "$d/pytest.ini" ]; then
+              py_dir="$d"
+              break
+            fi
+          done
+
+          has_build=false
+          has_start=false
+          has_dev=false
+          prisma=false
+          if [ -n "$node_dir" ]; then
+            pkg="$node_dir/package.json"
+            if jq -e '.scripts.build' "$pkg" >/dev/null 2>&1; then has_build=true; fi
+            if jq -e '.scripts.start' "$pkg" >/dev/null 2>&1; then has_start=true; fi
+            if jq -e '.scripts.dev' "$pkg" >/dev/null 2>&1; then has_dev=true; fi
+            if [ -f "$node_dir/prisma/schema.prisma" ] \
+              || jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("prisma") or has("@prisma/client")' "$pkg" >/dev/null 2>&1; then
+              prisma=true
+            fi
+          fi
+
+          # Port is per-repo configurable; 3000 is only a default, not an assumption.
+          port=$(jq -r '.demoPort // 3000' .github/loop-config.json 2>/dev/null || echo 3000)
+          case "$port" in
+            '' | null | *[!0-9]*) port=3000 ;;
+          esac
+
+          echo "Node app dir:   ${node_dir:-(none found)}"
+          echo "Python app dir: ${py_dir:-(none found)}"
+          echo "npm scripts:    build=$has_build start=$has_start dev=$has_dev"
+          echo "Prisma:         $prisma"
+          echo "App port:       $port"
+
+          {
+            echo "node_dir=$node_dir"
+            echo "py_dir=$py_dir"
+            echo "has_build=$has_build"
+            echo "has_start=$has_start"
+            echo "has_dev=$has_dev"
+            echo "prisma=$prisma"
+            echo "port=$port"
+          } >> "$GITHUB_OUTPUT"
+
+      # 3. Install what applies. Each of these is skipped entirely on a repo it doesn't fit.
       - uses: actions/setup-node@v4
+        if: steps.stack.outputs.node_dir != ''
         with:
           node-version: "20"
 
-      # 2. Install everything. Deps + Prisma client + a browser for Playwright.
-      #    Best-effort on the browser install (some months it's flaky); the agent
-      #    copes if the browser is missing by falling back to non-visual proof.
-      - name: Install dependencies
+      - name: Install dependencies (Node)
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
         run: npm ci || npm install
 
-      - name: Set up the database (Prisma / SQLite)
+      - uses: actions/setup-python@v5
+        if: steps.stack.outputs.py_dir != ''
+        with:
+          python-version: "3.x"
+
+      # Best-effort: a Python repo may not install cleanly in CI, and that must not stop us
+      # capturing evidence — the agent falls back to whatever proof it can gather.
+      - name: Install dependencies (Python)
+        if: steps.stack.outputs.py_dir != ''
+        working-directory: ${{ steps.stack.outputs.py_dir }}
         run: |
-          npm run prisma:generate
-          npm run prisma:push
+          set +e
+          ok=1
+          python -m pip install --upgrade pip >/dev/null 2>&1
+          shopt -s nullglob
+          installed=0
+          for f in requirements*.txt; do
+            echo "pip install -r $f"
+            if python -m pip install -r "$f"; then
+              installed=1
+            else
+              ok=0
+            fi
+          done
+          if [ "$installed" = "0" ] && [ -f pyproject.toml ]; then
+            if ! python -m pip install -e . && ! python -m pip install .; then
+              ok=0
+            fi
+          fi
+          if [ "$ok" = "0" ]; then
+            echo "::warning::Python dependencies did not install cleanly — the Demo agent will note this rather than pretend."
+          fi
+          exit 0
+
+      # Prisma only exists on repos that actually use Prisma. DATABASE_URL is set HERE (not
+      # as a job-level env) so non-Prisma repos are never handed a bogus database URL.
+      - name: Set up the database (Prisma / SQLite)
+        if: steps.stack.outputs.prisma == 'true'
+        working-directory: ${{ steps.stack.outputs.node_dir }}
+        run: |
+          set +e
+          if [ -z "${DATABASE_URL:-}" ]; then
+            export DATABASE_URL="file:./ci-demo.db"
+            # Hand it to every later step too (schema.prisma reads env("DATABASE_URL")).
+            echo "DATABASE_URL=file:./ci-demo.db" >> "$GITHUB_ENV"
+            echo "DATABASE_URL not set — using a throwaway SQLite file for this run."
+          fi
+          ok=1
+          if jq -e '.scripts["prisma:generate"]' package.json >/dev/null 2>&1; then
+            npm run prisma:generate || ok=0
+          else
+            npx --yes prisma generate || ok=0
+          fi
+          if jq -e '.scripts["prisma:push"]' package.json >/dev/null 2>&1; then
+            npm run prisma:push || ok=0
+          else
+            npx --yes prisma db push --skip-generate || ok=0
+          fi
+          if [ "$ok" = "0" ]; then
+            echo "::warning::Prisma setup did not complete (often a provider mismatch with the throwaway SQLite file). Continuing — the Demo agent will capture what it can."
+          fi
+          exit 0
 
       - name: Install Playwright + a headless browser
         id: pw
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
         run: |
-          npm install -D playwright >/dev/null 2>&1 || true
-          if npx playwright install --with-deps chromium; then
+          # Add the package locally so the agent's script can `require("playwright")`. If that
+          # fails we still try the browser download — `npx --yes` fetches the CLI itself and
+          # never stops to ask permission (an unanswered prompt would hang this job).
+          if ! npm install -D playwright; then
+            echo "::warning::Could not add the playwright npm package to this project — trying the standalone CLI anyway."
+          fi
+          if npx --yes playwright install --with-deps chromium; then
             echo "browser=ok" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Playwright browser install failed — the agent will fall back to non-visual proof."
             echo "browser=failed" >> "$GITHUB_OUTPUT"
           fi
 
-      # 3. Build and boot the app in the background. Best-effort: if it won't come up
+      - name: No Node app detected
+        if: steps.stack.outputs.node_dir == ''
+        run: |
+          echo "::notice::No package.json found at the root or in the usual app folders, so there is no web app to boot and no browser to drive. This is not a failure — the Demo agent will capture non-visual proof (test output, CLI before/after, data state) instead."
+
+      # 4. Build and boot the app in the background. Best-effort: if it won't come up
       #    headlessly we don't fail — we tell the agent, and it captures proof another way.
+      #    Only the scripts this repo actually has are run.
       - name: Build and start the app
         id: app
+        if: steps.stack.outputs.node_dir != ''
+        working-directory: ${{ steps.stack.outputs.node_dir }}
+        env:
+          PORT: ${{ steps.stack.outputs.port }}
+          HAS_BUILD: ${{ steps.stack.outputs.has_build }}
+          HAS_START: ${{ steps.stack.outputs.has_start }}
+          HAS_DEV: ${{ steps.stack.outputs.has_dev }}
         run: |
           set +e
-          echo "Building…"
-          npm run build > build.log 2>&1
-          if [ $? -ne 0 ]; then
-            echo "::warning::next build failed — see build.log. Agent will note this instead of pretending it works."
+          if [ "$HAS_BUILD" = "true" ]; then
+            echo "Building…"
+            npm run build --if-present > build.log 2>&1
+            if [ $? -ne 0 ]; then
+              echo "::warning::The build failed — see build.log. Agent will note this instead of pretending it works."
+              echo "up=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "No \"build\" script in package.json — skipping the build (not a failure)."
+          fi
+
+          if [ "$HAS_START" = "true" ]; then
+            start_cmd="npm run start"
+          elif [ "$HAS_DEV" = "true" ]; then
+            start_cmd="npm run dev"
+          else
+            echo "::warning::No \"start\" or \"dev\" script in package.json — nothing to boot. Agent will fall back to non-visual proof."
             echo "up=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Starting the server on :3000…"
-          nohup npm run start > server.log 2>&1 &
+
+          echo "Starting the server on :$PORT with \`$start_cmd\`…"
+          nohup $start_cmd > server.log 2>&1 &
           echo $! > server.pid
+          # "Is the server answering?", NOT "does / return 200". Plenty of real apps answer the
+          # root URL with a 404 (no index route) or a 401/302 (auth wall) and are perfectly up,
+          # so any HTTP status counts as alive. curl writes 000 when it could not connect at
+          # all — that, and only that, means still-not-up.
+          # curl itself prints 000 into %{http_code} when it could not connect, so the
+          # `|| true` is only there to keep errexit happy — never `|| echo 000`, which
+          # would concatenate onto curl's own 000 and read as a live status code.
           up=false
           for _ in $(seq 1 40); do
-            if curl -fsS -m 2 http://localhost:3000 >/dev/null 2>&1; then up=true; break; fi
+            code=$(curl -s -o /dev/null -m 2 -w "%{http_code}" "http://localhost:$PORT" 2>/dev/null || true)
+            case "$code" in
+              '' | 000) ;; # nothing listening yet
+              *)
+                echo "Server answered with HTTP $code."
+                up=true
+                break
+                ;;
+            esac
             sleep 2
           done
           if [ "$up" = "true" ]; then
-            echo "App is up on http://localhost:3000"
+            echo "App is up on http://localhost:$PORT"
             echo "up=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::App did not answer on :3000 within 80s — see server.log. Agent will fall back to non-visual proof."
+            echo "::warning::App did not answer on :$PORT within 80s — see server.log. Agent will fall back to non-visual proof."
             echo "up=false" >> "$GITHUB_OUTPUT"
           fi
+          exit 0
 
-      # 4. The agent decides WHICH pages the diff touches, drives the browser to capture
+      # 5. The agent decides WHICH pages the diff touches, drives the browser to capture
       #    them, and writes evidence/ + evidence/manifest.json.
-      - uses: anthropics/claude-code-action@v1
+      - name: Demo agent
+        id: agent
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "claude"
@@ -152,53 +350,86 @@ jobs:
               so you BLOCK and receive their reports. A backgrounded subagent is killed the moment
               you stop.
             - NEVER end your turn saying you will "wait" or "report back". There is no later.
-            - Your job is done ONLY when the `evidence/` folder + `evidence/manifest.json` exist on
-              disk AND the "📸 Demo evidence" comment has been posted to the PR. A run that decides
+            - Your job is done ONLY when the evidence folder + its `manifest.json` exist on disk
+              AND the "📸 Demo evidence" comment has been posted to the PR. A run that decides
               what to capture but writes no files has produced nothing.
             ────────────────────────────────────────────────────────────────────────
 
-            ENVIRONMENT FACTS you have been handed (do not re-derive them):
-            - The app server is ${{ steps.app.outputs.up == 'true' && 'UP at http://localhost:3000' || 'NOT running (it would not boot headlessly this run)' }}.
+            ENVIRONMENT FACTS you have been handed (do not re-derive them). CI detected this
+            repo's stack rather than assuming one, so read these carefully — they differ per repo:
+            - Node app directory: `${{ steps.stack.outputs.node_dir || '(none — this repo has no package.json app)' }}`
+              (run `npm`/`node` commands from there; `build.log` and `server.log` are written there too).
+            - Python app directory: `${{ steps.stack.outputs.py_dir || '(none)' }}`.
+            - The app server is ${{ steps.app.outputs.up == 'true' && format('UP at http://localhost:{0}', steps.stack.outputs.port) || 'NOT running (no bootable app, or it would not boot headlessly this run)' }}.
             - A headless Chromium for Playwright is ${{ steps.pw.outputs.browser == 'ok' && 'installed and ready' || 'NOT available' }}.
-            - Playwright is installed as an npm package (`require("playwright")`).
-            - If a build or start failed, `build.log` / `server.log` in the repo root explain why —
-              read them and quote the relevant line rather than guessing.
+            - When available, Playwright is installed as an npm package in the Node app directory
+              (`require("playwright")` — run your script from that directory).
+            - If a build or start failed or was skipped, `build.log` / `server.log` in the Node app
+              directory explain why — read them and quote the relevant line rather than guessing.
+            - THE EVIDENCE FOLDER IS ONE FIXED ABSOLUTE PATH:
+              `${{ github.workspace }}/evidence`
+              It already exists, and it is also exported to your shell as `$EVIDENCE_DIR`.
+              ALWAYS write evidence there using the absolute path (or `$EVIDENCE_DIR` in bash,
+              `process.env.EVIDENCE_DIR` in Node). NEVER write a relative `evidence/` — you will
+              be running commands from the app subfolder, and a relative path would create a
+              second folder there that nothing uploads and the owner never sees. Everywhere
+              below, "the evidence folder" means exactly this path.
 
             STEP 1 — FIGURE OUT WHAT CHANGED AND WHAT TO SHOW.
             Run `gh pr diff ${{ steps.meta.outputs.pr_number }}` and read the PR body
-            (`gh pr view ${{ steps.meta.outputs.pr_number }}`). Decide which user-facing routes the
-            diff affects. The app's pages live under `src/app` (e.g. `/`, `/factories`, `/agents`,
-            `/settings`); API routes live under `src/app/api`. Map the changed files to the specific
-            URLs a person would visit to SEE this feature. If the change is purely backend (an API
-            route, a lib function, a script) with no visible page, plan to prove it another way
+            (`gh pr view ${{ steps.meta.outputs.pr_number }}`). Then DISCOVER this app's real
+            routes from the repository itself — never assume a route exists, and never reuse a
+            route list from another project:
+            - Find the framework first (the `dependencies` in package.json, or the Python web
+              framework in pyproject.toml/requirements.txt), then use ITS router convention.
+            - Next.js App Router: every `page.tsx`/`page.js` under `app/` or `src/app/` is a route;
+              the folder path IS the URL (`app/settings/page.tsx` → `/settings`, `[id]` segments
+              need a real id — find one in seed data, a fixture, or the running app).
+            - Next.js Pages Router: files under `pages/` (excluding `pages/api/`).
+            - React Router / TanStack Router: grep for `createBrowserRouter`, `<Route path=`, or a
+              `routes.*` module. SvelteKit/Remix/Nuxt: `src/routes/**`, `app/routes/**`, `pages/**`.
+            - Vite/SPA with no router: the single entry page is the route.
+            - Python (Flask/FastAPI/Django): grep for `@app.route`, `@router.get`, or `urlpatterns`.
+            - If none of that applies, run `git ls-files | head -100` and work it out from the
+              actual layout. When you genuinely cannot determine any route, say so plainly and go
+              to STEP 3 — do not invent URLs and screenshot 404s.
+            Map the changed files to the specific URLs a person would visit to SEE this feature,
+            and visit the MOST IMPORTANT 3-5 of them: always the routes the diff actually touches
+            first, then the app's main entry route for context. If the change is purely backend (an
+            API route, a lib function, a script) with no visible page, plan to prove it another way
             (see STEP 3).
 
             STEP 2 — CAPTURE VISUAL PROOF (when the app is up and a browser is available).
             Write a small Playwright script (Node, `require("playwright")`) that:
             - launches chromium headless,
-            - creates a context with video recording on
-              (`recordVideo: { dir: "evidence/video" }`),
-            - visits each affected route on http://localhost:3000,
+            - creates a context with video recording on, writing into the evidence folder by its
+              absolute path (`recordVideo: { dir: process.env.EVIDENCE_DIR + "/video" }`),
+            - visits each affected route on the app's base URL (the host and port given in the
+              ENVIRONMENT FACTS above — do not hardcode 3000),
             - waits for the meaningful content to render, then screenshots the full page to
-              `evidence/NN-<short-name>.png` (zero-padded ordering: 01, 02, …),
+              `$EVIDENCE_DIR/NN-<short-name>.png` (zero-padded ordering: 01, 02, …),
             - exercises the actual new behavior where you can (click the new button, submit the
               new form, toggle the new setting) so the video shows it WORKING, not just a static
               page,
             - closes the context so the video file is flushed, and rename/move the produced
-              `.webm` into `evidence/video/NN-<short-name>.webm`.
+              `.webm` into `$EVIDENCE_DIR/video/NN-<short-name>.webm`.
             Run it with `node`. If it throws, read the error, fix the script, retry. Capture the
             BEFORE/AFTER contrast if the PR changes an existing screen.
 
-            STEP 3 — IF THERE IS NOTHING TO SEE IN A BROWSER (backend-only, or the app/browser is
-            unavailable), capture proof another way into the SAME evidence folder:
-            - run the relevant tests and save output to `evidence/NN-tests.txt` (type "log"),
+            STEP 3 — IF THERE IS NOTHING TO SEE IN A BROWSER (backend-only, no web app in this
+            repo, or the app/browser is unavailable), capture proof another way into the SAME
+            evidence folder — using whatever tooling THIS repo actually has:
+            - run the relevant tests and save output to `$EVIDENCE_DIR/NN-tests.txt` (type "log")
+              — e.g. `npm test`, `pytest`, `go test`, whichever this repo uses,
             - show before/after CLI or API output (`curl` an API route if the server is up) into
-              `evidence/NN-<name>.txt` (type "log"),
-            - dump the relevant DB state via a small Prisma/node script into a `.txt` (type "log").
+              `$EVIDENCE_DIR/NN-<name>.txt` (type "log"),
+            - dump the relevant data/DB state with the repo's own tooling (a Prisma/node script, a
+              Django shell command, a psql/sqlite query — only what this repo already uses) into a
+              `.txt` (type "log").
             The point is the owner ends up with real evidence, never an empty folder.
 
-            STEP 4 — WRITE `evidence/manifest.json` in EXACTLY this shape (this is a contract the
-            dashboard parses — keys and types matter):
+            STEP 4 — WRITE `$EVIDENCE_DIR/manifest.json` in EXACTLY this shape (this is a
+            contract the dashboard parses — keys and types matter):
               {
                 "pr": ${{ steps.meta.outputs.pr_number }},
                 "captured_at": "<ISO 8601 UTC timestamp>",
@@ -210,8 +441,11 @@ jobs:
                 ]
               }
             `type` is one of: "screenshot", "video", "log", "audio", "other". `file` is the path
-            RELATIVE TO the evidence/ folder. Every file you put in evidence/ must have a manifest
-            item, and every manifest item must point to a file that exists. Captions are written
+            RELATIVE TO the evidence folder (never absolute — `01-dashboard.png`, not
+            `/home/.../evidence/01-dashboard.png`). Every file you put in the evidence folder must
+            have a manifest item, and every manifest item must point to a file that exists in it.
+            Before you finish, run `ls -R "$EVIDENCE_DIR"` and check the two lists match.
+            Captions are written
             FOR THE OWNER — plain English, say what he is looking at and why it proves the feature
             works.
 
@@ -222,29 +456,41 @@ jobs:
             - a bulleted list of each evidence item: its caption (and note screenshot/video/log),
             - the sentence: "Full screenshots and video are in the artifact
               `demo-evidence-pr-${{ steps.meta.outputs.pr_number }}` attached to this run."
-            - if you could NOT capture normally (app wouldn't boot, backend-only), say so plainly
-              and say what you captured instead — never pretend.
+            - if you could NOT capture normally (app wouldn't boot, no web app in this repo,
+              backend-only), say so plainly and say what you captured instead — never pretend.
 
-            Do not change product code. Do not merge anything. The `evidence/` folder is your
-            entire output; guard it with your life.
+            Do not change product code. Do not merge anything. The evidence folder
+            (`${{ github.workspace }}/evidence`) is your entire output; guard it with your life.
 
-      # 5. Upload the evidence. THE NAME IS A CONTRACT — the dashboard reads exactly this.
+      # 6. Upload the evidence. THE NAME IS A CONTRACT — the dashboard reads exactly this.
+      #    Same absolute folder the agent was told to write to.
       - name: Upload evidence artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: demo-evidence-pr-${{ steps.meta.outputs.pr_number }}
-          path: evidence/
+          path: ${{ github.workspace }}/evidence
           if-no-files-found: warn
           retention-days: 30
 
-      # 6. A green tick does not mean evidence was produced. Prove the folder exists.
+      # 7. A green tick does not mean evidence was produced. Prove the folder exists.
+      #    But only blame the AGENT when the agent actually ran: if the action step itself
+      #    failed (missing/expired CLAUDE_CODE_OAUTH_TOKEN is the usual cause) there was never
+      #    anything to write the files, and "it never wrote the files" would send the owner
+      #    hunting in the wrong place.
       - name: Verify evidence was actually captured
         if: always()
+        env:
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
         run: |
-          if [ ! -f evidence/manifest.json ]; then
-            echo "::error::No evidence/manifest.json was produced. The Demo agent must always write a manifest — even backend-only PRs get non-visual proof. Read the agent's final message above; the usual cause is it decided what to capture but never wrote the files."
+          if [ "$AGENT_OUTCOME" != "success" ]; then
+            echo "::error::The Demo agent step did not complete (outcome: ${AGENT_OUTCOME:-skipped}), so no evidence could be captured. This is a SETUP problem, not an agent mistake — check the step's log above. The most common cause by far is a missing or expired CLAUDE_CODE_OAUTH_TOKEN repository secret."
+            exit 1
+          fi
+          if [ ! -f "$EVIDENCE_DIR/manifest.json" ]; then
+            echo "::error::The Demo agent ran but produced no $EVIDENCE_DIR/manifest.json. It must always write a manifest — even backend-only PRs get non-visual proof. Read the agent's final message above; the usual cause is it decided what to capture but never wrote the files."
+            ls -R "$EVIDENCE_DIR" 2>/dev/null || true
             exit 1
           fi
           echo "Evidence manifest present:"
-          cat evidence/manifest.json
+          cat "$EVIDENCE_DIR/manifest.json"

@@ -6,6 +6,13 @@ name: Claude — Auditor (adversarial PR review)
 # Goal: the owner should only ever be handed PRs that are actually safe to merge.
 
 on:
+  # NOTE ON FORK PRs: `pull_request` runs a fork's PR with a read-only token and NO access
+  # to repository secrets, so `secrets.CLAUDE_CODE_OAUTH_TOKEN` is empty and the agent step
+  # cannot authenticate — the audit will fail (or no-op) on any PR opened from a fork. That
+  # is deliberate: the alternative (`pull_request_target`) would run untrusted fork code with
+  # this repo's secrets, which is far worse. This loop's own PRs come from `claude/` branches
+  # in this repo, so they are unaffected. Fork PRs must be reviewed by hand, or re-audited via
+  # `workflow_dispatch` after the branch has been pulled into this repo.
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -24,10 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
+      # Required by anthropics/claude-code-action: it mints its GitHub App token from OIDC.
+      id-token: write
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
     steps:
       # Work out which PR we're on. Handles both the normal pull_request trigger
       # AND a manual/scripted re-run (workflow_dispatch) — the latter matters
@@ -36,16 +44,29 @@ jobs:
       # silently excludes from ever firing `pull_request: synchronize` — so
       # without this, a fix pushed onto an existing PR would never get
       # re-audited, and the stale verdict would sit there indefinitely.
+      #
+      # Every `${{ }}` below is passed through `env:` and referenced quoted. A
+      # `workflow_dispatch` input is free text, so pasting it straight into the shell would
+      # be a command-injection hole; anything that is not a plain number is refused outright.
       - name: Resolve PR number
         id: meta
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            pr="${{ github.event.inputs.pr_number }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            pr="$INPUT_PR"
           else
-            pr="${{ github.event.pull_request.number }}"
+            pr="$EVENT_PR"
           fi
+          case "$pr" in
+            '' | *[!0-9]*)
+              echo "::error::Refusing to run — '$pr' is not a plain PR number."
+              exit 1
+              ;;
+          esac
           echo "PR under review: #$pr"
           echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
 
@@ -56,7 +77,8 @@ jobs:
       - name: Check out the PR branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr checkout ${{ steps.meta.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.meta.outputs.pr_number }}
+        run: gh pr checkout "$PR_NUMBER"
 
       - uses: anthropics/claude-code-action@v1
         with:
