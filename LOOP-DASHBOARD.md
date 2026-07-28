@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-27. Do not edit by hand.*
+*Auto-generated 2026-07-28. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -9,16 +9,16 @@
 | | |
 |---|---|
 | Pull requests merged | 21 |
-| Pull requests rejected | 10 (+1) |
-| **Merge rate** | **68%** |
-| Waiting on you right now | 10 |
+| Pull requests rejected | 12 (+2) |
+| **Merge rate** | **64%** |
+| Waiting on you right now | 9 |
 
 ## Is it outrunning you?
 
 | | |
 |---|---|
 | Typical days to merge | 0.8 |
-| Typical PR size (lines) | 303 |
+| Typical PR size (lines) | 316 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
@@ -28,11 +28,11 @@ right less. That is the failure mode to watch for.
 | | |
 |---|---|
 | Ideas filed (all time) | 53 |
-| You approved | 18 (+18) |
+| You approved | 19 (+1) |
 | You declined | 0 |
-| Still waiting on you | 25 |
-| Untouched for over a week | 15 |
-| **Approval rate** | **34%** |
+| Still waiting on you | 24 |
+| Untouched for over a week | 14 |
+| **Approval rate** | **36%** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
 it is written up in the weekly retro issue.
@@ -52,6 +52,7 @@ like the third.*
 - #94 Some true-crime/history videos get their narration cut off halfway — and still auto-publish
 - #90 Cut your AI writing bill by ~90% with prompt caching — same videos, lower cost
 - #88 Stop TikTok from silently shadowbanning you — human-like posting + a 'your reach just died' alert
+- #82 Some sports videos silently fail to render when the AI hook has a comma or % — fix the text escaping
 - #70 Video preview won't play on Mac/iPhone — you can't reliably review before it auto-posts
 - #58 Auto-post every video to Instagram & Facebook too, not just YouTube + TikTok — the biggest free revenue bump on content you already make
 - #57 Your paid premium voice can quietly break — the app swaps in the free robot voice and never tells you
@@ -82,7 +83,6 @@ _Nothing declined yet. No idea has ever been explicitly rejected, so there is no
 - #77 Your TikTok videos are too short to ever earn — make a 60s+ cut for TikTok only
 - #78 Write titles & hashtags tuned to each platform, not one identical set for all three
 - #79 Auto-add your links (affiliate/product) to every video's description — earn before you're monetized
-- #82 Some sports videos silently fail to render when the AI hook has a comma or % — fix the text escaping
 - #83 You're posting to TikTok but never measuring it — pull TikTok view counts so it can win too
 - #84 A blank BLACK video with just narration can auto-publish to YouTube — catch it before it goes live
 - #86 Check every video against YouTube's 2026 'AI slop' demonetization rules BEFORE it posts
