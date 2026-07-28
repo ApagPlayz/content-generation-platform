@@ -38,19 +38,25 @@ async function hasDrawtext(): Promise<boolean> {
 export async function runAssemble(
   sourcePath: string,
   moment: MomentResult,
-  script: ScriptResult
+  script: ScriptResult,
+  opts: { outputName?: string } = {}
 ): Promise<AssembleResult> {
+  // Defaults to final.mp4 — the short cut every platform used to share. The
+  // TikTok long cut (issue #77) passes its own name so the two renders sit side
+  // by side in the same media dir instead of overwriting each other.
+  const outputName = opts.outputName ?? 'final.mp4'
+
   if ((process.env.RENDER_ENGINE || '').trim().toLowerCase() === 'remotion') {
     try {
       const { renderSportsHighlight } = await import('../render/remotion')
-      return await renderSportsHighlight(sourcePath, moment, script)
+      return await renderSportsHighlight(sourcePath, moment, script, opts)
     } catch (err) {
       console.warn('[assemble] Remotion render failed, falling back to ffmpeg:', err)
     }
   }
 
   const dir = path.dirname(sourcePath)
-  const outputPath = path.join(dir, 'final.mp4')
+  const outputPath = path.join(dir, outputName)
   const duration = moment.endSec - moment.startSec
 
   // drawtext chokes on unescaped quotes/colons.
@@ -81,6 +87,6 @@ export async function runAssemble(
     { timeout: 600_000 }
   )
 
-  if (!existsSync(outputPath)) throw new Error('ffmpeg finished but final.mp4 not found')
+  if (!existsSync(outputPath)) throw new Error(`ffmpeg finished but ${outputName} not found`)
   return { outputPath, durationSec: duration }
 }

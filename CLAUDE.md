@@ -68,6 +68,12 @@ If you (the user) want the output in this chat, type: `! npm run go`
   before that feature works — the rest of the app runs without them.
 - After editing `prisma/schema.prisma`, run `npm run prisma:push` (the start script does
   this automatically on launch).
+- **TikTok long cut:** Settings → TikTok → "Make a longer cut for TikTok (60s+)" makes the
+  assemble stage render a second `final-tiktok.mp4` (~65s) alongside the normal `final.mp4`.
+  Only `publishToTikTok` picks it up (via a `tiktok-cut` Asset row); `Video.localPath` stays
+  the short cut so YouTube/Reels are unchanged. Off by default. It also widens the
+  clip-ingest download, and feeds the longer duration to the copyright gate — so opting in
+  routes more sports videos to the review inbox on purpose. See `src/lib/tools/longCut.ts`.
 - **Render engine:** the assemble stage defaults to ffmpeg. Set `RENDER_ENGINE=remotion`
   in `.env.local` to render via the Remotion compositions in `video/` (animated
   captions, 9:16 framing); it auto-falls back to ffmpeg on any error. The first Remotion
