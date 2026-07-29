@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-28. Do not edit by hand.*
+*Auto-generated 2026-07-29. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -8,17 +8,17 @@
 
 | | |
 |---|---|
-| Pull requests merged | 22 (+1) |
-| Pull requests rejected | 12 (+2) |
+| Pull requests merged | 22 |
+| Pull requests rejected | 12 |
 | **Merge rate** | **65%** |
-| Waiting on you right now | 8 |
+| Waiting on you right now | 11 |
 
 ## Is it outrunning you?
 
 | | |
 |---|---|
 | Typical days to merge | 1 |
-| Typical PR size (lines) | 316 |
+| Typical PR size (lines) | 328 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
@@ -28,11 +28,11 @@ right less. That is the failure mode to watch for.
 | | |
 |---|---|
 | Ideas filed (all time) | 53 |
-| You approved | 19 (+1) |
+| You approved | 20 (+1) |
 | You declined | 0 |
-| Still waiting on you | 24 |
+| Still waiting on you | 23 |
 | Untouched for over a week | 14 |
-| **Approval rate** | **36%** |
+| **Approval rate** | **38%** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
 it is written up in the weekly retro issue.
@@ -53,6 +53,7 @@ like the third.*
 - #90 Cut your AI writing bill by ~90% with prompt caching — same videos, lower cost
 - #88 Stop TikTok from silently shadowbanning you — human-like posting + a 'your reach just died' alert
 - #82 Some sports videos silently fail to render when the AI hook has a comma or % — fix the text escaping
+- #77 Your TikTok videos are too short to ever earn — make a 60s+ cut for TikTok only
 - #70 Video preview won't play on Mac/iPhone — you can't reliably review before it auto-posts
 - #58 Auto-post every video to Instagram & Facebook too, not just YouTube + TikTok — the biggest free revenue bump on content you already make
 - #57 Your paid premium voice can quietly break — the app swaps in the free robot voice and never tells you
@@ -80,7 +81,6 @@ _Nothing declined yet. No idea has ever been explicitly rejected, so there is no
 - #74 A TikTok video can show 'Posted' when it never actually went live — and never retries
 - #75 Your captions & call-to-action can be hidden behind TikTok/Reels/Shorts buttons
 - #76 Videos look blurry after upload — add clean per-platform export settings
-- #77 Your TikTok videos are too short to ever earn — make a 60s+ cut for TikTok only
 - #78 Write titles & hashtags tuned to each platform, not one identical set for all three
 - #79 Auto-add your links (affiliate/product) to every video's description — earn before you're monetized
 - #83 You're posting to TikTok but never measuring it — pull TikTok view counts so it can win too
@@ -88,3 +88,4 @@ _Nothing declined yet. No idea has ever been explicitly rejected, so there is no
 - #86 Check every video against YouTube's 2026 'AI slop' demonetization rules BEFORE it posts
 - #87 Turn each week's shorts into one long YouTube video — 50-200x the pay, and the only real path to getting monetized
 - #89 You already score each video's hook — use it to skip publishing the ones likely to flop
+- #85 The dashboard's "$ cost" isn't real money — label it as an estimate and fix the blank sports figure
