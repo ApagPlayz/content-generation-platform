@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-29. Do not edit by hand.*
+*Auto-generated 2026-07-30. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -28,10 +28,10 @@ right less. That is the failure mode to watch for.
 | | |
 |---|---|
 | Ideas filed (all time) | 53 |
-| You approved | 20 (+1) |
+| You approved | 20 |
 | You declined | 0 |
 | Still waiting on you | 23 |
-| Untouched for over a week | 14 |
+| Untouched for over a week | 20 |
 | **Approval rate** | **38%** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
@@ -89,3 +89,9 @@ _Nothing declined yet. No idea has ever been explicitly rejected, so there is no
 - #87 Turn each week's shorts into one long YouTube video — 50-200x the pay, and the only real path to getting monetized
 - #89 You already score each video's hook — use it to skip publishing the ones likely to flop
 - #85 The dashboard's "$ cost" isn't real money — label it as an estimate and fix the blank sports figure
+- #100 Give YouTube and TikTok their own copy of each video, so they stop burying it as 'reused content'
+- #101 Auto-make a click-worthy thumbnail for each video — right now there isn't one
+- #102 A stalled sports data fetch can freeze a video run for 30 minutes — add the same timeout the true-crime pipeline already has
+- #103 Add a high-paying niche (money/business explainers) — same effort per video, 2-4x the ad rate
+- #109 Your sports videos skip the 'will this get demonetized?' safety check that true-crime and history already run
+- #110 The crash-recovery safety net can wrongly kill a video that's still rendering — and make you pay to render it twice
