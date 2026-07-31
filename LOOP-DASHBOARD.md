@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-07-30. Do not edit by hand.*
+*Auto-generated 2026-07-31. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -31,7 +31,7 @@ right less. That is the failure mode to watch for.
 | You approved | 20 |
 | You declined | 0 |
 | Still waiting on you | 23 |
-| Untouched for over a week | 20 |
+| Untouched for over a week | 23 |
 | **Approval rate** | **38%** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
@@ -95,3 +95,6 @@ _Nothing declined yet. No idea has ever been explicitly rejected, so there is no
 - #103 Add a high-paying niche (money/business explainers) — same effort per video, 2-4x the ad rate
 - #109 Your sports videos skip the 'will this get demonetized?' safety check that true-crime and history already run
 - #110 The crash-recovery safety net can wrongly kill a video that's still rendering — and make you pay to render it twice
+- #114 TikTok auto-publish is silently broken whenever YouTube posts first — the second platform never goes live
+- #115 Stop re-buying the same AI images every video — cache & reuse atmospheric stills to cut the image bill
+- #118 Teach the app to copy your videos people actually WATCH — not just the ones that got shown
