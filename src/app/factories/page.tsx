@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { ChevronLeft, Plus, Bot, Film } from 'lucide-react'
+import { Plus, Bot, Film } from 'lucide-react'
 
 interface Factory {
   id: string
@@ -24,30 +24,19 @@ export default function Factories() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="border-b border-slate-200 bg-white sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 py-4">
-          <Link
-            href="/"
-            className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-4 w-fit"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Dashboard
-          </Link>
-          <div className="flex items-center justify-between">
-            <h1 className="text-3xl font-bold text-slate-900">Factories</h1>
-            <Link
-              href="/factories/new"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              New Factory
-            </Link>
-          </div>
-        </div>
-      </div>
-
+    <div>
       <div className="max-w-6xl mx-auto px-6 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold text-slate-900">Factories</h1>
+          <Link
+            href="/factories/new"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            New Factory
+          </Link>
+        </div>
+
         {factories === null ? (
           <p className="text-slate-500">Loading…</p>
         ) : factories.length === 0 ? (
@@ -84,7 +73,7 @@ export default function Factories() {
                       <Film className="w-4 h-4" /> {f._count.videos} videos
                     </span>
                     <Link
-                      href="/agents"
+                      href="/?tab=studio"
                       className="flex items-center gap-1 text-slate-700 hover:text-slate-900"
                     >
                       <Bot className="w-4 h-4" /> Manage agents
