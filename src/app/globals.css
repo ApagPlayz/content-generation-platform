@@ -2,18 +2,222 @@
 @tailwind components;
 @tailwind utilities;
 
-* {
-  @apply border-slate-200;
+/* ==========================================================================
+   "Warm Creator" palette (issue #126) — the ONE place these colours live.
+
+   Values are copied from the [data-style="2"] block of public/design-drafts.html,
+   which stays in the repo as the reference mockup. Light is the default; the
+   header toggle puts `.dark` on <html> and the same variable names swap over,
+   so nothing else in the app has to know a theme exists.
+   ========================================================================== */
+:root {
+  --bg: #faf9f7;
+  --surface: #ffffff;
+  --surface-2: #f5f3ef;
+  --border: #eae7e1;
+  --text: #1c1917;
+  --muted: #78716c;
+  --accent: #6d28d9;
+  --accent-fg: #ffffff;
+  --accent-soft: #f3f0ff;
+  --accent-soft-text: #5b21b6;
+  --radius: 18px;
+  /* Inputs look bloated at the full 18px, so form fields get their own. */
+  --radius-field: 10px;
+  --shadow: 0 6px 20px rgba(28, 25, 23, 0.08);
+  color-scheme: light;
 }
 
-html {
-  color-scheme: light dark;
+.dark {
+  --bg: #191614;
+  --surface: #241f1c;
+  --surface-2: #2c2622;
+  --border: #37302b;
+  --text: #f5f3ef;
+  --muted: #a8a29e;
+  --accent: #a78bfa;
+  --accent-fg: #1c1917;
+  --accent-soft: #2a2340;
+  --accent-soft-text: #c4b5fd;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+* {
+  border-color: var(--border);
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50;
+  background-color: var(--bg);
+  color: var(--text);
 }
 
 button {
   @apply transition-colors duration-200;
+}
+
+/* ---- Shell pieces (header, nav, buttons) -------------------------------- */
+
+.app-header {
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-tab {
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.nav-tab:hover {
+  color: var(--text);
+}
+
+.nav-tab-on,
+.nav-tab-on:hover {
+  background-color: var(--accent-soft);
+  color: var(--accent-soft-text);
+}
+
+.btn-accent {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+  border-radius: var(--radius);
+}
+
+.btn-accent:hover {
+  background-color: color-mix(in srgb, var(--accent) 85%, #000);
+}
+
+.btn-ghost {
+  background-color: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.btn-ghost:hover {
+  background-color: var(--surface-2);
+}
+
+/* ---- Bridging the existing components onto the tokens -------------------
+   The pages below still use Tailwind's neutral utilities. In LIGHT mode those
+   already land on the Warm Creator values (bg-white === --surface, and the grey
+   text/borders differ by a couple of RGB points), so we only redirect the two
+   things that are genuinely part of this look: the accent and the corner radius.
+   In DARK mode nothing was ever styled, so the block further down remaps the
+   neutrals onto the tokens. Both are deliberate temporary bridges: as components
+   are converted to the semantic classes above, delete the matching lines here.
+   ------------------------------------------------------------------------ */
+
+.rounded-lg {
+  border-radius: var(--radius);
+}
+
+input.rounded-lg,
+select.rounded-lg,
+textarea.rounded-lg {
+  border-radius: var(--radius-field);
+}
+
+/* Primary buttons were near-black; the picked look makes them violet. */
+.bg-gray-900,
+.bg-slate-900 {
+  background-color: var(--accent);
+}
+
+.bg-gray-900.text-white,
+.bg-slate-900.text-white {
+  color: var(--accent-fg);
+}
+
+.hover\:bg-gray-800:hover,
+.hover\:bg-slate-800:hover {
+  background-color: color-mix(in srgb, var(--accent) 85%, #000);
+}
+
+.focus\:ring-gray-900:focus {
+  --tw-ring-color: var(--accent);
+}
+
+.border-gray-900 {
+  border-color: var(--accent);
+}
+
+/* ---- Dark mode for the not-yet-converted components --------------------- */
+
+.dark .bg-white {
+  background-color: var(--surface);
+}
+
+.dark .bg-gray-50,
+.dark .bg-gray-100,
+.dark .bg-gray-300,
+.dark .bg-slate-50,
+.dark .bg-slate-100,
+.dark .bg-stone-100,
+.dark .bg-stone-200 {
+  background-color: var(--surface-2);
+}
+
+.dark .text-gray-900,
+.dark .text-slate-900 {
+  color: var(--text);
+}
+
+.dark .text-gray-300,
+.dark .text-gray-400,
+.dark .text-gray-500,
+.dark .text-gray-600,
+.dark .text-gray-700,
+.dark .text-slate-500,
+.dark .text-slate-600,
+.dark .text-slate-700,
+.dark .text-stone-700 {
+  color: var(--muted);
+}
+
+.dark .border-gray-50,
+.dark .border-gray-100,
+.dark .border-gray-200,
+.dark .border-gray-300,
+.dark .border-slate-200 {
+  border-color: var(--border);
+}
+
+.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border);
+}
+
+.dark .hover\:bg-gray-50:hover,
+.dark .hover\:bg-gray-100:hover {
+  background-color: var(--surface-2);
+}
+
+.dark .hover\:text-gray-600:hover,
+.dark .hover\:text-gray-700:hover,
+.dark .hover\:text-gray-900:hover,
+.dark .hover\:text-slate-900:hover {
+  color: var(--text);
+}
+
+.dark .hover\:border-gray-300:hover {
+  border-color: var(--accent);
+}
+
+/* The "YouTube disconnected" banner is the one coloured panel big enough to
+   glare in dark mode; the status chips are small enough to leave as they are. */
+.dark .bg-amber-50 {
+  background-color: #2a2103;
+}
+
+.dark .border-amber-200 {
+  border-color: #5b4708;
+}
+
+.dark .text-amber-800 {
+  color: #fde68a;
 }
