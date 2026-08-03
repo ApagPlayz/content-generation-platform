@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-08-02. Do not edit by hand.*
+*Auto-generated 2026-08-03. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -11,7 +11,7 @@
 | Pull requests merged | 22 |
 | Pull requests rejected | 12 |
 | **Merge rate** | **65%** |
-| Waiting on you right now | 11 |
+| Waiting on you right now | 13 |
 
 ## Is it outrunning you?
 
@@ -27,12 +27,12 @@ right less. That is the failure mode to watch for.
 
 | | |
 |---|---|
-| Ideas filed (all time) | 53 |
-| You approved | 20 |
+| Ideas filed (all time) | 54 |
+| You approved | 21 (+1) |
 | You declined | 0 |
 | Still waiting on you | 23 |
 | Untouched for over a week | 23 |
-| **Approval rate** | **38%** |
+| **Approval rate** | **39%** |
 
 A low approval rate means the scout is researching the wrong things. That is fixable —
 it is written up in the weekly retro issue.
@@ -48,6 +48,7 @@ like the third.*
 
 ### ✅ Approved ideas — more like these
 
+- #126 Apply the picked redesign: Style 2 "Warm Creator", light default, single nav
 - #96 A sports video can hang for up to 30 minutes with no error — give it the same stall-timeout the other two video types already have
 - #94 Some true-crime/history videos get their narration cut off halfway — and still auto-publish
 - #90 Cut your AI writing bill by ~90% with prompt caching — same videos, lower cost
