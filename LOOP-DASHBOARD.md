@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-08-03. Do not edit by hand.*
+*Auto-generated 2026-08-04. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -28,7 +28,7 @@ right less. That is the failure mode to watch for.
 | | |
 |---|---|
 | Ideas filed (all time) | 54 |
-| You approved | 21 (+1) |
+| You approved | 21 |
 | You declined | 0 |
 | Still waiting on you | 23 |
 | Untouched for over a week | 23 |
