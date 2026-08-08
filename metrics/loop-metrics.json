@@ -398,5 +398,22 @@
     "proposals_open": 23,
     "proposals_ignored_7d": 23,
     "proposal_approval_rate_pct": 39
+  },
+  {
+    "date": "2026-08-08",
+    "prs_opened": 47,
+    "prs_merged": 22,
+    "prs_rejected": 12,
+    "prs_open_now": 13,
+    "merge_rate_pct": 65,
+    "median_pr_size_lines": 328,
+    "median_days_to_merge": 1,
+    "prs_needing_changes": 1,
+    "proposals_filed": 54,
+    "proposals_approved": 21,
+    "proposals_declined": 0,
+    "proposals_open": 23,
+    "proposals_ignored_7d": 23,
+    "proposal_approval_rate_pct": 39
   }
 ]
