@@ -13,10 +13,65 @@ on:
     types: [opened]
 
 jobs:
-  claude:
+  # WHO IS ALLOWED TO STEER THIS AGENT.
+  # This repository is PUBLIC. Without this gate, the `@claude` trigger below is open to
+  # every GitHub account on earth: anyone could comment "@claude ..." on any issue and get
+  # an agent with Bash, Write, WebFetch, `contents: write` and `actions: write` running
+  # against this repo. That is arbitrary code execution by a stranger, not a mention.
+  #
+  # LEARNINGS.md line 18 concluded that plain `Bash` was acceptable "in an ephemeral CI
+  # container on a PRIVATE repo". That reasoning was correct when it was written. The repo
+  # later went public and this control never followed — so the gate goes here now, and the
+  # note in LEARNINGS.md is no longer a justification for leaving it off.
+  #
+  # Same fail-closed check as claude-redraft.yml: ask the API what this person can actually
+  # do here, accept only ADMIN or MAINTAIN, refuse identities that cannot be checked, and
+  # do it in a separate `contents: read` job so the permission lookup never runs alongside
+  # write access. If the permission cannot be read, the run does not proceed.
+  authorize:
     if: |
       contains(github.event.comment.body, '@claude') ||
       contains(github.event.issue.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - name: Is the person who mentioned @claude allowed to steer the agent?
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          # A login is letters, digits and hyphens. Anything else (notably a `name[bot]`
+          # App identity) is not a person we can check, so it is not authorized.
+          case "$SENDER" in
+            '' | *[!A-Za-z0-9-]*)
+              echo "::notice::'@claude' was mentioned by '$SENDER', which is not a plain user account (App and bot identities cannot be permission-checked). Not running."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          perm=$(gh api "repos/$REPO/collaborators/$SENDER/permission" --jq '.permission' 2>/dev/null || echo "")
+          echo "Permission of '$SENDER' on $REPO: ${perm:-(could not be read)}"
+          case "$perm" in
+            admin | maintain)
+              echo "Authorized — '$SENDER' is a repository $perm."
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::notice::Ignoring the '@claude' mention from '$SENDER' (permission: ${perm:-none, or not readable}). Only repository admins and maintainers can steer this agent."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+  claude:
+    needs: authorize
+    if: needs.authorize.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
