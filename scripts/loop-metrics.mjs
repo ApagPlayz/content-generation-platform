@@ -36,10 +36,17 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 };
 
-const prs = gh([
+const allPrs = gh([
   "pr", "list", "--state", "all", "--limit", "300",
   "--json", "number,title,state,headRefName,createdAt,mergedAt,closedAt,additions,deletions,reviews",
-]).filter(isAgentPr);
+]);
+
+// The Scout's only prescribed learning input used to describe loop-authored PRs as if
+// they were the whole repo. That erased the owner's own hand-made work from the picture
+// entirely. `agentPrs` keeps every existing metric's meaning unchanged; `humanPrs` and
+// `allPrs` let the dashboard show the loop's slice next to the whole repo's.
+const agentPrs = allPrs.filter(isAgentPr);
+const humanPrs = allPrs.filter((pr) => !isAgentPr(pr));
 
 const issues = gh([
   "issue", "list", "--state", "all", "--limit", "300",
@@ -78,33 +85,70 @@ const ignoredIdeas = openIdeas
   .filter((i) => days(now - new Date(i.updatedAt ?? i.createdAt)) > 7)
   .sort((a, b) => new Date(a.updatedAt ?? a.createdAt) - new Date(b.updatedAt ?? b.createdAt));
 
-const merged = prs.filter((p) => p.mergedAt);
-const rejected = prs.filter((p) => p.state === "CLOSED" && !p.mergedAt);
-const open = prs.filter((p) => p.state === "OPEN");
+const pct = (n, d) => (d ? Math.round((n / d) * 100) : null);
 
 // Cycle time: how long a PR sat waiting on the owner. This is the review bottleneck,
 // and it is the number most likely to reveal that the loop is outrunning him.
-const cycleTimes = merged
-  .map((p) => days(new Date(p.mergedAt) - new Date(p.createdAt)))
-  .map((d) => Math.round(d * 10) / 10);
-
+//
 // Batch size. DORA's research ties large changesets to instability, so a rising median
 // PR size alongside a falling merge rate is the loop going bad. Watch these together.
-const sizes = prs.map((p) => (p.additions ?? 0) + (p.deletions ?? 0));
+//
+// One function so the loop/human/all slices are computed identically — only the input
+// list differs.
+const prMetrics = (list) => {
+  const mergedList = list.filter((p) => p.mergedAt);
+  const rejectedList = list.filter((p) => p.state === "CLOSED" && !p.mergedAt);
+  const openList = list.filter((p) => p.state === "OPEN");
+  const cycleTimes = mergedList
+    .map((p) => days(new Date(p.mergedAt) - new Date(p.createdAt)))
+    .map((d) => Math.round(d * 10) / 10);
+  const sizes = list.map((p) => (p.additions ?? 0) + (p.deletions ?? 0));
+  return {
+    opened: list.length,
+    merged: mergedList.length,
+    rejected: rejectedList.length,
+    open_now: openList.length,
+    merge_rate_pct: pct(mergedList.length, mergedList.length + rejectedList.length),
+    median_pr_size_lines: median(sizes),
+    median_days_to_merge: median(cycleTimes),
+    // Owner review load: PRs they had to send back rather than merge as-is.
+    needing_changes: mergedList.filter((p) => (p.reviews?.length ?? 0) > 0).length,
+  };
+};
 
-const pct = (n, d) => (d ? Math.round((n / d) * 100) : null);
+const loop = prMetrics(agentPrs);
+const human = prMetrics(humanPrs);
+const all = prMetrics(allPrs);
 
 const snapshot = {
   date: new Date().toISOString().slice(0, 10),
-  prs_opened: prs.length,
-  prs_merged: merged.length,
-  prs_rejected: rejected.length,
-  prs_open_now: open.length,
-  merge_rate_pct: pct(merged.length, merged.length + rejected.length),
-  median_pr_size_lines: median(sizes),
-  median_days_to_merge: median(cycleTimes),
-  // Owner review load: PRs he had to send back rather than merge as-is.
-  prs_needing_changes: merged.filter((p) => (p.reviews?.length ?? 0) > 0).length,
+  // Loop-only. Keys and meaning unchanged from before — other things may depend on them.
+  prs_opened: loop.opened,
+  prs_merged: loop.merged,
+  prs_rejected: loop.rejected,
+  prs_open_now: loop.open_now,
+  merge_rate_pct: loop.merge_rate_pct,
+  median_pr_size_lines: loop.median_pr_size_lines,
+  median_days_to_merge: loop.median_days_to_merge,
+  prs_needing_changes: loop.needing_changes,
+  // Whole repo, loop + human combined.
+  prs_opened_all: all.opened,
+  prs_merged_all: all.merged,
+  prs_rejected_all: all.rejected,
+  prs_open_now_all: all.open_now,
+  merge_rate_pct_all: all.merge_rate_pct,
+  median_pr_size_lines_all: all.median_pr_size_lines,
+  median_days_to_merge_all: all.median_days_to_merge,
+  prs_needing_changes_all: all.needing_changes,
+  // Hand-made work only — the slice that used to be invisible.
+  prs_opened_human: human.opened,
+  prs_merged_human: human.merged,
+  prs_rejected_human: human.rejected,
+  prs_open_now_human: human.open_now,
+  merge_rate_pct_human: human.merge_rate_pct,
+  median_pr_size_lines_human: human.median_pr_size_lines,
+  median_days_to_merge_human: human.median_days_to_merge,
+  prs_needing_changes_human: human.needing_changes,
   // Denominator is the UNION of the three idea states, not the open shelf.
   proposals_filed: ideaIssues.length,
   proposals_approved: approvedIdeas.length,
@@ -178,6 +222,19 @@ ${health}
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
+
+## Loop vs. everything else
+
+Every table above is the loop's slice only. Here is that same slice next to your own
+hand-made work, so the loop never looks like the whole repo when it isn't.
+
+| | Loop | You (hand) | Whole repo |
+|---|---|---|---|
+| PRs merged | ${show(loop.merged)} | ${show(human.merged)} | ${show(all.merged)} |
+| PRs rejected | ${show(loop.rejected)} | ${show(human.rejected)} | ${show(all.rejected)} |
+| Merge rate | ${show(loop.merge_rate_pct, "%")} | ${show(human.merge_rate_pct, "%")} | ${show(all.merge_rate_pct, "%")} |
+| Typical PR size (lines) | ${show(loop.median_pr_size_lines)} | ${show(human.median_pr_size_lines)} | ${show(all.median_pr_size_lines)} |
+| Typical days to merge | ${show(loop.median_days_to_merge)} | ${show(human.median_days_to_merge)} | ${show(all.median_days_to_merge)} |
 
 ## Are the ideas any good?
 
