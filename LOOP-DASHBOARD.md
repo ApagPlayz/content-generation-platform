@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-08-18. Do not edit by hand.*
+*Auto-generated 2026-08-19. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -22,6 +22,19 @@
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
+
+## Loop vs. everything else
+
+Every table above is the loop's slice only. Here is that same slice next to your own
+hand-made work, so the loop never looks like the whole repo when it isn't.
+
+| | Loop | You (hand) | Whole repo |
+|---|---|---|---|
+| PRs merged | 22 | 22 | 44 |
+| PRs rejected | 12 | 0 | 12 |
+| Merge rate | 65% | 100% | 79% |
+| Typical PR size (lines) | 328 | 270 | 328 |
+| Typical days to merge | 1 | 0 | 0 |
 
 ## Are the ideas any good?
 
