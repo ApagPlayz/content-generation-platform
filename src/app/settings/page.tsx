@@ -18,6 +18,9 @@ interface SettingsMap {
   tiktok_client_key?: string
   tiktok_client_secret?: string
   tiktok_auto_publish_enabled?: string
+  facebook_app_id?: string
+  facebook_app_secret?: string
+  facebook_auto_publish_enabled?: string
 }
 
 const PROVIDERS_TTS = ['kokoro', 'elevenlabs', 'openai-tts', 'coqui-local', 'edge-tts']
@@ -42,6 +45,8 @@ export default function Settings() {
   const [ytNotice, setYtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [tt, setTt] = useState<PlatformStatus>({ connected: false, state: 'none' })
   const [ttNotice, setTtNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const [fb, setFb] = useState<PlatformStatus>({ connected: false, state: 'none' })
+  const [fbNotice, setFbNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   function refreshYouTube() {
     fetch('/api/auth/youtube').then((r) => r.json()).then(setYt)
@@ -52,6 +57,10 @@ export default function Settings() {
     fetch('/api/auth/tiktok').then((r) => r.json()).then(setTt).catch(() => {})
   }
 
+  function refreshFacebook() {
+    fetch('/api/auth/facebook').then((r) => r.json()).then(setFb).catch(() => {})
+  }
+
   useEffect(() => {
     fetch('/api/settings')
       .then((r) => r.json())
@@ -59,6 +68,7 @@ export default function Settings() {
       .finally(() => setLoading(false))
     refreshYouTube()
     refreshTikTok()
+    refreshFacebook()
 
     // Surface the OAuth redirect result, then clean the URL.
     const params = new URLSearchParams(window.location.search)
@@ -70,7 +80,11 @@ export default function Settings() {
     const ttError = params.get('tiktok_error')
     if (ttConnected) setTtNotice({ kind: 'ok', text: `Connected as ${ttConnected}` })
     if (ttError) setTtNotice({ kind: 'err', text: ttError })
-    if (connected || error || ttConnected || ttError) {
+    const fbConnected = params.get('facebook_connected')
+    const fbError = params.get('facebook_error')
+    if (fbConnected) setFbNotice({ kind: 'ok', text: `Connected as ${fbConnected}` })
+    if (fbError) setFbNotice({ kind: 'err', text: fbError })
+    if (connected || error || ttConnected || ttError || fbConnected || fbError) {
       window.history.replaceState({}, '', '/settings')
     }
   }, [])
@@ -85,6 +99,12 @@ export default function Settings() {
     await fetch('/api/auth/tiktok', { method: 'DELETE' })
     setTtNotice(null)
     refreshTikTok()
+  }
+
+  async function disconnectFacebook() {
+    await fetch('/api/auth/facebook', { method: 'DELETE' })
+    setFbNotice(null)
+    refreshFacebook()
   }
 
   function set(key: keyof SettingsMap, value: string) {
@@ -591,12 +611,143 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Instagram Reels — a later phase */}
+          {/* Facebook Reels */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Facebook Reels</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Graph API · posts to a Facebook Page · highest ad revenue-per-view
+                </p>
+              </div>
+              {fb.state === 'needs_reconnect' ? (
+                <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-medium">
+                  <AlertTriangle className="w-3.5 h-3.5" /> Reconnect needed
+                </span>
+              ) : fb.connected ? (
+                <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">
+                  <Check className="w-3.5 h-3.5" /> {fb.handle}
+                </span>
+              ) : (
+                <span className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">
+                  Not connected
+                </span>
+              )}
+            </div>
+
+            {fb.state === 'needs_reconnect' && (
+              <div className="flex items-start gap-2 text-xs px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+                <span>
+                  <strong>Facebook disconnected.</strong> Your login with Facebook expired, so
+                  auto-publish is paused and new videos aren&apos;t going out. Click{' '}
+                  <strong>Reconnect</strong> below to sign in again and resume publishing —
+                  nothing else is lost.
+                </span>
+              </div>
+            )}
+
+            {fbNotice && (
+              <p
+                className={`text-xs px-3 py-2 rounded-lg ${
+                  fbNotice.kind === 'ok'
+                    ? 'bg-green-50 text-green-700'
+                    : 'bg-red-50 text-red-700'
+                }`}
+              >
+                {fbNotice.text}
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  App ID
+                </label>
+                <input
+                  value={settings.facebook_app_id ?? ''}
+                  onChange={(e) => set('facebook_app_id', e.target.value)}
+                  placeholder="1234567890…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  App Secret
+                </label>
+                <input
+                  type="password"
+                  value={settings.facebook_app_secret ?? ''}
+                  onChange={(e) => set('facebook_app_secret', e.target.value)}
+                  placeholder="…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              Create an app at developers.facebook.com (add <strong>Facebook Login</strong>), with
+              redirect URI{' '}
+              <code className="text-gray-500">http://localhost:3000/api/auth/facebook/callback</code>.
+              The account you connect must <strong>manage a Facebook Page</strong> — Reels post to a
+              Page, not a personal profile. A new app can only post to your own Page until Meta
+              approves it. Save before connecting.
+            </p>
+
+            <label className="flex items-start gap-3 pt-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={(settings.facebook_auto_publish_enabled ?? 'false') === 'true'}
+                onChange={(e) =>
+                  set('facebook_auto_publish_enabled', e.target.checked ? 'true' : 'false')
+                }
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+              />
+              <span className="text-sm text-gray-700">
+                Auto-publish to Facebook Reels
+                <span className="block text-xs text-gray-400 mt-0.5">
+                  When on, agents set to <strong>auto</strong> also post approved videos to
+                  Facebook. Independent of the YouTube &amp; TikTok switches — off by default.
+                </span>
+              </span>
+            </label>
+
+            <div className="flex items-center justify-end pt-1">
+              <div className="flex items-center gap-2">
+                {fb.state !== 'none' && (
+                  <button
+                    onClick={disconnectFacebook}
+                    className="px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                )}
+                <button
+                  onClick={async () => {
+                    await save()
+                    window.location.href = '/api/auth/facebook/start'
+                  }}
+                  disabled={saving}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 ${
+                    fb.state === 'needs_reconnect'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-gray-900 hover:bg-gray-800'
+                  }`}
+                >
+                  {fb.state === 'none' ? 'Save & Connect' : 'Reconnect'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Instagram Reels — a later phase. Deferred because Instagram's Graph API
+              refuses a file upload: it needs a public https link to the video first,
+              which this local app can't serve. The Facebook Login above is the same
+              one Instagram will reuse, so it's an add-on later, not a redo. */}
           <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200 bg-gray-50">
             <div>
               <p className="text-sm font-medium text-gray-900">Instagram Reels</p>
               <p className="text-xs text-gray-400 mt-0.5">
-                Requires Business account + Meta App Review
+                Needs a public video link (not just a local file) — a later phase
               </p>
             </div>
             <button
