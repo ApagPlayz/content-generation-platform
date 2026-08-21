@@ -3,16 +3,25 @@ import { runSource } from './tools/source'
 import { runClipIngest } from './tools/clipIngest'
 import { runMomentDetect } from './tools/momentDetect'
 import { runScript } from './tools/script'
-import { runTransform } from './tools/transform'
+import { runTransform, probeDuration } from './tools/transform'
 import { runAssemble } from './tools/assemble'
 import { gateSportsCopyright } from './tools/copyrightGate'
 import { maybeAutoPublish } from './tools/publish'
+import { tiktokLongCutEnabled } from './settings'
+import {
+  LONG_CUT_FLOOR_SEC,
+  TIKTOK_CUT_ASSET_KIND,
+  TIKTOK_CUT_FILENAME,
+  longCutIngestWindowSec,
+  longCutIsUsable,
+  planLongCut,
+} from './tools/longCut'
 import { MAX_STAGE_ATTEMPTS, backoffMs, sleep } from './retry'
 import { withTimeout } from './truecrime/budget'
 import { enforceStageBudget } from './pipeline/budget'
 import type { AssetLicense } from './compliance/types'
 import type { LeagueTolerance } from './tools/leaguePolicy'
-import type { ToolContext, PipelineStage } from './tools/types'
+import type { AssembleResult, ToolContext, PipelineStage } from './tools/types'
 
 /**
  * Execute one agent run: create the AgentRun + Video, then drive the pipeline
@@ -49,6 +58,10 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     budget: agent.budget,
   }
 
+  // Resolved once, up front: it changes how much source footage clip-ingest
+  // downloads AND whether assemble does a second render (issue #77).
+  const wantLongCut = await tiktokLongCutEnabled()
+
   try {
     await stage(ctx, 'source', async () => {
       ctx.source = await runSource(ctx.factoryConfig)
@@ -62,7 +75,12 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
     })
 
     await stage(ctx, 'clip-ingest', async () => {
-      const windowSec = Number(ctx.factoryConfig.ingestWindowSec) || undefined
+      const configuredWindow = Number(ctx.factoryConfig.ingestWindowSec) || undefined
+      // A 65s TikTok cut carved out of a 90s download would be almost the whole
+      // reel. Pull more source so the long cut is a genuine choice of footage.
+      const windowSec = wantLongCut
+        ? longCutIngestWindowSec(configuredWindow)
+        : configuredWindow
       ctx.ingest = await runClipIngest(ctx.videoId, ctx.source!.youtubeQuery, windowSec)
       await prisma.highlightSource.updateMany({
         where: { videoId: ctx.videoId },
@@ -160,6 +178,10 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
         where: { id: ctx.videoId },
         data: { localPath: ctx.assembled.outputPath, durationSec: ctx.assembled.durationSec },
       })
+
+      // Video.localPath stays the SHORT cut, so YouTube/Reels are untouched.
+      // The long cut is a side artifact TikTok alone picks up (issue #77).
+      if (wantLongCut) ctx.longCut = await buildTikTokLongCut(ctx)
     })
 
     // ── Copyright-risk gate — the pre-publish decision point (issue #21) ──
@@ -193,7 +215,11 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
           analysisLines: ctx.transform?.analysisLines,
           telestrationCount: ctx.transform?.telestrationCount,
           reframedVertical: Boolean(ctx.assembled),
-          durationSec: ctx.assembled?.durationSec,
+          // Judge the LONGEST thing we will actually publish. When a TikTok
+          // long cut exists we ship 65s of broadcast footage, and the gate must
+          // score that rather than the 20s cut it no longer sees.
+          durationSec:
+            Math.max(ctx.assembled?.durationSec ?? 0, ctx.longCut?.durationSec ?? 0) || undefined,
           shortClipMaxSec: Number(cfg.copyrightShortClipMaxSec) || undefined,
         },
         { generatedAt: new Date().toISOString() }
@@ -233,6 +259,65 @@ export async function executeAgentRun(agentId: string): Promise<{ runId: string;
       data: { status: 'failed', error: message, finishedAt: new Date() },
     })
     throw e
+  }
+}
+
+/**
+ * Render the second, TikTok-only cut (issue #77): the same detected moment,
+ * widened to ~65s of real surrounding footage so the post clears Creator
+ * Rewards' "longer than a minute" floor.
+ *
+ * Best-effort BY DESIGN. Every failure path — reel too short, ffmpeg error, a
+ * file that came out under the floor — returns undefined, which simply means
+ * TikTok gets the same short cut it gets today. A bonus artifact must never
+ * fail an otherwise-good run, and `stage()` would retry the whole assemble
+ * three times and then fail the run if this threw.
+ */
+async function buildTikTokLongCut(ctx: ToolContext): Promise<AssembleResult | undefined> {
+  const plan = planLongCut(ctx.moment!, ctx.ingest!.durationSec)
+  if (!plan) {
+    console.warn(
+      `[assemble] source reel is only ${ctx.ingest!.durationSec}s — too short for a 60s+ ` +
+        'TikTok cut, so TikTok gets the short render'
+    )
+    return undefined
+  }
+
+  try {
+    // Cut from the RAW downloaded reel, never ctx.transform.treatedPath: the
+    // transform stage has already trimmed that to the ~20s moment, so there is
+    // nothing left to widen. The long cut is therefore a plain 9:16 crop with
+    // the hook caption — see the PR/issue note about the trade-off.
+    const long = await runAssemble(
+      ctx.ingest!.sourcePath,
+      { startSec: plan.startSec, endSec: plan.endSec, method: ctx.moment!.method },
+      ctx.script!,
+      { outputName: TIKTOK_CUT_FILENAME }
+    )
+    // Measure the file, don't trust the request: `-ss` is a keyframe seek and
+    // can land short. A cut under the floor is discarded, not published.
+    const durationSec = await probeDuration(long.outputPath, plan.durationSec)
+    if (!longCutIsUsable(durationSec)) {
+      console.warn(
+        `[assemble] TikTok cut came out ${Math.round(durationSec)}s, under the ` +
+          `${LONG_CUT_FLOOR_SEC}s floor — discarding it and using the short render`
+      )
+      return undefined
+    }
+
+    await prisma.asset.create({
+      data: {
+        videoId: ctx.videoId,
+        kind: TIKTOK_CUT_ASSET_KIND,
+        provider: 'ffmpeg-longcut',
+        localPath: long.outputPath,
+        meta: JSON.stringify({ ...plan, durationSec }),
+      },
+    })
+    return { outputPath: long.outputPath, durationSec }
+  } catch (err) {
+    console.warn('[assemble] TikTok long cut failed — TikTok gets the short render:', err)
+    return undefined
   }
 }
 
