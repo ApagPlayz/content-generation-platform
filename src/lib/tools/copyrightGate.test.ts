@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateCopyrightRisk, type CopyrightRiskInput } from './copyrightGate'
+import {
+  buildSportsSignature,
+  evaluateCopyrightRisk,
+  sportsFootageToken,
+  type CopyrightRiskInput,
+} from './copyrightGate'
 
 // A fully-transformed, license-accounted clip on a claim-tolerant league — the
 // only shape that should be allowed to auto-publish.
@@ -123,5 +128,51 @@ describe('evaluateCopyrightRisk', () => {
     expect(v).toHaveProperty('checklistScore')
     expect(v).toHaveProperty('checklistPassed')
     expect(Array.isArray(v.riskReasons)).toBe(true)
+  })
+})
+
+// Anti-repetition signature builder (issue #17) — pure, no DB. These lock the two
+// gotchas: the source-reel fingerprint must survive YouTube's `?v=` query (which
+// the visual-signature URL normaliser strips), and the narration/structure map.
+describe('buildSportsSignature / sportsFootageToken', () => {
+  it('fingerprints distinct source reels differently (survives the ?v= query strip)', () => {
+    // Two different games off different watch URLs must NOT collapse to one hash —
+    // if they did, every 2nd sports video would read as a 100% footage dupe.
+    const a = buildSportsSignature({ ...CLEAN, caseName: 'Lakers vs Celtics', sourceUrl: 'https://youtube.com/watch?v=aaaaaaa' })
+    const b = buildSportsSignature({ ...CLEAN, caseName: 'Heat vs Bucks', sourceUrl: 'https://youtube.com/watch?v=bbbbbbb' })
+    expect(a.visualSignature).toHaveLength(1)
+    expect(b.visualSignature).toHaveLength(1)
+    expect(a.visualSignature).not.toEqual(b.visualSignature)
+  })
+
+  it('fingerprints the SAME reel identically (reused broadcast → footage repeat)', () => {
+    const a = buildSportsSignature({ ...CLEAN, sourceUrl: 'https://youtube.com/watch?v=samereel' })
+    const b = buildSportsSignature({ ...CLEAN, sourceUrl: 'https://youtu.be/samereel' })
+    expect(a.visualSignature).toEqual(b.visualSignature)
+  })
+
+  it('falls back to the matchup when there is no source URL', () => {
+    expect(sportsFootageToken(undefined, 'Lakers vs Celtics')).toBe('sports-src-lakers-vs-celtics')
+    // Same matchup → same token even without a URL.
+    const a = buildSportsSignature({ ...CLEAN, sourceUrl: undefined, caseName: 'Lakers vs Celtics' })
+    const b = buildSportsSignature({ ...CLEAN, sourceUrl: undefined, caseName: 'Lakers vs Celtics' })
+    expect(a.visualSignature).toEqual(b.visualSignature)
+  })
+
+  it('builds narration from hook + description + commentary, and a template structure', () => {
+    const sig = buildSportsSignature({
+      ...CLEAN,
+      hook: 'You will not believe this buzzer beater',
+      description: 'A wild finish',
+      analysis: ['He shoots from half court', 'Nothing but net'],
+      hookStyle: 'bold-claim',
+      strategy: 'player_career',
+      telestrationCount: 1,
+    })
+    expect(sig.narration).toContain('buzzer beater')
+    expect(sig.narration).toContain('half court')
+    expect(sig.structure.hookPattern).toBe('bold-claim')
+    expect(sig.structure.visualStyle).toBe('player_career')
+    expect(sig.structure.sections).toEqual(['hook', 'analysis', 'telestration', 'cta'])
   })
 })
