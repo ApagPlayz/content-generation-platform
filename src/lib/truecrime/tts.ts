@@ -21,6 +21,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { prisma } from '../prisma'
 import { getSetting } from '../settings'
+import { resolvePaidVoiceFallback, type PaidVoiceFailure } from '../pipeline/finalize'
 import type { TtsResult, WordStamp } from './types'
 
 const exec = promisify(execFile)
@@ -85,9 +86,18 @@ async function toWav(srcBytes: ArrayBuffer | Uint8Array, ext: string, wavPath: s
   return existsSync(wavPath)
 }
 
-async function elevenLabs(text: string, voice: string, wavPath: string): Promise<boolean> {
+/**
+ * Result of a PAID provider attempt. `ok` is success; `failure` is set ONLY when
+ * an API key was present but the call actually failed (expired key / out of
+ * credits / rate-limit / network) — the silent downgrade issue #57 is about. The
+ * "no key set" case returns `{ ok: false }` with no `failure`, because that's a
+ * configuration choice, not a broken paid voice, and must never alarm the owner.
+ */
+type PaidAttempt = { ok: boolean; failure?: string }
+
+async function elevenLabs(text: string, voice: string, wavPath: string): Promise<PaidAttempt> {
   const key = process.env.ELEVENLABS_API_KEY
-  if (!key) return false
+  if (!key) return { ok: false }
   try {
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`,
@@ -101,16 +111,16 @@ async function elevenLabs(text: string, voice: string, wavPath: string): Promise
         }),
       }
     )
-    if (!res.ok) return false
-    return toWav(await res.arrayBuffer(), 'mp3', wavPath)
-  } catch {
-    return false
+    if (!res.ok) return { ok: false, failure: `HTTP ${res.status}` }
+    return { ok: await toWav(await res.arrayBuffer(), 'mp3', wavPath) }
+  } catch (e) {
+    return { ok: false, failure: `network error: ${e instanceof Error ? e.message : String(e)}` }
   }
 }
 
-async function openaiTts(text: string, voice: string, wavPath: string): Promise<boolean> {
+async function openaiTts(text: string, voice: string, wavPath: string): Promise<PaidAttempt> {
   const key = process.env.OPENAI_API_KEY
-  if (!key) return false
+  if (!key) return { ok: false }
   try {
     const res = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
@@ -122,10 +132,10 @@ async function openaiTts(text: string, voice: string, wavPath: string): Promise<
         response_format: 'wav',
       }),
     })
-    if (!res.ok) return false
-    return toWav(await res.arrayBuffer(), 'wav', wavPath)
-  } catch {
-    return false
+    if (!res.ok) return { ok: false, failure: `HTTP ${res.status}` }
+    return { ok: await toWav(await res.arrayBuffer(), 'wav', wavPath) }
+  } catch (e) {
+    return { ok: false, failure: `network error: ${e instanceof Error ? e.message : String(e)}` }
   }
 }
 
@@ -263,12 +273,23 @@ export async function synthesizeNarration(
   const preferred = await getSetting('default_tts_provider')
   const voiceSetting = voice || (await getSetting('default_tts_voice')) || undefined
 
+  // Paid providers (ElevenLabs / OpenAI) that failed *with a key present*. If the
+  // chain then lands on a free/local voice, this is the silent downgrade issue
+  // #57 is about — we surface it on the returned result.
+  const paidFailures: PaidVoiceFailure[] = []
+
   for (const provider of providerChain(preferred)) {
     let ok = false
     let words: WordStamp[] | undefined
-    if (provider === 'elevenlabs') ok = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
-    else if (provider === 'openai-tts') ok = await openaiTts(narration, voiceSetting ?? '', wavPath)
-    else if (provider === 'kokoro') {
+    if (provider === 'elevenlabs') {
+      const r = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
+      ok = r.ok
+      if (r.failure) paidFailures.push({ provider: 'elevenlabs', detail: r.failure })
+    } else if (provider === 'openai-tts') {
+      const r = await openaiTts(narration, voiceSetting ?? '', wavPath)
+      ok = r.ok
+      if (r.failure) paidFailures.push({ provider: 'openai-tts', detail: r.failure })
+    } else if (provider === 'kokoro') {
       const r = await kokoro(narration, voiceSetting ?? '', wavPath)
       ok = r.ok
       words = r.words
@@ -280,7 +301,22 @@ export async function synthesizeNarration(
     } else if (provider === 'openai-tts') {
       await ledger(videoId, 'openai-tts', narration.length, OPENAI_COST_PER_CHAR)
     }
-    return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider, words }
+
+    const paidVoiceFallback =
+      resolvePaidVoiceFallback({ paidFailures, usedProvider: provider }) ?? undefined
+    if (paidVoiceFallback) {
+      console.warn(
+        `[tts] paid voice ${paidVoiceFallback.failedProvider} failed (${paidVoiceFallback.detail}); ` +
+          `narrated video ${videoId} with the free ${provider} voice instead`
+      )
+    }
+    return {
+      audioPath: wavPath,
+      durationSec: await probeDuration(wavPath, estDuration),
+      provider,
+      words,
+      paidVoiceFallback,
+    }
   }
 
   // Final tier: silent stub so the render stage still has an audio bed.

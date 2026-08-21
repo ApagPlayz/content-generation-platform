@@ -10,6 +10,9 @@ import {
   isSilentVoiceover,
   isTruncatedRender,
   resolveFinalStatus,
+  resolvePaidVoiceFallback,
+  isPaidVoiceFallback,
+  paidVoiceFallbackReason,
   EMPTY_RENDER_ERROR,
   SILENT_VOICEOVER_REASON,
   TRUNCATED_RENDER_REASON,
@@ -78,6 +81,78 @@ describe('isTruncatedRender', () => {
   })
 })
 
+describe('resolvePaidVoiceFallback', () => {
+  const eleven = { provider: 'elevenlabs', detail: 'HTTP 401' }
+
+  it('flags a paid→free downgrade (the issue #57 bug)', () => {
+    expect(
+      resolvePaidVoiceFallback({ paidFailures: [eleven], usedProvider: 'kokoro' }),
+    ).toEqual({ failedProvider: 'elevenlabs', usedProvider: 'kokoro', detail: 'HTTP 401' })
+    expect(
+      resolvePaidVoiceFallback({ paidFailures: [eleven], usedProvider: 'macos-say' }),
+    ).not.toBeNull()
+  })
+
+  it('does NOT flag when no paid provider failed (covers "no key set")', () => {
+    expect(resolvePaidVoiceFallback({ paidFailures: [], usedProvider: 'kokoro' })).toBeNull()
+  })
+
+  it('does NOT flag when a paid voice still narrated the video', () => {
+    // e.g. ElevenLabs failed but OpenAI TTS then succeeded — owner still got a paid voice.
+    expect(
+      resolvePaidVoiceFallback({ paidFailures: [eleven], usedProvider: 'openai-tts' }),
+    ).toBeNull()
+    expect(
+      resolvePaidVoiceFallback({ paidFailures: [eleven], usedProvider: 'elevenlabs' }),
+    ).toBeNull()
+  })
+
+  it('does NOT double-flag a silent voiceover (handled by isSilentVoiceover)', () => {
+    expect(
+      resolvePaidVoiceFallback({ paidFailures: [eleven], usedProvider: 'silent-stub' }),
+    ).toBeNull()
+    expect(
+      resolvePaidVoiceFallback({ paidFailures: [eleven], usedProvider: null }),
+    ).toBeNull()
+  })
+
+  it('reports the first failed paid provider when several failed', () => {
+    const info = resolvePaidVoiceFallback({
+      paidFailures: [eleven, { provider: 'openai-tts', detail: 'HTTP 429' }],
+      usedProvider: 'kokoro',
+    })
+    expect(info?.failedProvider).toBe('elevenlabs')
+  })
+})
+
+describe('isPaidVoiceFallback', () => {
+  it('is true for a resolved fallback and false otherwise', () => {
+    expect(isPaidVoiceFallback({ failedProvider: 'elevenlabs', usedProvider: 'kokoro', detail: 'HTTP 401' })).toBe(true)
+    expect(isPaidVoiceFallback(null)).toBe(false)
+    expect(isPaidVoiceFallback(undefined)).toBe(false)
+  })
+})
+
+describe('paidVoiceFallbackReason', () => {
+  it('names the paid account to check, in plain English', () => {
+    const reason = paidVoiceFallbackReason({
+      failedProvider: 'elevenlabs',
+      usedProvider: 'kokoro',
+      detail: 'HTTP 401',
+    })
+    expect(reason).toMatch(/ElevenLabs/)
+    expect(reason).toMatch(/HTTP 401/)
+    expect(reason).toMatch(/free Kokoro/)
+    expect(reason).toMatch(/review/i)
+  })
+
+  it('handles the OpenAI paid provider too', () => {
+    expect(
+      paidVoiceFallbackReason({ failedProvider: 'openai-tts', usedProvider: 'kokoro', detail: 'HTTP 429' }),
+    ).toMatch(/OpenAI/)
+  })
+})
+
 describe('resolveFinalStatus', () => {
   it('publishes (approved) a clean auto run with real audio', () => {
     expect(
@@ -118,6 +193,17 @@ describe('resolveFinalStatus', () => {
     expect(
       resolveFinalStatus({ complianceDecision: 'pass', autonomy: 'auto', silentVoiceover: false }),
     ).toBe('approved')
+  })
+
+  it('forces review — never auto-publish — when a paid voice fell back to free', () => {
+    expect(
+      resolveFinalStatus({
+        complianceDecision: 'pass',
+        autonomy: 'auto',
+        silentVoiceover: false,
+        paidVoiceFallback: true,
+      }),
+    ).toBe('review')
   })
 })
 

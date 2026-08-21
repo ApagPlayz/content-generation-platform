@@ -264,12 +264,32 @@ export interface WordStamp {
   endSec: number
 }
 
+/**
+ * Set when the operator's PAID voice (ElevenLabs / OpenAI) had an API key set
+ * but actually failed mid-run (expired key, out of credits, rate-limited) and
+ * narration silently fell back to a free/local voice. This is the signal the
+ * owner never used to get — see issue #57. Surfaced as a failed voiceover Job
+ * and used to hold the video for review (src/lib/pipeline/finalize.ts) so it is
+ * not auto-published in the wrong voice. Absent when nothing went wrong or when
+ * "no key set" was the reason (a config choice, not a failure).
+ */
+export interface PaidVoiceFallback {
+  /** The paid provider that failed (a key was present, the call errored). */
+  failedProvider: string
+  /** The free/local provider that actually narrated the video. */
+  usedProvider: string
+  /** Plain-English cause, e.g. "HTTP 401" or "network error: …". */
+  detail: string
+}
+
 export interface TtsResult {
   audioPath: string
   durationSec: number
   provider: 'elevenlabs' | 'openai-tts' | 'kokoro' | 'macos-say' | 'silent-stub'
   /** Word-level timings when the provider supplies them (Kokoro captioned). */
   words?: WordStamp[]
+  /** Present only when a paid voice failed and we downgraded to a free voice. */
+  paidVoiceFallback?: PaidVoiceFallback
 }
 
 /** One word inside a caption page, for word-by-word (karaoke) highlighting. */
