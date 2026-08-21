@@ -45,6 +45,8 @@ import { directPost } from '../tiktok'
 import {
   AUTO_PUBLISH_DISABLED,
   AUTO_PUBLISH_REVIEW_GATED,
+  buildYouTubeDescription,
+  ctaFromPostingDefaults,
   isAlreadyPublished,
   isAutoPublishFailure,
   maybeAutoPublish,
@@ -128,6 +130,13 @@ function insertedStatus(): Record<string, unknown> {
   return call.requestBody.status
 }
 
+function insertedDescription(): string {
+  const call = insertMock.mock.calls[0][0] as {
+    requestBody: { snippet: { description: string } }
+  }
+  return call.requestBody.snippet.description
+}
+
 describe('publish status gate', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -176,6 +185,48 @@ describe('publish status gate', () => {
     const res = await publishToYouTube('v1')
     expect(insertMock).toHaveBeenCalledTimes(1)
     expect(res.platformPostId).toBe('ytABC')
+  })
+})
+
+// The "earn money before monetization" feature (issue #27): the factory's
+// links/CTA block is appended to every upload's YouTube description. These lock
+// (1) the block actually reaches the live upload, and (2) a factory WITHOUT one
+// publishes exactly as before — no surprise text on videos the owner didn't opt in.
+describe('publish CTA / links block', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('appends the factory CTA block to the uploaded YouTube description', async () => {
+    primeYouTube(
+      {
+        ...APPROVED_VIDEO,
+        description: 'A gripping case.',
+        factory: {
+          type: 'F10',
+          postingDefaults: JSON.stringify({
+            autonomy: 'review',
+            ctaBlock: '👉 Subscribe: https://youtube.com/@x',
+          }),
+        },
+      },
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: false, requiresAiAudioLabel: false } })
+    )
+    await publishToYouTube('v1')
+    const desc = insertedDescription()
+    expect(desc).toContain('👉 Subscribe: https://youtube.com/@x')
+    // CTA sits between the body and the hashtags/#Shorts tail.
+    expect(desc.indexOf('A gripping case.')).toBeLessThan(desc.indexOf('👉 Subscribe'))
+    expect(desc.indexOf('👉 Subscribe')).toBeLessThan(desc.indexOf('#Shorts'))
+  })
+
+  it('publishes unchanged when the factory has no CTA (no surprise text)', async () => {
+    primeYouTube(
+      { ...APPROVED_VIDEO, description: 'A gripping case.', factory: { type: 'F10' } },
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: false, requiresAiAudioLabel: false } })
+    )
+    await publishToYouTube('v1')
+    expect(insertedDescription()).toBe('A gripping case.\n\n#Shorts')
   })
 })
 
@@ -229,6 +280,61 @@ describe('maybeAutoPublish gating', () => {
   it('never publishes to any platform when the agent is review-gated', async () => {
     const outcome = await maybeAutoPublish('any-video-id', 'review')
     expect(outcome).toEqual({ published: false, reason: AUTO_PUBLISH_REVIEW_GATED })
+  })
+})
+
+// The CTA parser (issue #27): pulls the owner's links/CTA out of the factory's
+// postingDefaults JSON. It must be forgiving — a factory with no CTA, a legacy
+// row, or malformed JSON must read as '' (publish unchanged), never throw in the
+// publish path.
+describe('ctaFromPostingDefaults', () => {
+  it('returns the trimmed CTA block when present', () => {
+    expect(ctaFromPostingDefaults(JSON.stringify({ ctaBlock: '  follow me  ' }))).toBe('follow me')
+  })
+
+  it('returns "" for null/undefined (legacy factory, no posting defaults)', () => {
+    expect(ctaFromPostingDefaults(null)).toBe('')
+    expect(ctaFromPostingDefaults(undefined)).toBe('')
+  })
+
+  it('returns "" when the key is absent (e.g. only autonomy was stored)', () => {
+    expect(ctaFromPostingDefaults(JSON.stringify({ autonomy: 'review' }))).toBe('')
+  })
+
+  it('returns "" for an all-whitespace CTA (owner cleared it)', () => {
+    expect(ctaFromPostingDefaults(JSON.stringify({ ctaBlock: '   ' }))).toBe('')
+  })
+
+  it('returns "" for a non-string CTA value', () => {
+    expect(ctaFromPostingDefaults(JSON.stringify({ ctaBlock: 123 }))).toBe('')
+  })
+
+  it('returns "" (never throws) on malformed JSON', () => {
+    expect(ctaFromPostingDefaults('not json{')).toBe('')
+  })
+})
+
+// The description assembler (issue #27): body → CTA → hashtags → #Shorts, blanks
+// dropped, capped at YouTube's limit. Order matters (the CTA must be visible in
+// the pre-fold preview) and the cap must never be exceeded.
+describe('buildYouTubeDescription', () => {
+  it('orders body, CTA, hashtags, then #Shorts', () => {
+    expect(buildYouTubeDescription('Body.', 'Follow me!', ['sports', 'nba'])).toBe(
+      'Body.\n\nFollow me!\n\n#sports #nba\n\n#Shorts'
+    )
+  })
+
+  it('omits the CTA when it is empty (byte-identical to the old behaviour)', () => {
+    expect(buildYouTubeDescription('Body.', '', ['sports'])).toBe('Body.\n\n#sports\n\n#Shorts')
+  })
+
+  it('drops an empty body and empty hashtags, keeping the CTA and #Shorts', () => {
+    expect(buildYouTubeDescription('', 'Follow me!', [])).toBe('Follow me!\n\n#Shorts')
+  })
+
+  it('never exceeds YouTube\'s 4900-char description cap', () => {
+    const huge = 'x'.repeat(6000)
+    expect(buildYouTubeDescription(huge, 'Follow me!', []).length).toBe(4900)
   })
 })
 
