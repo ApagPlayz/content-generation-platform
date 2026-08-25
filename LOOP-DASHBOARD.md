@@ -9,9 +9,9 @@
 | | |
 |---|---|
 | Pull requests merged | 22 |
-| Pull requests rejected | 12 |
-| **Merge rate** | **65%** |
-| Waiting on you right now | 13 |
+| Pull requests rejected | 13 (+1) |
+| **Merge rate** | **63%** |
+| Waiting on you right now | 12 |
 
 ## Is it outrunning you?
 
@@ -31,8 +31,8 @@ hand-made work, so the loop never looks like the whole repo when it isn't.
 | | Loop | You (hand) | Whole repo |
 |---|---|---|---|
 | PRs merged | 22 | 22 | 44 |
-| PRs rejected | 12 | 0 | 12 |
-| Merge rate | 65% | 100% | 79% |
+| PRs rejected | 13 | 0 | 13 |
+| Merge rate | 63% | 100% | 77% |
 | Typical PR size (lines) | 328 | 270 | 328 |
 | Typical days to merge | 1 | 0 | 0 |
 
