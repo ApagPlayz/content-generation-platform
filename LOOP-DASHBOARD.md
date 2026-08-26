@@ -1,6 +1,6 @@
 # Loop dashboard
 
-*Auto-generated 2026-08-25. Do not edit by hand.*
+*Auto-generated 2026-08-26. Do not edit by hand.*
 
 **Mixed.** You are throwing away a lot of agent work. Read the retro issue.
 
@@ -9,16 +9,16 @@
 | | |
 |---|---|
 | Pull requests merged | 22 |
-| Pull requests rejected | 13 (+1) |
+| Pull requests rejected | 13 |
 | **Merge rate** | **63%** |
-| Waiting on you right now | 12 |
+| Waiting on you right now | 13 |
 
 ## Is it outrunning you?
 
 | | |
 |---|---|
 | Typical days to merge | 1 |
-| Typical PR size (lines) | 328 |
+| Typical PR size (lines) | 329 |
 
 If PR size climbs while merge rate falls, the agents are writing more and getting it
 right less. That is the failure mode to watch for.
@@ -33,7 +33,7 @@ hand-made work, so the loop never looks like the whole repo when it isn't.
 | PRs merged | 22 | 22 | 44 |
 | PRs rejected | 13 | 0 | 13 |
 | Merge rate | 63% | 100% | 77% |
-| Typical PR size (lines) | 328 | 270 | 328 |
+| Typical PR size (lines) | 329 | 270 | 329 |
 | Typical days to merge | 1 | 0 | 0 |
 
 ## Are the ideas any good?
