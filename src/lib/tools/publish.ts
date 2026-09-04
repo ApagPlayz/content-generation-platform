@@ -101,6 +101,40 @@ export async function quotaStatus(): Promise<{
   return { used, cap, remaining: remainingQuota(used, cap) }
 }
 
+/**
+ * The owner's per-factory links / call-to-action block, pulled from the factory's
+ * `postingDefaults` JSON (the same bag that holds `autonomy`). This is the "money
+ * part" of issue #27: affiliate links + a "follow for more" line that earn from
+ * view #1, before the channel ever clears YouTube's ad-revenue threshold.
+ *
+ * Deliberately tolerant: a null column, malformed JSON, a missing key, a
+ * non-string value, or an all-whitespace value all read as "no CTA" (''), so a
+ * factory the owner never configured publishes exactly as it does today. Pure +
+ * exported so this parsing is unit-tested. See publish.test.ts.
+ */
+export function ctaFromPostingDefaults(postingDefaults: string | null | undefined): string {
+  if (!postingDefaults) return ''
+  try {
+    const parsed = JSON.parse(postingDefaults) as { ctaBlock?: unknown }
+    return typeof parsed.ctaBlock === 'string' ? parsed.ctaBlock.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Assemble the final YouTube description: the generated body, then the owner's
+ * CTA/links block, then hashtags, then the required "#Shorts" tag. The CTA sits
+ * directly under the body — above the hashtag noise — so it shows in the preview
+ * YouTube renders before the "…more" fold, where links get clicked. Empty parts
+ * are dropped and the whole thing is capped at YouTube's description limit. Pure
+ * + exported so the ordering and cap are unit-tested. See publish.test.ts.
+ */
+export function buildYouTubeDescription(body: string, cta: string, hashtags: string[]): string {
+  const parts = [body, cta, hashtags.map((h) => `#${h}`).join(' '), '#Shorts']
+  return parts.filter(Boolean).join('\n\n').slice(0, 4900)
+}
+
 export interface PublishResult {
   postId: string
   platformPostId: string
@@ -157,7 +191,7 @@ async function loadDisclosurePlan(videoId: string): Promise<DisclosurePlan | nul
 export async function publishToYouTube(videoId: string): Promise<PublishResult> {
   const video = await prisma.video.findUniqueOrThrow({
     where: { id: videoId },
-    include: { factory: { select: { type: true } } },
+    include: { factory: { select: { type: true, postingDefaults: true } } },
   })
 
   // Idempotency: don't re-upload a video that already has a live YouTube post.
@@ -212,9 +246,11 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
   }
 
   // A Short needs vertical ≤60s + "#Shorts" in title/description (PRD §8.1).
+  // The factory's CTA/links block (issue #27) is appended so every upload can
+  // earn affiliate income from view #1 — factories without one publish unchanged.
   const title = (video.title || 'Untitled').slice(0, 95)
-  const descParts = [video.description || '', hashtags.map((h) => `#${h}`).join(' '), '#Shorts']
-  const description = descParts.filter(Boolean).join('\n\n').slice(0, 4900)
+  const cta = ctaFromPostingDefaults(video.factory.postingDefaults)
+  const description = buildYouTubeDescription(video.description || '', cta, hashtags)
 
   // Mark intent before the network call so a crash mid-upload is visible.
   const post = await prisma.post.upsert({
