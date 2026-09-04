@@ -15,10 +15,6 @@ nothing is added here without the owner merging it.
   disables Bash by default; job-level `permissions:` grants GitHub rights, not tool-side ones, so
   every `gh` call was silently denied (`permission_denials_count: 20`, the only place it surfaces).
   Always verify the *outcome* on GitHub (issue/PR/comment exists) — never trust the green tick.
-- *2026-07-13* — **`--allowedTools` REPLACES the default toolset; it does not extend it.** An allowlist
-  must name EVERY tool the agent needs (Read/Grep/Task/WebSearch…), not just the new one. And
-  `Bash(gh:*)` prefix patterns do NOT match `$(...)`, heredocs or pipes — which these agents write
-  constantly. In an ephemeral CI container on a private repo, plain `Bash` is the right call.
 - *2026-07-14* — **A CI agent has ONE turn; backgrounded subagents die with it.** Every Task call in a
   workflow agent MUST set `run_in_background: false` so the agent blocks on the result. "I'll wait for
   their findings / report back" = failure: there is no later turn. The job is done only when the
@@ -27,22 +23,27 @@ nothing is added here without the owner merging it.
   before → 0 after" and only warned, leaving the run green. A red run is information; a green run that
   did nothing is a lie.
 - *2026-07-14* — **An unassigned issue never reaches the owner.** GitHub's Inbox only notifies you about
-  things you authored / are assigned to / @mentioned in. Scout must pass `--assignee <owner>`; Builder
-  `--assignee <owner> --reviewer <owner>`. Producing the artifact is not the same as delivering it.
-- *2026-07-14* — **The Auditor aborts on bot-authored PRs unless allow-listed.** `claude-code-action`
-  refuses non-human actors before turn 1. Set `allowed_bots: "claude"` on the auditor — scope to
-  `claude`, never `*`, or another bot's PR (Dependabot etc.) burns a five-agent audit.
-- *2026-07-14* — **GitHub cron is best-effort and silently drops runs** (a 2-hour gap was observed).
-  Never rely on a schedule for anything a human waits on: trigger on the event
-  (`issues: types: [labeled]`) and keep cron as a backstop only.
-- *2026-07-14* — **Don't rebuild an issue already being built.** A prompt convention ("comment that you
-  started") is not a lock — the next run never reads it. The gate must compute which issues an open
-  `claude/` PR already claims (`Closes #N` in the body) and hand the agent an explicit off-limits list.
+  things you authored / are assigned to / @mentioned in. Scout and Builder resolve the flags in their
+  gates; `claude-retro.yml` and `claude-mention.yml` still have no `assignee` handling at all — pass
+  `--assignee <owner>` by hand there. Producing the artifact is not the same as delivering it.
 - *2026-07-14* — **Agents read the issue BODY, not the thread.** `gh issue view` omits comments unless
   you pass `--comments`. The owner's clarifications live there and OVERRIDE the body. When he asks
   @claude to change scope, @claude must edit the body so later runs see it.
 - *2026-07-17* — **Volume is not progress; an unreviewed PR is WIP, not output.** The Builder's overnight
-  review-queue cap was set to 99 (effectively off), so it kept opening large PRs all night regardless of
-  whether the owner had merged the last batch — the queue reached 13 open PRs with the last merge 32h
-  earlier, median size climbing. A WIP cap that lifts every night isn't a cap. Keep it bounded, and
+  review-queue cap was set to 99 (effectively off), so it kept opening large PRs regardless of whether
+  the owner had merged the last batch — 13 open PRs, median size climbing. Keep the cap bounded and
   prefer the smallest useful slice: big diffs are exactly the ones that never get reviewed.
+- *2026-08-02* — **"Approved" is not "buildable" — subtract what's already claimed.** The Builder gate
+  computes `approved` and `claimed by an open PR` and never compares them, so `go=true` fires anyway
+  and boots an Opus agent that says "Nothing to build" and exits green: 69 such runs to 2 Aug, then
+  101 more in the week to 31 Aug. Gate on *unclaimed* approved issues, and make an empty build red.
+- *2026-08-02* — **A rebuild after a conflict-close never reads the audit of the PR it replaced.**
+  #47 and #54 were closed unmerged for conflicts and re-queued; both rebuilds (#122, #123) were
+  re-audited FIX FIRST on fresh defects in the same files. Read the dead PR's audit before coding.
+- *2026-08-02* — **The owner buys "the app said it worked and it didn't", not dashboards.** Of the
+  measurement/dashboard ideas ever filed, **0 of 4** were approved (#72, #73, #83, #85 — all still
+  untouched 40+ days); silent-failure ideas are 7 of 13. Lead with the lie the product tells.
+- *2026-08-31* — **Dedup against the `approved` list and open PRs, not just open `proposal`s.** 4 of
+  the 23 open proposals duplicate work already approved or shipped when they were filed: #102 → #96
+  (merged as PR #99 the next day), #79 → #27 (PR #113), #86 → #17 (PR #112), #109 → #86. And when
+  nothing has merged in 30 days, the highest-value number of new ideas to file is zero.
