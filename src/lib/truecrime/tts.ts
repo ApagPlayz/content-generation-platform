@@ -21,6 +21,11 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { prisma } from '../prisma'
 import { getSetting } from '../settings'
+import {
+  loadPronunciationLexicon,
+  preparePronunciation,
+  remapWordStamps,
+} from './pronunciation'
 import type { TtsResult, WordStamp } from './types'
 
 const exec = promisify(execFile)
@@ -263,22 +268,36 @@ export async function synthesizeNarration(
   const preferred = await getSetting('default_tts_provider')
   const voiceSetting = voice || (await getSetting('default_tts_voice')) || undefined
 
+  // Pronunciation pass: what the voice reads may differ from what the script
+  // says ("FBI" is spoken "F B I"), so every provider below is handed `spoken`.
+  // Captions still use the original narration — see the remap after Kokoro.
+  const { spokenText: spoken, spans, unchanged } = preparePronunciation(
+    narration,
+    loadPronunciationLexicon(await getSetting('pronunciation_lexicon'))
+  )
+
   for (const provider of providerChain(preferred)) {
     let ok = false
     let words: WordStamp[] | undefined
-    if (provider === 'elevenlabs') ok = await elevenLabs(narration, voiceSetting ?? 'Rachel', wavPath)
-    else if (provider === 'openai-tts') ok = await openaiTts(narration, voiceSetting ?? '', wavPath)
+    if (provider === 'elevenlabs') ok = await elevenLabs(spoken, voiceSetting ?? 'Rachel', wavPath)
+    else if (provider === 'openai-tts') ok = await openaiTts(spoken, voiceSetting ?? '', wavPath)
     else if (provider === 'kokoro') {
-      const r = await kokoro(narration, voiceSetting ?? '', wavPath)
+      const r = await kokoro(spoken, voiceSetting ?? '', wavPath)
       ok = r.ok
-      words = r.words
-    } else if (provider === 'macos-say') ok = await macSay(narration, voiceSetting, wavPath)
+      // Kokoro's timings describe the spoken text; fold them back onto the
+      // original words so a caption never reads "F B I". If they can't be
+      // aligned, drop the timings and let captions fall back to the heuristic
+      // path (exact on text, approximate on timing) rather than show the
+      // spoken form on screen.
+      words = r.words && !unchanged ? remapWordStamps(r.words, spans) : r.words
+    } else if (provider === 'macos-say') ok = await macSay(spoken, voiceSetting, wavPath)
     if (!ok) continue
 
+    // Paid providers bill on what was actually sent, which is the spoken text.
     if (provider === 'elevenlabs') {
-      await ledger(videoId, 'elevenlabs-tts', narration.length, ELEVENLABS_COST_PER_CHAR)
+      await ledger(videoId, 'elevenlabs-tts', spoken.length, ELEVENLABS_COST_PER_CHAR)
     } else if (provider === 'openai-tts') {
-      await ledger(videoId, 'openai-tts', narration.length, OPENAI_COST_PER_CHAR)
+      await ledger(videoId, 'openai-tts', spoken.length, OPENAI_COST_PER_CHAR)
     }
     return { audioPath: wavPath, durationSec: await probeDuration(wavPath, estDuration), provider, words }
   }
