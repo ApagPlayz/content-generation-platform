@@ -140,7 +140,7 @@ export function AgentCard({
             <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
             <span className="text-xs font-medium text-amber-800">What&apos;s winning</span>
           </div>
-          <p className="text-xs text-amber-900/80 leading-relaxed whitespace-pre-line line-clamp-4">
+          <p className="text-xs text-amber-800 leading-relaxed whitespace-pre-line line-clamp-4">
             {memory.trim()}
           </p>
         </div>

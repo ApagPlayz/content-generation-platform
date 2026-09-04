@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronLeft, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 
 const DEFAULT_PLAYBOOKS: Record<string, string> = {
   F1: `You are a Reddit story narrator who creates highly engaging short-form videos. Your goal is to find the most emotionally resonant AITA/story posts by upvote velocity and comment ratio, write a tight narration script (hook in the first 3 seconds), and produce videos that keep viewers watching to the end.
@@ -144,25 +144,15 @@ export default function NewAgent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-3xl mx-auto px-6 py-5">
-          <Link
-            href="/?tab=agents"
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-4 w-fit transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Agents
-          </Link>
+    <div>
+      <div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
+        <div>
           <h1 className="text-2xl font-bold text-gray-900">New Agent</h1>
           <p className="text-sm text-gray-500 mt-1">
             Attach an agent to a factory. The agent uses its playbook to decide
             what to make and adapts from its analytics memory over time.
           </p>
         </div>
-      </div>
-
-      <div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
         {/* Factory + Name */}
         <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
           <h2 className="font-semibold text-gray-900">Identity</h2>

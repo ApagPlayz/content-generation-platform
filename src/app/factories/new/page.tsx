@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronLeft, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 
 const FACTORY_TYPES = [
   { id: 'F1', name: 'Reddit Stories',  desc: 'Narration over b-roll' },
@@ -58,23 +58,11 @@ export default function NewFactory() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-4xl mx-auto px-6 py-5">
-          <Link
-            href="/?tab=factories"
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-4 w-fit transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Factories
-          </Link>
-          <h1 className="text-2xl font-bold text-gray-900">
-            {step === 'select' ? 'Choose Factory Type' : 'Configure Factory'}
-          </h1>
-        </div>
-      </div>
-
+    <div>
       <div className="max-w-4xl mx-auto px-6 py-8">
+        <h1 className="text-2xl font-bold text-gray-900 mb-6">
+          {step === 'select' ? 'Choose Factory Type' : 'Configure Factory'}
+        </h1>
         {step === 'select' && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

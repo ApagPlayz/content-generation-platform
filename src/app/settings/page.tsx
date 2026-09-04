@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import Link from 'next/link'
-import { ChevronLeft, Eye, EyeOff, Check, Loader2, AlertTriangle } from 'lucide-react'
+import { Eye, EyeOff, Check, Loader2, AlertTriangle } from 'lucide-react'
 
 interface SettingsMap {
   anthropic_api_key?: string
@@ -106,43 +105,30 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex items-center justify-center py-24">
         <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto px-6 py-5">
-          <Link
-            href="/"
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-4 w-fit transition-colors"
+    <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+        <div className="sticky-under-header flex items-center justify-between -mx-6 px-6 py-3">
+          <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 text-sm font-semibold text-white hover:bg-gray-800 transition-colors disabled:opacity-50"
           >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Hub
-          </Link>
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-            <button
-              onClick={save}
-              disabled={saving}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 text-sm font-semibold text-white hover:bg-gray-800 transition-colors disabled:opacity-50"
-            >
-              {saving ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-              ) : saved ? (
-                <><Check className="w-4 h-4" /> Saved</>
-              ) : (
-                'Save'
-              )}
-            </button>
-          </div>
+            {saving ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+            ) : saved ? (
+              <><Check className="w-4 h-4" /> Saved</>
+            ) : (
+              'Save'
+            )}
+          </button>
         </div>
-      </div>
-
-      <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
         {/* Claude / Anthropic */}
         <section className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
@@ -607,8 +593,6 @@ export default function Settings() {
             </button>
           </div>
         </section>
-
-      </div>
     </div>
   )
 }
