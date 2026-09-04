@@ -4,7 +4,16 @@
 // pure-function test style.
 
 import { describe, expect, it } from 'vitest'
-import { authorizeUrl, isAuthError, SCOPES, tiktokPermalink, TIKTOK_RECONNECT_MESSAGE } from './tiktok'
+import {
+  authorizeUrl,
+  buildTikTokCaption,
+  isAuthError,
+  SCOPES,
+  tiktokPermalink,
+  TIKTOK_NATIVE_TAGS,
+  TIKTOK_OPENERS,
+  TIKTOK_RECONNECT_MESSAGE,
+} from './tiktok'
 
 describe('authorizeUrl', () => {
   const url = authorizeUrl('awkey123', 'http://localhost:3000/api/auth/tiktok/callback', 'connect')
@@ -88,5 +97,87 @@ describe('TIKTOK_RECONNECT_MESSAGE', () => {
   it('tells the owner to reconnect without raw OAuth jargon', () => {
     expect(TIKTOK_RECONNECT_MESSAGE).toMatch(/reconnect/i)
     expect(TIKTOK_RECONNECT_MESSAGE).not.toMatch(/invalid_grant|401|refresh token/i)
+  })
+})
+
+// Issue #88: a TikTok caption that byte-matches the YouTube metadata is a named
+// shadowban trigger. buildTikTokCaption must produce a caption that is always
+// distinct from the plain YouTube title — via a per-video human opener + native
+// #fyp-style tags — while staying deterministic (so re-publish is idempotent).
+describe('buildTikTokCaption', () => {
+  const hashtags = ['truecrime', 'mystery']
+
+  it('is never the bare YouTube title — it leads with a human opener', () => {
+    const title = 'The Zodiac cipher nobody could crack'
+    const caption = buildTikTokCaption({ title, hashtags, videoId: 'v1' })
+    expect(caption).not.toBe(title)
+    expect(TIKTOK_OPENERS.some((o) => caption.startsWith(o))).toBe(true)
+  })
+
+  it('differs from the reconstructed YouTube title + description block', () => {
+    const title = 'A quiet town, a 40-year secret'
+    // How publish.ts builds the YouTube side: title, then description + tags + #Shorts.
+    const youtubeText = [title, 'The full case, explained.', '#truecrime #mystery', '#Shorts']
+      .filter(Boolean)
+      .join('\n\n')
+    const caption = buildTikTokCaption({ title, hashtags, videoId: 'v2' })
+    expect(caption).not.toBe(youtubeText)
+    expect(caption).not.toBe(title)
+  })
+
+  it('includes native TikTok discovery tags and never YouTube-only #Shorts', () => {
+    const caption = buildTikTokCaption({ title: 'x', hashtags, videoId: 'v3' })
+    for (const t of TIKTOK_NATIVE_TAGS) expect(caption).toContain(`#${t}`)
+    expect(caption).not.toMatch(/#Shorts\b/i)
+  })
+
+  it('keeps the video hashtags, after the native tags', () => {
+    const caption = buildTikTokCaption({ title: 'x', hashtags, videoId: 'v4' })
+    expect(caption).toContain('#truecrime')
+    expect(caption.indexOf('#fyp')).toBeLessThan(caption.indexOf('#truecrime'))
+  })
+
+  it('is deterministic — the same video always gets the same caption', () => {
+    const a = buildTikTokCaption({ title: 'same', hashtags, videoId: 'stable-id' })
+    const b = buildTikTokCaption({ title: 'same', hashtags, videoId: 'stable-id' })
+    expect(a).toBe(b)
+  })
+
+  it('rotates the opener across different videos (not always the same one)', () => {
+    const openers = new Set(
+      Array.from({ length: 25 }, (_, i) =>
+        TIKTOK_OPENERS.find((o) => buildTikTokCaption({ title: 't', videoId: `id-${i}` }).startsWith(o))
+      )
+    )
+    expect(openers.size).toBeGreaterThan(1)
+  })
+
+  it('dedupes a native tag the video already carries (case-insensitive)', () => {
+    const caption = buildTikTokCaption({ title: 'x', hashtags: ['FYP', 'case'], videoId: 'v5' })
+    expect((caption.match(/#fyp\b/gi) || []).length).toBe(1)
+    expect(caption).toContain('#case')
+  })
+
+  it('handles an empty title and no hashtags — still distinct + native tags present', () => {
+    const caption = buildTikTokCaption({ title: '', videoId: 'v6' })
+    expect(caption).toContain('#fyp')
+    expect(caption).not.toMatch(/ {2,}/) // no doubled spaces from an empty title
+  })
+
+  it('never exceeds TikTok’s 2200-char caption limit', () => {
+    const caption = buildTikTokCaption({
+      title: 'A'.repeat(4000),
+      hashtags: Array.from({ length: 300 }, (_, i) => `tag${i}`),
+      videoId: 'v7',
+    })
+    expect(caption.length).toBeLessThanOrEqual(2200)
+  })
+
+  // The highest-stakes niche: a true-crime opener that asserted guilt would defeat
+  // the whole defamation guard. No opener may imply a person is guilty.
+  it('has no opener that implies guilt (true-crime safety)', () => {
+    for (const o of TIKTOK_OPENERS) {
+      expect(o).not.toMatch(/guilty|killer|murderer|did it|criminal|convict/i)
+    }
   })
 })
