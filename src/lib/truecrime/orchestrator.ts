@@ -16,6 +16,7 @@ import {
   isSilentVoiceover,
   isTruncatedRender,
   resolveFinalStatus,
+  paidVoiceFallbackReason,
   EMPTY_RENDER_ERROR,
   SILENT_VOICEOVER_REASON,
   TRUNCATED_RENDER_REASON,
@@ -341,11 +342,31 @@ export async function executeTrueCrimeRun(
       })
     }
 
+    // A paid voice (ElevenLabs/OpenAI) failed mid-run and we fell back to a free
+    // voice: the owner is paying for a premium voice they didn't get (issue #57).
+    // Surface it as a failed voiceover Job and hold for review — never auto-
+    // publish in the wrong voice.
+    const paidVoiceFallback = ctx.tts?.paidVoiceFallback
+    if (paidVoiceFallback) {
+      await prisma.job.create({
+        data: {
+          videoId: ctx.videoId,
+          stage: 'voiceover',
+          status: 'failed',
+          attempts: 1,
+          error: paidVoiceFallbackReason(paidVoiceFallback),
+          startedAt: new Date(),
+          finishedAt: new Date(),
+        },
+      })
+    }
+
     const finalStatus = resolveFinalStatus({
       complianceDecision: ctx.complianceDecision,
       autonomy: agent.autonomy,
       silentVoiceover,
       truncatedRender,
+      paidVoiceFallback: !!paidVoiceFallback,
     })
     await prisma.video.update({ where: { id: ctx.videoId }, data: { status: finalStatus } })
 
