@@ -8,7 +8,7 @@
 // Use runComplianceGate() for a dry run that does not touch the database.
 
 export * from './types'
-export { TRUE_CRIME_PROFILE, HISTORY_PROFILE, type ComplianceProfile } from './profile'
+export { TRUE_CRIME_PROFILE, HISTORY_PROFILE, SPORTS_PROFILE, type ComplianceProfile } from './profile'
 export { runComplianceGate, gateVideoScript } from './gate'
 export { evaluateCaseSelection } from './caseSelection'
 export { extractClaims, heuristicExtractClaims } from './claims'

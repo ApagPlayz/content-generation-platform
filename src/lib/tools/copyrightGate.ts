@@ -21,7 +21,17 @@
 
 import { prisma } from '../prisma'
 import { visualLint } from '../compliance/visualLint'
-import type { AssetLicense, VisualAsset, VisualFlag } from '../compliance/types'
+import { checkVariation } from '../compliance/variation'
+import { computeVisualSignature } from '../compliance/visualSignature'
+import { SPORTS_PROFILE } from '../compliance/profile'
+import type {
+  AssetLicense,
+  ScriptStructure,
+  TrueCrimeScript,
+  VariationVerdict,
+  VisualAsset,
+  VisualFlag,
+} from '../compliance/types'
 import type { LeagueTolerance } from './leaguePolicy'
 import type { SportsStrategy } from './types'
 
@@ -58,6 +68,9 @@ export interface SportsCopyrightVerdict {
   summary: string
   /** Matchup / trigger label shown in the inbox. */
   caseName: string
+  /** Anti-repetition verdict vs recent F9 videos (issue #17). Present only after
+   *  the async gateSportsCopyright pass; the pure evaluateCopyrightRisk omits it. */
+  variation?: VariationVerdict
 }
 
 export interface CopyrightRiskInput {
@@ -83,6 +96,16 @@ export interface CopyrightRiskInput {
   durationSec?: number
   /** "Kept short" ceiling in seconds (default 30). */
   shortClipMaxSec?: number
+  // ── Anti-repetition inputs (issue #17) — the script's spoken/edit "shape", used
+  //    only by the variation axis; evaluateCopyrightRisk ignores all of these. ──
+  /** The video's opening line. */
+  hook?: string
+  /** SEO/caption blurb (adds text signal beyond the short hook). */
+  description?: string
+  /** Burned-in commentary lines — the sports "narration" text. */
+  analysis?: string[]
+  /** Winning hook style/angle (e.g. "bold number") — a structural divergence axis. */
+  hookStyle?: string
 }
 
 // Need at least this many of the 4 transformation signals to count as
@@ -208,10 +231,74 @@ function buildSummary(a: {
   return parts.join(' ')
 }
 
+/** The persistable anti-repetition signature for a sports video — the same shape
+ *  the true-crime/history gate embeds, so the shared checkVariation corpus reader
+ *  understands F9 rows too. */
+export interface SportsScriptSignature {
+  narration: string
+  structure: ScriptStructure
+  /** The footage id-set (one entry: the source reel) for the visual-repeat axis. */
+  visuals: VisualAsset[]
+  visualSignature: string[]
+}
+
 /**
- * Run the copyright gate AND persist a ComplianceReport row (factoryType F9) so
- * the review inbox can render the verdict before the video goes out. Reuses the
- * same table/plumbing as the true-crime gate.
+ * Stable footage identity for a sports clip. The source is a single YouTube reel,
+ * but its id lives in the `?v=` query — which computeVisualSignature's URL
+ * normaliser strips, collapsing EVERY watch URL to one hash. So pull the video id
+ * out (or fall back to the matchup) and return a query-free token, so reusing the
+ * same broadcast actually trips the visual axis while distinct reels stay distinct.
+ */
+export function sportsFootageToken(sourceUrl: string | undefined, caseName: string): string {
+  const id = sourceUrl?.match(/(?:[?&]v=|\/(?:embed|shorts)\/|youtu\.be\/)([\w-]{6,})/)?.[1]
+  const key = (id ?? caseName).trim().toLowerCase().replace(/\s+/g, '-')
+  return `sports-src-${key || 'unknown'}`
+}
+
+/**
+ * Map a sports clip + its script into the anti-repetition signature. Pure, so it's
+ * unit-testable without a DB. narration = hook + blurb + burned-in commentary; the
+ * structure captures the template (hook style, source strategy, whether commentary/
+ * telestration are present); the visual signature fingerprints the source reel.
+ */
+export function buildSportsSignature(input: CopyrightRiskInput): SportsScriptSignature {
+  const narration = [input.hook, input.description, ...(input.analysis ?? [])]
+    .filter((s): s is string => Boolean(s && s.trim()))
+    .join(' ')
+  const sections = [
+    'hook',
+    ...((input.analysis?.length ?? 0) > 0 ? ['analysis'] : []),
+    ...((input.telestrationCount ?? 0) > 0 ? ['telestration'] : []),
+    'cta',
+  ]
+  const structure: ScriptStructure = {
+    hookPattern: input.hookStyle ?? 'sports-hook',
+    sections,
+    visualStyle: input.strategy ?? 'sports-clip',
+    editorialAngle: (input.league ?? 'unknown').toLowerCase(),
+  }
+  const visuals: VisualAsset[] = [
+    {
+      kind: 'video',
+      source: sportsFootageToken(input.sourceUrl, input.caseName),
+      license: input.sourceLicense ?? 'unknown',
+      depictsRealPerson: false,
+      aiGenerated: false,
+    },
+  ]
+  return { narration, structure, visuals, visualSignature: computeVisualSignature(visuals) }
+}
+
+/**
+ * Run the copyright gate AND the anti-repetition (variation) check, then persist a
+ * ComplianceReport row (factoryType F9) so the review inbox can render the verdict
+ * before the video goes out. Reuses the same table/plumbing as the true-crime gate.
+ *
+ * The variation check (issue #17) rides along here because the copyright stage is
+ * F9's pre-publish decision point. It NEVER hard-blocks — checkVariation only
+ * returns pass/route — so a near-duplicate merely downgrades an otherwise-clean
+ * 'pass' to review; existing block/review copyright decisions are untouched. Each
+ * run also embeds its `_scriptSignature`, growing the F9 corpus for next time.
  */
 export async function gateSportsCopyright(
   videoId: string,
@@ -220,21 +307,64 @@ export async function gateSportsCopyright(
 ): Promise<SportsCopyrightVerdict> {
   const verdict = evaluateCopyrightRisk(input)
 
+  const sig = buildSportsSignature(input)
+  const variation = await checkVariation(
+    {
+      caseName: verdict.caseName,
+      subjects: [],
+      narration: sig.narration,
+      structure: sig.structure,
+      visuals: sig.visuals,
+    } as unknown as TrueCrimeScript,
+    SPORTS_PROFILE
+  )
+  verdict.variation = variation
+  if (!variation.passed) {
+    verdict.riskReasons.push(...variation.reasons)
+    if (verdict.decision === 'pass') {
+      // Otherwise clean → hold for review purely on the repetition risk.
+      verdict.decision = 'route_to_review'
+      verdict.riskLevel = 'medium'
+      verdict.summary =
+        'Held for your review — too similar to a recent video (inauthentic-content risk). ' +
+        variation.reasons.join(' ')
+    } else {
+      // Already flagged/blocked by copyright — just append the repetition note.
+      verdict.summary = `${verdict.summary} ${variation.reasons.join(' ')}`
+    }
+  }
+
   await prisma.complianceReport.create({
     data: {
       videoId,
       factoryType: 'F9',
       caseName: verdict.caseName,
       decision: verdict.decision,
-      // Sports has no case-selection / corroboration / defamation / variation
-      // axes; keep the rollup columns at safe neutral defaults. The full sports
-      // verdict lives in `report` (kind: 'sports_copyright').
+      // Sports has no case-selection / corroboration / defamation axes; keep those
+      // rollup columns at safe neutral defaults. variationOk is now real (issue #17).
+      // The full sports verdict lives in `report` (kind: 'sports_copyright').
       caseSelectionOk: verdict.decision !== 'block',
       corroboratedPct: 0,
       defamationFlags: 0,
-      variationOk: true,
+      variationOk: variation.passed,
       summary: verdict.summary,
-      report: JSON.stringify({ kind: 'sports_copyright', ...verdict, generatedAt: opts.generatedAt }),
+      report: JSON.stringify({
+        kind: 'sports_copyright',
+        ...verdict,
+        // Embed the signature so future F9 variation checks can read this back —
+        // mirrors the true-crime/history gate's _scriptSignature (see gate.ts).
+        _scriptSignature: {
+          structure: sig.structure,
+          narration: sig.narration,
+          styleProfile: {
+            visualStyle: sig.structure.visualStyle,
+            hookPattern: sig.structure.hookPattern,
+            editorialAngle: sig.structure.editorialAngle,
+          },
+          visualSignature: sig.visualSignature,
+        },
+        generatedAt: opts.generatedAt,
+      }),
     },
   })
 
