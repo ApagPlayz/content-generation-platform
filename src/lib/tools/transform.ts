@@ -4,6 +4,7 @@ import { copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
 import type { MomentResult, ScriptResult, TransformResult } from './types'
+import { drawtextValue } from './ffmpegText'
 
 const exec = promisify(execFile)
 
@@ -55,17 +56,10 @@ async function hasDrawtext(): Promise<boolean> {
   return drawtextAvailable
 }
 
-// drawtext chokes on unescaped quotes/colons; commas/brackets break the
-// filtergraph when passed inline. Strip/escape the problematic characters.
-function escapeText(s: string): string {
-  return s
-    .replace(/\\/g, '')
-    .replace(/'/g, '')
-    .replace(/[,[\]%]/g, ' ')
-    .replace(/:/g, '\\:')
-    .trim()
-    .slice(0, 90)
-}
+// Overlay copy is now escaped rather than mutilated: commas, brackets, % and
+// apostrophes survive to the screen instead of being replaced with spaces or
+// deleted. See ./ffmpegText for the escaping rules and why each layer exists.
+const escapeText = (s: string) => drawtextValue(s, 90)
 
 async function probeDuration(file: string, fallback: number): Promise<number> {
   if (ffprobeAvailable === null) ffprobeAvailable = await commandExists('ffprobe')
@@ -184,9 +178,13 @@ export async function runTransform(
         `drawbox=x=iw*0.32:y=ih*0.30:w=iw*0.36:h=ih*0.30:color=yellow@0.9:t=5:enable='between(t,${num(a)},${num(b)})'`
       )
       telestrationCount++
-      if (hasText && spot.label) {
+      const label = hasText && spot.label ? escapeText(spot.label) : ''
+      if (label) {
         overlayFilters.push(
-          `drawtext=text='${escapeText(spot.label)}':fontcolor=yellow:fontsize=44:borderw=3:bordercolor=black:x=(w-text_w)/2:y=ih*0.24:enable='between(t,${num(a)},${num(b)})'`
+          // y uses `h`, not `ih`: drawtext's expression evaluator has no `ih`
+          // constant, and one bad expression fails the WHOLE overlay chain — which
+          // silently took the commentary lower-thirds down with it.
+          `drawtext=expansion=none:text=${label}:fontcolor=yellow:fontsize=44:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.24:enable='between(t,${num(a)},${num(b)})'`
         )
       }
     }
@@ -196,12 +194,14 @@ export async function runTransform(
     const lines = script.analysis.slice(0, 4)
     const slot = editedDur / lines.length
     lines.forEach((line, i) => {
+      const text = escapeText(line)
+      if (!text) return
       const a = i * slot
       const b = (i + 1) * slot
       // Lower-third: horizontally centered (survives the center-crop), sat in a
       // dark box for legibility over any footage.
       overlayFilters.push(
-        `drawtext=text='${escapeText(line)}':fontcolor=white:fontsize=40:borderw=2:bordercolor=black:box=1:boxcolor=black@0.5:boxborderw=12:x=(w-text_w)/2:y=h*0.74:enable='between(t,${num(a)},${num(b)})'`
+        `drawtext=expansion=none:text=${text}:fontcolor=white:fontsize=40:borderw=2:bordercolor=black:box=1:boxcolor=black@0.5:boxborderw=12:x=(w-text_w)/2:y=h*0.74:enable='between(t,${num(a)},${num(b)})'`
       )
       analysisLines++
     })
