@@ -54,8 +54,10 @@ Thumbs.db
 *.jpeg
 .playwright-mcp
 
-# Claude local config
-.claude
+# Claude local config (personal settings stay ignored; the shared, committed
+# project settings file is tracked so tool permissions apply to every agent)
+.claude/*
+!.claude/settings.json
 
 # downloaded source reels + rendered videos
 /media

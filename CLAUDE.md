@@ -75,6 +75,26 @@ If you (the user) want the output in this chat, type: `! npm run go`
   `npm run remotion:studio`. The `video/` dir is named to avoid shadowing the `remotion`
   npm package, is excluded from Next's tsconfig, and is built by Remotion's own webpack.
 
+## Browser automation for the loop (Playwright MCP)
+
+The autonomous-loop agents can drive a **real Chromium browser** through the Playwright
+MCP server (`@playwright/mcp`, registered in `.mcp.json`; its tools are named
+`mcp__playwright__browser_*` and are allowed for every agent via `.claude/settings.json`).
+Use it to open a page, click, fill a form, and screenshot — i.e. to *see* the live UI,
+not just read source. It is not a substitute for the build/test suite; skip it entirely
+for backend-only work.
+
+When each agent should reach for it:
+- **Builder** — verify a UI change you just made actually renders before opening the PR.
+- **Demo** — drive the affected pages to capture screenshot proof a feature works.
+- **Auditor** — confirm a PR's visual claim yourself instead of taking its word for it.
+- **Scout** — read JS-rendered competitor pages that plain WebFetch can't see.
+- **@mention** — when the owner asks how a live page looks or behaves.
+
+The browser binary is preinstalled in the **Demo** job. In the other jobs, run
+`npx playwright install chromium` once (via Bash) before your first `browser_navigate`;
+boot the app with `npm run dev` first if you need to drive it.
+
 ## Useful commands
 | Task | Command |
 |------|---------|
