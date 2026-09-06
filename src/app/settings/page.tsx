@@ -18,6 +18,7 @@ interface SettingsMap {
   tiktok_client_key?: string
   tiktok_client_secret?: string
   tiktok_auto_publish_enabled?: string
+  tiktok_long_cut_enabled?: string
 }
 
 const PROVIDERS_TTS = ['kokoro', 'elevenlabs', 'openai-tts', 'coqui-local', 'edge-tts']
@@ -559,6 +560,28 @@ export default function Settings() {
                 <span className="block text-xs text-gray-400 mt-0.5">
                   When on, agents set to <strong>auto</strong> also post approved videos to
                   TikTok. Independent of the YouTube switch — off by default.
+                </span>
+              </span>
+            </label>
+
+            <label className="flex items-start gap-3 pt-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={(settings.tiktok_long_cut_enabled ?? 'false') === 'true'}
+                onChange={(e) =>
+                  set('tiktok_long_cut_enabled', e.target.checked ? 'true' : 'false')
+                }
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+              />
+              <span className="text-sm text-gray-700">
+                Make a longer cut for TikTok (60s+)
+                <span className="block text-xs text-gray-400 mt-0.5">
+                  TikTok only pays out on videos <strong>longer than a minute</strong>. When on,
+                  each video also gets a second, ~65-second version made from the same footage,
+                  and <strong>only TikTok</strong> receives it — YouTube and Reels keep the short
+                  cut. Costs an extra render per video and puts more of the original broadcast on
+                  screen, so more sports videos will land in your review inbox instead of posting
+                  automatically. Off by default.
                 </span>
               </span>
             </label>

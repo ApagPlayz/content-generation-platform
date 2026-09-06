@@ -11,6 +11,7 @@ vi.mock('../prisma', () => ({
     setting: { findUnique: vi.fn() },
     complianceReport: { findFirst: vi.fn() },
     costLedger: { create: vi.fn() },
+    asset: { findFirst: vi.fn() },
   },
 }))
 vi.mock('../youtube', () => ({
@@ -41,13 +42,14 @@ vi.mock('googleapis', () => ({
 
 import { prisma } from '../prisma'
 import { connection as ytConnection } from '../youtube'
-import { directPost } from '../tiktok'
+import { connection as tiktokConnection, directPost } from '../tiktok'
 import {
   AUTO_PUBLISH_DISABLED,
   AUTO_PUBLISH_REVIEW_GATED,
   isAlreadyPublished,
   isAutoPublishFailure,
   maybeAutoPublish,
+  pickTikTokUpload,
   publishToTikTok,
   publishToYouTube,
   remainingQuota,
@@ -301,5 +303,102 @@ describe('isAlreadyPublished', () => {
 
   it('is true only when published AND holding a real platform id (blocks re-upload)', () => {
     expect(isAlreadyPublished({ status: 'published', platformPostId: 'yt123' })).toBe(true)
+  })
+})
+
+// TikTok long cut (issue #77): TikTok's Creator Rewards only pays on videos
+// longer than a minute, so the assemble stage can render a second, ~65s cut
+// that ONLY TikTok uploads. This is the rule that decides which file goes out —
+// get it wrong and either TikTok can never earn, or a 65s clip lands on
+// YouTube Shorts where the tight cut is what performs.
+describe('pickTikTokUpload', () => {
+  const allExist = () => true
+  const noneExist = () => false
+
+  it('uploads the long cut when one was rendered and is on disk', () => {
+    expect(pickTikTokUpload('/m/final.mp4', '/m/final-tiktok.mp4', allExist)).toEqual({
+      filePath: '/m/final-tiktok.mp4',
+      usedLongCut: true,
+    })
+  })
+
+  it('falls back to the short cut when no long cut was rendered', () => {
+    expect(pickTikTokUpload('/m/final.mp4', null, allExist)).toEqual({
+      filePath: '/m/final.mp4',
+      usedLongCut: false,
+    })
+    expect(pickTikTokUpload('/m/final.mp4', undefined, allExist)).toEqual({
+      filePath: '/m/final.mp4',
+      usedLongCut: false,
+    })
+  })
+
+  it('falls back when the long cut was recorded but the file has since been deleted', () => {
+    // The media dir is hand-cleanable; a stale Asset row must not break posting.
+    expect(pickTikTokUpload('/m/final.mp4', '/m/final-tiktok.mp4', noneExist)).toEqual({
+      filePath: '/m/final.mp4',
+      usedLongCut: false,
+    })
+  })
+
+  it('ignores an empty long-cut path rather than uploading nothing', () => {
+    expect(pickTikTokUpload('/m/final.mp4', '', allExist).filePath).toBe('/m/final.mp4')
+  })
+})
+
+// The wiring, not just the rule: the long cut must actually reach TikTok's
+// uploader, and must never reach YouTube's.
+describe('publishToTikTok picks up the long cut', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(prisma.video.findUniqueOrThrow).mockResolvedValue(APPROVED_VIDEO as never)
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(null as never)
+    vi.mocked(tiktokConnection).mockResolvedValue({ accountHandle: 'me' } as never)
+    vi.mocked(prisma.setting.findUnique).mockResolvedValue(null as never)
+    vi.mocked(prisma.post.upsert).mockResolvedValue({ id: 'post1' } as never)
+    vi.mocked(prisma.post.update).mockResolvedValue({ id: 'post1' } as never)
+    vi.mocked(prisma.video.update).mockResolvedValue({} as never)
+    vi.mocked(prisma.costLedger.create).mockResolvedValue({} as never)
+    vi.mocked(directPost).mockResolvedValue({ publishId: 'p1', postId: 'tt1' } as never)
+  })
+
+  it('uploads the 60s+ cut to TikTok when the assemble stage rendered one', async () => {
+    vi.mocked(prisma.asset.findFirst).mockResolvedValue({
+      localPath: '/tmp/v1/final-tiktok.mp4',
+    } as never)
+
+    await publishToTikTok('v1')
+
+    expect(directPost).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: '/tmp/v1/final-tiktok.mp4' })
+    )
+  })
+
+  it('uploads the normal short cut when no long cut exists', async () => {
+    vi.mocked(prisma.asset.findFirst).mockResolvedValue(null as never)
+
+    await publishToTikTok('v1')
+
+    expect(directPost).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: APPROVED_VIDEO.localPath })
+    )
+  })
+
+  it('never sends the long cut to YouTube — Shorts keeps the tight cut', async () => {
+    vi.mocked(prisma.asset.findFirst).mockResolvedValue({
+      localPath: '/tmp/v1/final-tiktok.mp4',
+    } as never)
+    primeYouTube(
+      APPROVED_VIDEO,
+      JSON.stringify({ disclosure: { requiresAiVisualLabel: false, requiresAiAudioLabel: false } })
+    )
+    vi.mocked(prisma.asset.findFirst).mockResolvedValue({
+      localPath: '/tmp/v1/final-tiktok.mp4',
+    } as never)
+
+    await publishToYouTube('v1')
+
+    // publishToYouTube reads Video.localPath and has no long-cut branch at all.
+    expect(prisma.asset.findFirst).not.toHaveBeenCalled()
   })
 })

@@ -11,6 +11,7 @@ import {
   PLATFORM,
   YT_RECONNECT_MESSAGE,
 } from '../youtube'
+import { TIKTOK_CUT_ASSET_KIND } from './longCut'
 import {
   connection as tiktokConnection,
   directPost,
@@ -306,6 +307,25 @@ export async function publishToYouTube(videoId: string): Promise<PublishResult> 
 const TIKTOK_DEFAULT_PRIVACY = 'SELF_ONLY'
 
 /**
+ * Which file TikTok uploads. Prefers the longer Creator-Rewards cut when the
+ * pipeline made one AND it is still on disk (the media dir is hand-cleanable,
+ * so a recorded-but-deleted cut must fall back rather than fail the upload);
+ * otherwise the normal short render.
+ *
+ * Pure — the fs check is injected — so the rule that decides whether TikTok
+ * posts can earn is unit-tested. Deliberately has no YouTube equivalent: Shorts
+ * and Reels keep the tight short cut (issue #77).
+ */
+export function pickTikTokUpload(
+  shortPath: string,
+  longCutPath: string | null | undefined,
+  exists: (p: string) => boolean
+): { filePath: string; usedLongCut: boolean } {
+  if (longCutPath && exists(longCutPath)) return { filePath: longCutPath, usedLongCut: true }
+  return { filePath: shortPath, usedLongCut: false }
+}
+
+/**
  * Publish a rendered Short to TikTok via the Content Posting API. Same shape and
  * guarantees as publishToYouTube: idempotent per (video, platform) — a video
  * already live on TikTok is returned as-is rather than re-uploaded.
@@ -337,6 +357,15 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
   const conn = await tiktokConnection()
   if (!conn) throw new Error('TikTok is not connected. Connect it in Settings first.')
 
+  // TikTok — and only TikTok — gets the longer Creator-Rewards cut when the
+  // assemble stage rendered one (issue #77).
+  const cut = await prisma.asset.findFirst({
+    where: { videoId, kind: TIKTOK_CUT_ASSET_KIND },
+    orderBy: { createdAt: 'desc' },
+    select: { localPath: true },
+  })
+  const { filePath } = pickTikTokUpload(video.localPath, cut?.localPath, existsSync)
+
   const privacy = await setting('tiktok_privacy', TIKTOK_DEFAULT_PRIVACY)
   const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
   const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
@@ -351,11 +380,7 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
   })
 
   try {
-    const { publishId, postId } = await directPost({
-      filePath: video.localPath,
-      caption,
-      privacy,
-    })
+    const { publishId, postId } = await directPost({ filePath, caption, privacy })
     const platformPostId = postId || publishId
     const permalink = tiktokPermalink(conn.accountHandle, postId)
 

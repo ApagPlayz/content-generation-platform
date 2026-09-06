@@ -177,10 +177,11 @@ function serveDirectory(dir: string): Promise<FileServer> {
 export async function renderSportsHighlight(
   sourcePath: string,
   moment: MomentResult,
-  script: ScriptResult
+  script: ScriptResult,
+  opts: { outputName?: string } = {}
 ): Promise<AssembleResult> {
   const dir = path.dirname(sourcePath)
-  const outputPath = path.join(dir, 'final.mp4')
+  const outputPath = path.join(dir, opts.outputName ?? 'final.mp4')
   const durationSec = moment.endSec - moment.startSec
 
   const { renderMedia, selectComposition } = await import('@remotion/renderer')

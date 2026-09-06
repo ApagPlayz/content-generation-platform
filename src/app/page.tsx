@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox, AlertTriangle } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { quotaStatus } from '@/lib/tools/publish'
+import { TIKTOK_CUT_ASSET_KIND } from '@/lib/tools/longCut'
 import { connectionState } from '@/lib/youtube'
 import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
@@ -426,6 +427,18 @@ function footageSummaryFromMeta(meta: string | null): string | null {
   }
 }
 
+// Measured length of the TikTok long cut, recorded on its Asset row by the
+// assemble stage. Null when the meta is missing or unparseable.
+function longCutSecFromMeta(meta: string | null): number | null {
+  if (!meta) return null
+  try {
+    const d = (JSON.parse(meta) as { durationSec?: number }).durationSec
+    return typeof d === 'number' && Number.isFinite(d) ? d : null
+  } catch {
+    return null
+  }
+}
+
 // Pull the sports (F9) copyright verdict out of the stored report JSON so the
 // inbox can render risk + transformation-checklist chips. Null for non-F9 rows.
 function sportsCopyrightFromReport(reportJson: string | null): {
@@ -457,7 +470,10 @@ async function InboxTab() {
       factory: { select: { name: true, type: true } },
       highlightSources: true,
       complianceReports: { orderBy: { createdAt: 'desc' }, take: 1 },
-      assets: { where: { kind: 'footage-map' }, orderBy: { createdAt: 'desc' }, take: 1 },
+      assets: {
+        where: { kind: { in: ['footage-map', TIKTOK_CUT_ASSET_KIND] } },
+        orderBy: { createdAt: 'desc' },
+      },
     },
   })
 
@@ -489,6 +505,11 @@ async function InboxTab() {
         <div className="space-y-4">
           {pending.map((video) => {
             const report = video.complianceReports[0] ?? null
+            // The longer TikTok-only render, when the assemble stage made one.
+            const tiktokCut = video.assets.find((a) => a.kind === TIKTOK_CUT_ASSET_KIND) ?? null
+            const tiktokCutSec = tiktokCut
+              ? longCutSecFromMeta(tiktokCut.meta)
+              : (video.durationSec ?? null)
             return (
               <InboxCard
                 key={video.id}
@@ -520,7 +541,11 @@ async function InboxTab() {
                       }
                     : null
                 }
-                footageSummary={footageSummaryFromMeta(video.assets[0]?.meta ?? null)}
+                footageSummary={footageSummaryFromMeta(
+                  video.assets.find((a) => a.kind === 'footage-map')?.meta ?? null
+                )}
+                tiktokCutSec={tiktokCutSec}
+                hasTiktokCut={Boolean(tiktokCut)}
               />
             )
           })}

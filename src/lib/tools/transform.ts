@@ -67,7 +67,12 @@ function escapeText(s: string): string {
     .slice(0, 90)
 }
 
-async function probeDuration(file: string, fallback: number): Promise<number> {
+/**
+ * Real duration of a rendered file, or `fallback` when ffprobe is unavailable.
+ * Exported so the TikTok long cut (issue #77) can verify it actually cleared
+ * the 60s payout floor instead of trusting the length we asked ffmpeg for.
+ */
+export async function probeDuration(file: string, fallback: number): Promise<number> {
   if (ffprobeAvailable === null) ffprobeAvailable = await commandExists('ffprobe')
   if (!ffprobeAvailable) return fallback
   try {

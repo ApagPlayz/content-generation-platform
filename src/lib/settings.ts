@@ -129,3 +129,15 @@ export async function tiktokAutoPublishEnabled(): Promise<boolean> {
   const v = (await getSetting('tiktok_auto_publish_enabled', 'false')).toLowerCase()
   return v === 'true' || v === '1' || v === 'on'
 }
+
+/**
+ * Whether the pipeline should also render a ~65s cut for TikTok ONLY (issue
+ * #77) so those posts clear Creator Rewards' "longer than a minute" floor.
+ * Off by default: it costs a second render and a bigger source download, and it
+ * puts noticeably more broadcast footage on screen — so the operator opts in.
+ * YouTube and Reels always keep the short cut.
+ */
+export async function tiktokLongCutEnabled(): Promise<boolean> {
+  const v = (await getSetting('tiktok_long_cut_enabled', 'false')).toLowerCase()
+  return v === 'true' || v === '1' || v === 'on'
+}

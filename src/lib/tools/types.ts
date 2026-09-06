@@ -77,6 +77,12 @@ export interface ToolContext {
   script?: ScriptResult
   transform?: TransformResult
   assembled?: AssembleResult
+  /**
+   * The longer, TikTok-only render (issue #77), when the operator opted in AND
+   * the source reel was long enough to build one. Unset is the normal case and
+   * simply means TikTok gets the same short cut as everyone else.
+   */
+  longCut?: AssembleResult
   /** Copyright-risk gate decision (set by the `copyright` stage). */
   copyright?: import('./copyrightGate').SportsCopyrightVerdict
 }

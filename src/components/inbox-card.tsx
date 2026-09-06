@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, X, Youtube, Loader2, ExternalLink } from 'lucide-react'
+import { qualifiesForTikTokRewards, tiktokRewardsNote } from '@/lib/tools/longCut'
 
 const TYPE_META: Record<string, { color: string }> = {
   F1: { color: 'bg-orange-100 text-orange-700' },
@@ -72,7 +73,15 @@ interface InboxCardProps {
   caseName?: string | null
   compliance?: ComplianceSummary | null
   footageSummary?: string | null
+  /** Length of the file TikTok will receive — the long cut when one exists,
+   *  otherwise the short render. Drives the Creator Rewards note (issue #77). */
+  tiktokCutSec?: number | null
+  /** True when a separate, longer TikTok-only render exists to preview. */
+  hasTiktokCut?: boolean
 }
+
+const mmss = (sec: number) =>
+  `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`
 
 export function InboxCard({
   id,
@@ -92,8 +101,11 @@ export function InboxCard({
   caseName,
   compliance,
   footageSummary,
+  tiktokCutSec,
+  hasTiktokCut,
 }: InboxCardProps) {
   const router = useRouter()
+  const [cut, setCut] = useState<'short' | 'tiktok'>('short')
   const [busy, setBusy] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [publishErr, setPublishErr] = useState<string | null>(null)
@@ -105,6 +117,8 @@ export function InboxCard({
 
   // Sports (F9) surfaces the copyright verdict; other factories the fact-check gate.
   const isSportsCopyright = factoryType === 'F9' && compliance?.copyrightRisk != null
+
+  const rewardsNote = tiktokRewardsNote(tiktokCutSec)
 
   // Plain-language chips explaining WHY this video is sitting in review.
   const reviewChips: { label: string; color: string }[] = []
@@ -194,9 +208,34 @@ export function InboxCard({
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-5 flex gap-5">
       {hasMedia && (
-        <div className="shrink-0 w-40 rounded-lg overflow-hidden bg-black self-start">
-          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-          <video src={`/api/media/${id}`} controls className="w-full aspect-[9/16] object-contain" />
+        <div className="shrink-0 w-40 self-start">
+          <div className="rounded-lg overflow-hidden bg-black">
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video
+              key={cut}
+              src={cut === 'tiktok' ? `/api/media/${id}?cut=tiktok` : `/api/media/${id}`}
+              controls
+              className="w-full aspect-[9/16] object-contain"
+            />
+          </div>
+          {/* Two cuts exist only when the TikTok long cut was rendered — let the
+              owner watch each one before approving (issue #77). */}
+          {hasTiktokCut && (
+            <div className="flex mt-1.5 rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+              <button
+                onClick={() => setCut('short')}
+                className={`flex-1 px-2 py-1 ${cut === 'short' ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+              >
+                YouTube
+              </button>
+              <button
+                onClick={() => setCut('tiktok')}
+                className={`flex-1 px-2 py-1 border-l border-gray-200 ${cut === 'tiktok' ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+              >
+                TikTok{tiktokCutSec ? ` ${mmss(tiktokCutSec)}` : ''}
+              </button>
+            </div>
+          )}
         </div>
       )}
       <div className="min-w-0 flex-1">
@@ -276,6 +315,18 @@ export function InboxCard({
       {footageSummary && (
         <p className="text-xs text-gray-400 mb-3">
           <span className="font-medium text-gray-500">Footage:</span> {footageSummary}
+        </p>
+      )}
+
+      {/* Payout eligibility in plain language, BEFORE approving: TikTok only
+          pays Creator Rewards on videos over a minute (issue #77). */}
+      {rewardsNote && (
+        <p
+          className={`text-xs mb-3 ${
+            qualifiesForTikTokRewards(tiktokCutSec) ? 'text-green-700' : 'text-amber-700'
+          }`}
+        >
+          {rewardsNote}
         </p>
       )}
 
