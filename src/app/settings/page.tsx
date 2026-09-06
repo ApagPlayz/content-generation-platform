@@ -8,6 +8,7 @@ interface SettingsMap {
   anthropic_api_key?: string
   monthly_budget?: string
   default_tts_provider?: string
+  pronunciation_lexicon?: string
   default_image_provider?: string
   default_model_tier?: string
   youtube_client_id?: string
@@ -272,6 +273,27 @@ export default function Settings() {
               <strong>kokoro</strong> = natural-sounding, free, runs on this Mac (start
               kokoro-fastapi locally). <strong>elevenlabs</strong>/<strong>openai-tts</strong>{' '}
               are paid but need no setup. Falls back to the Mac voice automatically.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              How to say tricky names
+            </label>
+            <textarea
+              value={settings.pronunciation_lexicon ?? ''}
+              onChange={(e) => set('pronunciation_lexicon', e.target.value)}
+              rows={4}
+              spellCheck={false}
+              placeholder={'{\n  "Nguyen": "nwin",\n  "Kefalonia": "keff-uh-LOH-nee-uh"\n}'}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Names the voice keeps getting wrong. Write each one as{' '}
+              <code>&quot;Name&quot;: &quot;how it sounds&quot;</code> between the curly
+              brackets, one per line. Common acronyms (FBI, DNA) and years are already read
+              correctly — you only need this for names. The captions on screen always keep the
+              real spelling, and a typo here is ignored rather than breaking narration.
             </p>
           </div>
 
