@@ -69,3 +69,15 @@ Thumbs.db
 tsconfig.tsbuildinfo
 .dev-server.state
 backup-launcher/
+
+# Owner-facing agent-operations docs — internal working notes, not portfolio
+# content. Files stay on disk; git just stops tracking/publishing them.
+/CLAUDE.md
+/LEARNINGS.md
+/docs/loop-brief.md
+/LOOP-DASHBOARD.md
+/Updates/
+/docs/handoffs/
+
+# Compiled macOS launcher applet — a binary bundle, shouldn't be in git.
+/Content Engine.app/

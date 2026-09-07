@@ -11,7 +11,7 @@
 # access. Harmlessly no-ops (logs a connection failure) when the dev server is down.
 set -uo pipefail
 
-ROOT="/Users/alessiopagliarulo/Documents/Claude Projects/Content Generation Platform"
+ROOT="${CONTENT_ENGINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SECRET="$(grep -E '^SCHEDULER_SECRET=' "$ROOT/.env.local" | head -1 | cut -d= -f2- | tr -d '"')"
 
 curl -s -m 30 -X POST http://localhost:3000/api/scheduler/tick \
