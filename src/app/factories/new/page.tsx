@@ -25,6 +25,7 @@ export default function NewFactory() {
   const [step, setStep] = useState<'select' | 'configure'>('select')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [ctaBlock, setCtaBlock] = useState('')
   const [autonomy, setAutonomy] = useState<'review' | 'auto'>('review')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,6 +45,7 @@ export default function NewFactory() {
           type: selected,
           description: description.trim(),
           autonomy,
+          ctaBlock: ctaBlock.trim(),
         }),
       })
       if (!res.ok) {
@@ -161,6 +163,24 @@ export default function NewFactory() {
                   rows={3}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Links / call-to-action{' '}
+                  <span className="text-gray-400 text-xs">(optional)</span>
+                </label>
+                <textarea
+                  value={ctaBlock}
+                  onChange={(e) => setCtaBlock(e.target.value)}
+                  placeholder={'👉 Subscribe: https://youtube.com/@yourchannel\n🛒 My gear: https://...'}
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none"
+                />
+                <p className="text-xs text-gray-400 mt-2">
+                  Added to the end of every published video&apos;s YouTube description —
+                  so the channel can earn affiliate income before it&apos;s monetized.
+                </p>
               </div>
 
               <div>

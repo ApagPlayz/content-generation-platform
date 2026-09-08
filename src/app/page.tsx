@@ -286,6 +286,8 @@ async function FactoriesTab() {
               : {}
             const config = factory.config ? JSON.parse(factory.config) : {}
             const autonomy = postingDefaults.autonomy ?? 'review'
+            const ctaBlock =
+              typeof postingDefaults.ctaBlock === 'string' ? postingDefaults.ctaBlock.trim() : ''
 
             return (
               <div
@@ -321,6 +323,17 @@ async function FactoriesTab() {
                   >
                     {autonomy === 'auto' ? '⚡ auto' : '👁 review'}
                   </span>
+                  {ctaBlock && (
+                    <>
+                      <span>·</span>
+                      <span
+                        title={ctaBlock}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium bg-blue-50 text-blue-700"
+                      >
+                        🔗 links
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             )
