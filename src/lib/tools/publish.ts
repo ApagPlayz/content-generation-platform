@@ -12,6 +12,7 @@ import {
   YT_RECONNECT_MESSAGE,
 } from '../youtube'
 import {
+  buildTikTokCaption,
   connection as tiktokConnection,
   directPost,
   isAuthError as isTikTokAuthError,
@@ -339,9 +340,10 @@ export async function publishToTikTok(videoId: string): Promise<PublishResult> {
 
   const privacy = await setting('tiktok_privacy', TIKTOK_DEFAULT_PRIVACY)
   const hashtags: string[] = video.hashtags ? JSON.parse(video.hashtags) : []
-  const caption = [video.title || '', hashtags.map((h) => `#${h}`).join(' ')]
-    .filter(Boolean)
-    .join(' ')
+  // Per-platform caption (issue #88): never cross-post byte-identical metadata to
+  // TikTok — reused title/hashtags are a named shadowban trigger. This adds a
+  // humanized, per-video opener + native #fyp-style tags YouTube never uses.
+  const caption = buildTikTokCaption({ title: video.title, hashtags, videoId })
 
   // Mark intent before the network call so a crash mid-upload is visible.
   const post = await prisma.post.upsert({
