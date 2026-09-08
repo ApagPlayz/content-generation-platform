@@ -258,12 +258,6 @@ export async function generateHistoryScript(
               'dates must come from the verified facts provided — never invent figures.\n' +
               '- visualCue must be GENERIC b-roll (newspapers, documents, maps, clocks, city ' +
               'skylines, roads, rain) — never a named person or brand asset.\n\n' +
-              (editorialLayer
-                ? `EDITORIAL FRAMING: frame this as ${withArticle(angleCopyFor(style.editorialAngle).framing)} — ` +
-                  'original analytical commentary on the documented record, not a bare recap. The ' +
-                  'framing must ADD analysis; it must never introduce a new accusation and every ' +
-                  'factual claim stays attributed and hedged.\n\n'
-                : '') +
               `BEAT TEMPLATE (return EXACTLY ${specs.length} beats, in this order):\n${beatGuide}\n\n` +
               'Respond with ONLY JSON: {"hook":{"type","verbal","onscreenText","visualCue",' +
               '"opensLoop","payoffRef"},"beats":[{"name","narration","linkWord","visualCue",' +
@@ -271,6 +265,25 @@ export async function generateHistoryScript(
               '"description","hashtags"(5-8, no #)}. The first beat\'s narration is the hook verbal line.',
             cache_control: { type: 'ephemeral' },
           },
+          // The editorial framing rotates every video (pickDivergentStyle), so it
+          // lives in its OWN system block AFTER the cache breakpoint above. Keeping
+          // it inside the cached block would change the cached prefix on every run
+          // and the prompt-cache would be written but never read (issue #90). The
+          // hard compliance rules stay in the cached block above; this block only
+          // adds the per-video stylistic frame, with its own "never introduce a new
+          // accusation" guard intact.
+          ...(editorialLayer
+            ? [
+                {
+                  type: 'text' as const,
+                  text:
+                    `EDITORIAL FRAMING: frame this as ${withArticle(angleCopyFor(style.editorialAngle).framing)} — ` +
+                    'original analytical commentary on the documented record, not a bare recap. The ' +
+                    'framing must ADD analysis; it must never introduce a new accusation and every ' +
+                    'factual claim stays attributed and hedged.',
+                },
+              ]
+            : []),
         ],
         messages: [
           {
