@@ -27,9 +27,19 @@ vi.mock('../tiktok', () => ({
   PLATFORM: 'tiktok',
   tiktokPermalink: vi.fn(() => 'https://www.tiktok.com/@x/video/1'),
 }))
+vi.mock('../meta', () => ({
+  connection: vi.fn(),
+  publishReel: vi.fn(),
+  isAuthError: vi.fn(() => false),
+  markNeedsReconnect: vi.fn(),
+  PLATFORM: 'facebook',
+  facebookReelPermalink: vi.fn(() => 'https://www.facebook.com/reel/1'),
+  FACEBOOK_RECONNECT_MESSAGE: 'reconnect',
+}))
 vi.mock('../settings', () => ({
   autoPublishEnabled: vi.fn(),
   tiktokAutoPublishEnabled: vi.fn(),
+  facebookAutoPublishEnabled: vi.fn(),
 }))
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => true),
