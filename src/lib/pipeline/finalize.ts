@@ -58,19 +58,91 @@ export function isTruncatedRender(input: {
 }
 
 /**
+ * The free / on-device voices. When a PAID voice fails and we land on one of
+ * these, the owner is paying for a premium voice they didn't get (issue #57).
+ * `silent-stub` is deliberately NOT here — a silent voiceover is the more
+ * serious flag handled by isSilentVoiceover, so we never double-flag it.
+ */
+const FREE_LOCAL_VOICES = new Set(['kokoro', 'macos-say'])
+
+/** A paid voice attempt that failed with an API key present. */
+export interface PaidVoiceFailure {
+  provider: string
+  detail: string
+}
+
+/** The resolved "paid → free" downgrade, ready to surface to the owner. */
+export interface PaidVoiceFallbackInfo {
+  failedProvider: string
+  usedProvider: string
+  detail: string
+}
+
+/**
+ * Decide whether a video silently downgraded from a paid voice to a free/local
+ * one. Returns the fallback details, or null when there's nothing to surface:
+ *   • no paid provider failed with a key present (`paidFailures` empty — this is
+ *     also the "no key set" case, which never records a failure), OR
+ *   • a paid voice still narrated the video (`usedProvider` isn't free/local), OR
+ *   • the voiceover was silent (silent-stub) — covered by isSilentVoiceover.
+ * When several paid providers failed we report the first (the one the owner's
+ * preferred provider was tried as).
+ */
+export function resolvePaidVoiceFallback(input: {
+  paidFailures: PaidVoiceFailure[]
+  usedProvider: string | null | undefined
+}): PaidVoiceFallbackInfo | null {
+  const { paidFailures, usedProvider } = input
+  if (!paidFailures.length) return null
+  if (!usedProvider || !FREE_LOCAL_VOICES.has(usedProvider)) return null
+  const first = paidFailures[0]
+  return { failedProvider: first.provider, usedProvider, detail: first.detail }
+}
+
+/** True when a paid voice failed and the video fell back to a free voice. */
+export function isPaidVoiceFallback(info: PaidVoiceFallbackInfo | null | undefined): boolean {
+  return !!info
+}
+
+const PAID_VOICE_LABEL: Record<string, string> = {
+  elevenlabs: 'ElevenLabs',
+  'openai-tts': 'OpenAI',
+}
+const FREE_VOICE_LABEL: Record<string, string> = {
+  kokoro: 'free Kokoro',
+  'macos-say': 'free built-in Mac',
+}
+
+/**
+ * Plain-English reason shown to the owner when a paid voice failed and the video
+ * fell back to a free voice. Names the account to check so the fix is obvious.
+ */
+export function paidVoiceFallbackReason(info: PaidVoiceFallbackInfo): string {
+  const paid = PAID_VOICE_LABEL[info.failedProvider] ?? info.failedProvider
+  const free = FREE_VOICE_LABEL[info.usedProvider] ?? `free (${info.usedProvider})`
+  return (
+    `Your paid ${paid} voice failed (${info.detail}), so this video was narrated with the ${free} ` +
+    `voice instead — held for review so it isn't published in the wrong voice. Check your ${paid} ` +
+    `account (expired key, out of credits, or rate-limited).`
+  )
+}
+
+/**
  * Decide a video's final status. A silent voiceover forces review (and so
  * blocks auto-publish, since only 'approved' publishes). Compliance's
- * route_to_review already did the same; this just adds the audio check.
+ * route_to_review already did the same; this just adds the audio checks.
  */
 export function resolveFinalStatus(input: {
   complianceDecision?: string
   autonomy: string
   silentVoiceover: boolean
   truncatedRender?: boolean
+  paidVoiceFallback?: boolean
 }): 'review' | 'approved' {
   if (input.complianceDecision === 'route_to_review') return 'review'
   if (input.silentVoiceover) return 'review'
   if (input.truncatedRender) return 'review'
+  if (input.paidVoiceFallback) return 'review'
   return input.autonomy === 'auto' ? 'approved' : 'review'
 }
 
