@@ -1,9 +1,8 @@
 import Link from 'next/link'
-import { Settings, Plus, Clock, BrainCircuit, Layers, Inbox, AlertTriangle } from 'lucide-react'
+import { Plus, Clock, BrainCircuit, Layers, Inbox, AlertTriangle } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { quotaStatus } from '@/lib/tools/publish'
 import { connectionState } from '@/lib/youtube'
-import { HubNav } from '@/components/hub-nav'
 import { AgentCard } from '@/components/agent-card'
 import { InboxCard } from '@/components/inbox-card'
 import { ScheduleCalendar } from '@/components/schedule-calendar'
@@ -42,33 +41,10 @@ export default async function Hub({
   const { tab } = await searchParams
   const activeTab = tab ?? 'overview'
 
+  // The header, the Settings link and the New Factory button now live in the
+  // one shared nav bar (src/components/app-shell.tsx), rendered by the layout.
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">Content Engine</h1>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/settings"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              <Settings className="w-4 h-4" />
-              Settings
-            </Link>
-            <Link
-              href="/factories/new"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              New Factory
-            </Link>
-          </div>
-        </div>
-        <div className="max-w-6xl mx-auto px-6">
-          <HubNav activeTab={activeTab} />
-        </div>
-      </header>
-
+    <div className="flex-1 bg-gray-50">
       <main className="max-w-6xl mx-auto px-6 py-8">
         {activeTab === 'overview' && <OverviewTab />}
         {activeTab === 'factories' && <FactoriesTab />}

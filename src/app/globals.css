@@ -2,18 +2,80 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   "Warm Creator" palette (issue #126) — THE single source of truth for colour.
+
+   Values are copied from the [data-style="2"] block of public/design-drafts.html,
+   which is the look the owner picked. Nothing else in the app holds a hex value:
+   tailwind.config.ts points Tailwind's colour names at these variables, so every
+   existing `bg-white` / `text-gray-900` / `border-gray-200` in the pages already
+   resolves to a warm token.
+
+   Light is the DEFAULT — dark applies only when <html> carries the `dark` class,
+   which the boot script in src/lib/ui/theme.ts sets from localStorage before the
+   first paint (so there is no flash of the wrong theme on reload).
+   --------------------------------------------------------------------------- */
+:root {
+  --bg: #faf9f7;
+  --surface: #ffffff;
+  --surface-2: #f5f3ef;
+  --border: #eae7e1;
+  --text: #1c1917;
+  --text-2: #44403c;
+  --muted: #78716c;
+  --muted-2: #a8a29e;
+  --accent: #6d28d9;
+  --accent-hover: #5b21b6;
+  --accent-fg: #ffffff;
+  --accent-soft: #f3f0ff;
+  --radius: 18px;
+}
+
+.dark {
+  --bg: #191614;
+  --surface: #241f1c;
+  --surface-2: #2c2622;
+  --border: #37302b;
+  --text: #f5f3ef;
+  --text-2: #d6d3d1;
+  --muted: #a8a29e;
+  --muted-2: #78716c;
+  --accent: #a78bfa;
+  --accent-hover: #c4b5fd;
+  --accent-fg: #1c1917;
+  --accent-soft: #2a2340;
+  --radius: 18px;
+}
+
+/* Default hairline for anything that draws a border without naming a colour.
+   Specificity 0, so any explicit `border-*` utility still wins. */
 * {
-  @apply border-slate-200;
+  border-color: var(--border);
 }
 
 html {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50;
+  background: var(--bg);
+  color: var(--text);
 }
 
 button {
   @apply transition-colors duration-200;
+}
+
+/* Buttons that carry their own meaning (approve = green, reject = red,
+   reconnect = amber) use Tailwind's `text-white`, which is remapped to
+   --accent-fg. That token is near-black in dark mode, so put white back on
+   just these few. */
+.dark .bg-green-600,
+.dark .bg-red-600,
+.dark .bg-amber-600 {
+  color: #ffffff;
 }

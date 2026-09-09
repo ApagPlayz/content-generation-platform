@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import Link from 'next/link'
-import { ChevronLeft, Eye, EyeOff, Check, Loader2, AlertTriangle } from 'lucide-react'
+import { Eye, EyeOff, Check, Loader2, AlertTriangle } from 'lucide-react'
 
 interface SettingsMap {
   anthropic_api_key?: string
@@ -106,23 +105,18 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex-1 bg-gray-50 flex items-center justify-center">
         <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <div className="flex-1 bg-gray-50">
+      {/* No back-link and no second nav row: the one shared nav bar in the
+          layout already has Settings on it. */}
+      <div className="bg-white border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-6 py-5">
-          <Link
-            href="/"
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-4 w-fit transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Hub
-          </Link>
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
             <button
