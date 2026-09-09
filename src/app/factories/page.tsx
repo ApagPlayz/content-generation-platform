@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { ChevronLeft, Plus, Bot, Film } from 'lucide-react'
+import { Plus, Bot, Film } from 'lucide-react'
 
 interface Factory {
   id: string
@@ -24,16 +24,11 @@ export default function Factories() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="border-b border-slate-200 bg-white sticky top-0 z-10">
+    <div className="flex-1 bg-slate-50">
+      {/* No back-link and no second nav row: the one shared nav bar in the
+          layout already covers Studio → Factories. */}
+      <div className="border-b border-slate-200 bg-white">
         <div className="max-w-6xl mx-auto px-6 py-4">
-          <Link
-            href="/"
-            className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-4 w-fit"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Dashboard
-          </Link>
           <div className="flex items-center justify-between">
             <h1 className="text-3xl font-bold text-slate-900">Factories</h1>
             <Link
